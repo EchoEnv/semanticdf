@@ -78,6 +78,10 @@ non-sum totals are correct:
 `t.all("avg_distance_per_flight")` returns **225** (grand avg = 6750/30), *not* 675 (the
 sum of per-group averages). That's the classic BI trap, fixed.
 
+> **Division by zero:** Spark's `/` returns `null` on zero/missing denominators (correct SQL
+> semantics). If you want an explicit default (e.g. `0.0` instead of `null`), use
+> `CalcHelpers.safeDivide(num, denom, defaultValue = 0.0)`.
+
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
 ```scala
@@ -172,11 +176,13 @@ st.query(
 
 `Dimension.time(...)` / `Dimension.entity(...)` are ergonomic factories. `Predicate._`
 brings the filter DSL into scope. `SortKey.desc(...)` / bare `String` (ascending) drive
-`orderBy`.
+`orderBy`. `CalcHelpers.safeDivide(num, denom, defaultValue)` guards zero/missing denominators
+with an explicit default (Spark `/` returns null on div-by-zero — correct SQL semantics;
+use `safeDivide` only when null is undesirable).
 
 ## Cross-version compatibility
 
-Verified green on all three lines (34 tests each):
+Verified green on all three lines (41 tests each):
 
 | Spark | Scala | Status |
 |---|---|---|
