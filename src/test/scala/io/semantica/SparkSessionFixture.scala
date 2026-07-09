@@ -8,6 +8,12 @@ import org.scalatest.{BeforeAndAfterAll, Suite}
   * `beforeAll` creates a local session; `afterAll` stops it. A leaked (un-`stop()`-ed)
   * session leaks driver memory and daemon threads across test runs — the classic
   * Spark dev-velocity tax. This trait is the one place that lifecycle is owned.
+  *
+  * `spark.sql.ansi.enabled=false` is set unconditionally: Spark 4.x enables ANSI SQL
+  * mode by default (division by zero throws, not null). Tests use the Spark 3
+  * semantics (null on div-by-zero) as the consistent cross-version baseline.
+  * Production deployments on Spark 4 with ANSI mode enabled will get the stricter
+  * exception — [[CalcHelpers$.safeDivide]] guards against it.
   */
 trait SparkSessionFixture extends BeforeAndAfterAll { this: Suite =>
 
@@ -23,6 +29,7 @@ trait SparkSessionFixture extends BeforeAndAfterAll { this: Suite =>
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .config("spark.sql.session.timeZone", "UTC")
+      .config("spark.sql.ansi.enabled", "false")  // consistent null-on-div-zero across 3.x and 4.x
       .getOrCreate()
   }
 
