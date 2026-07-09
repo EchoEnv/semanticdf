@@ -33,6 +33,9 @@ sealed trait Predicate extends Product with Serializable {
   /** Compile to a Spark [[Column]] against the given scope. */
   def compile(scope: SemanticScope): Column
 
+  /** Human-readable description of this predicate (for observability logging). */
+  def describe: String
+
   /** Combine with another predicate via AND. */
   def and(other: Predicate): Predicate = Predicate.And(this, other)
 
@@ -49,6 +52,16 @@ object Predicate {
   // -------------------------------------------------------------------------
   // Leaf predicates
   // -------------------------------------------------------------------------
+
+  private val opSymbol: String => String = {
+    case "eq" => "="
+    case "ne" => "!="
+    case "lt" => "<"
+    case "le" => "<="
+    case "gt" => ">"
+    case "ge" => ">="
+    case o    => o
+  }
 
   /** Two-arg comparison: `field op value`. */
   final case class Compare(op: String, field: String, value: Any) extends Predicate {
@@ -67,6 +80,8 @@ object Predicate {
         case other      => throw new IllegalArgumentException(s"Unknown compare op: $other")
       }
     }
+
+    override def describe: String = s"$field ${opSymbol(op)} $value"
   }
 
   /** Membership test: `field in values` (or `not in` when negated). */
@@ -77,6 +92,11 @@ object Predicate {
       val col = scope(field)
       if (negate) !col.isin(values: _*)
       else         col.isin(values: _*)
+    }
+
+    override def describe: String = {
+      val vs = values.mkString("(", ", ", ")")
+      if (negate) s"$field NOT IN $vs" else s"$field IN $vs"
     }
   }
 
@@ -89,6 +109,8 @@ object Predicate {
       if (negate) col.isNotNull
       else         col.isNull
     }
+
+    override def describe: String = if (negate) s"$field IS NOT NULL" else s"$field IS NULL"
   }
 
   // -------------------------------------------------------------------------
@@ -101,6 +123,8 @@ object Predicate {
 
     override def compile(scope: SemanticScope): Column =
       children.map(_.compile(scope)).reduce(_ && _)
+
+    override def describe: String = children.map(_.describe).mkString("(", " AND ", ")")
   }
 
   /** Disjunction of one or more predicates. */
@@ -109,6 +133,8 @@ object Predicate {
 
     override def compile(scope: SemanticScope): Column =
       children.map(_.compile(scope)).reduce(_ || _)
+
+    override def describe: String = children.map(_.describe).mkString("(", " OR ", ")")
   }
 
   /** Negation. */
@@ -117,6 +143,8 @@ object Predicate {
 
     override def compile(scope: SemanticScope): Column =
       !predicate.compile(scope)
+
+    override def describe: String = s"NOT (${predicate.describe})"
   }
 
   // -------------------------------------------------------------------------

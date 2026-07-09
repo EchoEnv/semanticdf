@@ -207,6 +207,7 @@ final case class SemanticJoinOp(
     }
 
     _grainCols = leftKeys
+    SemanticLogger.logJoinCompiled(cardinality.toString, leftKeys, cardinality == JoinCardinality.Many)
 
     // --- Build Spark equi-join condition ---
     val cond: Column = leftKeys.map(k => leftAgg(k) === rightAgg(k)).reduce(_ && _)
@@ -310,6 +311,11 @@ final case class SemanticFilterOp(
   override def compile(spark: SparkSession): DataFrame = {
     val df = source.compile(spark)
     val scope = new BaseScope(df)
+    val clause = source match {
+      case _: SemanticAggregateOp => "HAVING"
+      case _                      => "WHERE"
+    }
+    SemanticLogger.logFilterApplied(predicate.describe, clause)
     df.filter(predicate.compile(scope))
   }
 }
@@ -411,11 +417,17 @@ final case class SemanticAggregateOp(
     val classifications = allMeasuresClosed.map(m => m.name -> classifyOne(m, base, allMeasuresClosed)).toMap
     val baseMeasures = allMeasuresClosed.filter(m => classifications(m.name).deps.isEmpty)
     val calcMeasures = allMeasuresClosed.filter(m => classifications(m.name).deps.nonEmpty)
+    SemanticLogger.logAggregateStart(keys, allMeasuresClosed.map(_.name), measureNames)
+    classifications.foreach { case (name, c) =>
+      val kind = if (c.deps.isEmpty) "base measure" else "calc measure"
+      SemanticLogger.logMeasureClassified(name, kind, c.deps, c.totals)
+    }
 
     // --- Cycle detection (before base-measure check) ---
     val calcDeps: Map[String, Set[String]] =
       calcMeasures.map(m => m.name -> classifications(m.name).deps).toMap
     val layers = topologicalLayers(calcMeasures.map(_.name), calcDeps) // throws on cycle
+    if (layers.nonEmpty) SemanticLogger.logCalcLayers(layers)
 
     if (baseMeasures.isEmpty)
       throw new IllegalArgumentException(
@@ -466,6 +478,7 @@ final case class SemanticAggregateOp(
         // excludes AllOf calcs from its totals build too). If a referenced total is
         // itself a calc, its own base deps are pulled in by transitiveClosure and its
         // formula is re-applied at zero grain — giving the correct grand-total value.
+        SemanticLogger.logTotalsCrossJoin(referencedTotals)
         val totalsRaw = compileWithBase(
           spark, base, Nil, computeTotals = false, referencedTotals.toSeq)
         val totalsRenamed = totalsRaw.select(

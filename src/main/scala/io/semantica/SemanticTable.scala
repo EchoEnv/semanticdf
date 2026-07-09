@@ -50,6 +50,94 @@ final class SemanticTable private[semantica] (
   def execute(spark: SparkSession): DataFrame = toDataFrame(spark)
 
   // -------------------------------------------------------------------------
+  // Observability (Phase B)
+  // -------------------------------------------------------------------------
+
+  /** Summarize the planned execution path without running anything.
+    *
+    * Shows the op-tree shape, dimensions, measures, joins, filters, and the
+    * aggregate plan — everything needed to understand what [[toDataFrame]] will do.
+    * Classification decisions (base vs calc, topological layers) are logged by
+    * [[SemanticLogger]] and appear in the output when Spark DEBUG logging is enabled
+    * for the `io.semantica` logger.
+    *
+    * Use [[explain(spark)]] to see Spark's physical plan after compilation.
+    *
+    * @return a human-readable plan summary
+    */
+  def explain(): String = {
+    val sb = new StringBuilder
+    sb.append("semantica plan:\n")
+    explainNode(root, sb, "  ")
+    sb.toString
+  }
+
+  private def explainNode(op: SemanticOp, sb: StringBuilder, indent: String): Unit = op match {
+    case t: SemanticTableOp =>
+      sb.append(s"${indent}table: ${t.name.getOrElse("(anonymous)")} " +
+        s"[${t.table.columns.size} columns]\n")
+      if (t.dimensions.nonEmpty)
+        sb.append(s"${indent}  dimensions: ${t.dimensions.keys.mkString(", ")}\n")
+      if (t.measures.nonEmpty) {
+        sb.append(s"${indent}  measures:\n")
+        t.measures.values.foreach(m =>
+          sb.append(s"${indent}    ${m.name}: ${m.getClass.getSimpleName.replace("$", "")}"))
+        sb.append("\n")
+      }
+
+    case j: SemanticJoinOp =>
+      sb.append(s"${indent}join(${j.cardinality})\n")
+      sb.append(s"${indent}  left:\n")
+      explainNode(j.left, sb, indent + "    ")
+      sb.append(s"${indent}  right:\n")
+      explainNode(j.right, sb, indent + "    ")
+      if (j.extraDimensions.nonEmpty)
+        sb.append(s"${indent}  extra dimensions: ${j.extraDimensions.keys.mkString(", ")}\n")
+      if (j.extraMeasures.nonEmpty)
+        sb.append(s"${indent}  extra measures: ${j.extraMeasures.keys.mkString(", ")}\n")
+
+    case a: SemanticAggregateOp =>
+      sb.append(s"${indent}aggregate(keys=[${a.keys.mkString(", ")}])\n")
+      sb.append(s"${indent}  measures: [${a.measureNames.mkString(", ")}]\n")
+      sb.append(s"${indent}  source:\n")
+      explainNode(a.source, sb, indent + "    ")
+
+    case SemanticFilterOp(src, pred) =>
+      sb.append(s"${indent}filter(${pred.describe})\n")
+      sb.append(s"${indent}  source:\n")
+      explainNode(src, sb, indent + "    ")
+
+    case SemanticOrderByOp(src, keys) =>
+      sb.append(s"${indent}orderBy(${keys.map(_.toString).mkString(", ")})\n")
+      sb.append(s"${indent}  source:\n")
+      explainNode(src, sb, indent + "    ")
+
+    case SemanticLimitOp(src, n) =>
+      sb.append(s"${indent}limit($n)\n")
+      sb.append(s"${indent}  source:\n")
+      explainNode(src, sb, indent + "    ")
+  }
+
+  /** Print the Spark physical plan after compiling the op tree.
+    *
+    * Calls `toDataFrame(spark).explain()` and returns the explain string.
+    * This is the "real" plan — Catalyst-optimized, with actual column names,
+    * shuffle/partitions info, and broadcast hints visible.
+    *
+    * Unlike [[explain()]] which shows the semantica op tree without compiling,
+    * this method compiles the full plan and asks Spark to explain it.
+    *
+    * @param spark the active SparkSession
+    * @return Spark's explain output string
+    */
+  def explain(spark: SparkSession): String = {
+    val df = toDataFrame(spark)
+    df.queryExecution.explainString(
+      org.apache.spark.sql.execution.ExplainMode.fromString("simple")
+    )
+  }
+
+  // -------------------------------------------------------------------------
   // Model extension
   // -------------------------------------------------------------------------
 
@@ -453,6 +541,7 @@ final class SemanticTable private[semantica] (
     }
 
   override def toString: String = s"SemanticTable(${root.getClass.getSimpleName})"
+
 }
 
 /** Builder produced by [[SemanticTable.groupBy]]. `aggregate(measure names...)` compiles
