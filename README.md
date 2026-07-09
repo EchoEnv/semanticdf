@@ -184,7 +184,7 @@ use `safeDivide` only when null is undesirable).
 
 ## Cross-version compatibility
 
-Verified green on all three lines (44 tests each):
+Verified green on all three lines (49 tests each):
 
 | Spark | Scala | Status |
 |---|---|---|
