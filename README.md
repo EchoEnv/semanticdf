@@ -182,6 +182,27 @@ brings the filter DSL into scope. `SortKey.desc(...)` / bare `String` (ascending
 with an explicit default (Spark `/` returns null on div-by-zero — correct SQL semantics;
 use `safeDivide` only when null is undesirable).
 
+## Runnable examples
+
+Five complete, runnable examples are in `src/main/scala/io/semantica/examples/`.
+Compile once with `mvn compile`, then run any example:
+
+```bash
+mvn compile -q
+
+mvn scala:run -DmainClass=io.semantica.examples.FlightsBasic
+mvn scala:run -DmainClass=io.semantica.examples.FlightsPctTotals
+mvn scala:run -DmainClass=io.semantica.examples.OrdersJoinMany
+mvn scala:run -DmainClass=io.semantica.examples.FiltersRouting
+mvn scala:run -DmainClass=io.semantica.examples.TimeSeries
+```
+
+Or submit as a Spark app:
+```bash
+mvn package -q
+spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.jar
+```
+
 ## Cross-version compatibility
 
 Verified green on all three lines (49 tests each):
