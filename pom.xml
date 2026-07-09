@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.semantica</groupId>
+  <artifactId>semantica_2.13</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>semantica</name>
+  <description>A semantic layer for Apache Spark (JVM), adapted from Boring Semantic Layer.</description>
+
+  <properties>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+    <!-- Scala: 2.13 only (ADR 0001). Spark 4 is 2.13-only, so 2.13 covers both Spark lines. -->
+    <scala.version>2.13.14</scala.version>
+    <scala.binary.version>2.13</scala.binary.version>
+
+    <!-- Spark: 3.5.8 is the default/primary target (DESIGN §7). -->
+    <spark.version>3.5.8</spark.version>
+
+    <scalatest.version>3.2.19</scalatest.version>
+
+    <!-- Java 17: the intersection satisfying Spark 3.5.x (8/11/17) and Spark 4 (17+). -->
+    <maven.compiler.release>17</maven.compiler.release>
+
+    <scala.maven.plugin.version>4.9.2</scala.maven.plugin.version>
+    <scalatest.maven.plugin.version>2.2.0</scalatest.maven.plugin.version>
+    <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
+
+    <!-- Spark needs reflective access to internal JDK modules (sun.nio.ch.DirectBuffer, etc.),
+         which Java 17 locks down. These flags open them for the FORKED TEST JVM only.
+         They mirror what spark-submit sets; without them, SparkContext init fails on JDK 17+. -->
+    <spark.test.argLine>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</spark.test.argLine>
+  </properties>
+
+  <dependencies>
+    <!-- Spark is `provided`: semantica is a library dropped into the user's Spark job. -->
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_${scala.binary.version}</artifactId>
+      <version>${spark.version}</version>
+      <scope>provided</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <version>${scalatest.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>${maven.compiler.plugin.version}</version>
+        <configuration>
+          <release>${maven.compiler.release}</release>
+        </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+        <version>${scala.maven.plugin.version}</version>
+        <configuration>
+          <scalaVersion>${scala.version}</scalaVersion>
+          <args>
+            <arg>-deprecation</arg>
+            <arg>-feature</arg>
+            <arg>-unchecked</arg>
+          </args>
+        </configuration>
+        <executions>
+          <execution>
+            <id>scala-compile</id>
+            <phase>process-resources</phase>
+            <goals>
+              <goal>add-source</goal>
+              <goal>compile</goal>
+            </goals>
+          </execution>
+          <execution>
+            <id>scala-test-compile</id>
+            <phase>process-test-resources</phase>
+            <goals>
+              <goal>testCompile</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+        <version>${scalatest.maven.plugin.version}</version>
+        <configuration>
+          <argLine>${spark.test.argLine}</argLine>
+          <suffixes>Spec</suffixes>
+          <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+          <junitxml>.</junitxml>
+          <filereports>semantica-test-suite.txt</filereports>
+        </configuration>
+        <executions>
+          <execution>
+            <id>test</id>
+            <goals>
+              <goal>test</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+
+  <!-- Room for Spark 4.x (DESIGN §7, ADR 0002). Inert unless activated: mvn -Pspark4 ... -->
+  <profiles>
+    <profile>
+      <id>spark4</id>
+      <properties>
+        <spark.version>4.0.0</spark.version>
+        <!-- Bump scala.version here if a future Spark 4 release pins a newer 2.13.x. -->
+      </properties>
+    </profile>
+  </profiles>
+</project>

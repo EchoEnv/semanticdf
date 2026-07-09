@@ -1,0 +1,23 @@
+# Maven / Scala build output
+target/
+build/
+
+# Scala / IDE artifacts
+*.class
+*.jar
+*.war
+
+# IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Metals / BSP / VSCode (Scala tooling)
+.metals/
+.bloop/
+.bsp/
+.vscode/
+
+# OS noise
+.DS_Store
