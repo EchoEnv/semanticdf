@@ -534,7 +534,9 @@ final case class SemanticAggregateOp(
     while (queue.nonEmpty) {
       val name = queue.dequeue()
       val m    = resolved(name)
-      val probe = new ClassificationScope(baseDf, model.measures.keySet)
+      // Exclude the measure's own name from the dependency probe: a same-named column
+      // reference is base-column aggregation, not a self-dependency (see classifyOne).
+      val probe = new ClassificationScope(baseDf, model.measures.keySet - name)
       try m.expr(probe) catch { case _: SemanticScope.UnknownFieldError => }
       probe.referencedMeasures.foreach { dep =>
         if (!resolved.contains(dep)) {
@@ -585,13 +587,19 @@ final case class SemanticAggregateOp(
   // --- Classification ---
 
   /** Classify a single measure: known-measure names it references (deps, non-empty →
-    * calc) and measure names it references via `t.all(...)` (totals, Phase 3). */
+    * calc) and measure names it references via `t.all(...)` (totals, Phase 3).
+    *
+    * The measure's OWN name is excluded from the dependency probe: a measure that
+    * references a column sharing its name (the common `Measure("x", t => sum(t("x")))`
+    * pattern) is aggregating a base column, not depending on itself. Without this
+    * exclusion, that legitimate pattern would be misclassified as a self-dependency
+    * → false "calc cycle" error. */
   private def classifyOne(
       m: Measure,
       baseDf: DataFrame,
       allMeasures: Seq[Measure],
   ): Classification = {
-    val known = allMeasures.map(_.name).toSet
+    val known = allMeasures.map(_.name).toSet - m.name
     val probe = new ClassificationScope(baseDf, known)
     try {
       m.expr(probe)
