@@ -173,6 +173,8 @@ st.query(
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). |
+| `.explain()` | Print the semantica op-tree summary (no Spark compile). |
+| `.explain(spark)` | Run the full query and print Spark's physical plan via `explain`. | |
 
 `Dimension.time(...)` / `Dimension.entity(...)` are ergonomic factories. `Predicate._`
 brings the filter DSL into scope. `SortKey.desc(...)` / bare `String` (ascending) drive
@@ -182,7 +184,7 @@ use `safeDivide` only when null is undesirable).
 
 ## Cross-version compatibility
 
-Verified green on all three lines (41 tests each):
+Verified green on all three lines (44 tests each):
 
 | Spark | Scala | Status |
 |---|---|---|

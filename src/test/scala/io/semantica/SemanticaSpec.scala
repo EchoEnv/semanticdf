@@ -674,7 +674,6 @@ class SemanticaSpec
 
     val sparkPlan = st.explain(spark)
     sparkPlan should not be empty
-    // The Spark explain output contains the physical plan node types (HashAggregate, etc.)
     sparkPlan should include("=")  // basic explain has === separators
   }
 
