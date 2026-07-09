@@ -120,12 +120,13 @@
     </plugins>
   </build>
 
-  <!-- Room for Spark 4.x (DESIGN §7, ADR 0002). Inert unless activated: mvn -Pspark4 ... -->
+  <!-- Spark 4.x leg (DESIGN §7, ADR 0002). Verified green: 3.5.8 (default), 4.0.0, 4.1.1.
+       Activate: mvn -Pspark4 test. No code shims needed — uses only APIs stable across 3.5→4.x. -->
   <profiles>
     <profile>
       <id>spark4</id>
       <properties>
-        <spark.version>4.0.0</spark.version>
+        <spark.version>4.1.1</spark.version>
         <!-- Bump scala.version here if a future Spark 4 release pins a newer 2.13.x. -->
       </properties>
     </profile>
