@@ -17,10 +17,13 @@ trait SemanticScope {
   /** Resolve `name` to a Column. */
   def apply(name: String): Column
 
-  /** Percent-of-total reference (Phase 3). Not yet implemented. */
+  /** Percent-of-total reference. Only valid inside a [[SemanticAggregateOp]].
+    * Throws when called on [[BaseScope]] since there is no totals context yet. */
   def all(name: String): Column =
     throw new UnsupportedOperationException(
-      "t.all(...) is not implemented until Phase 3 (percent-of-total)."
+      "t.all(...) is only valid inside a groupBy(...).aggregate(...), " +
+        "where percent-of-total can be computed. It cannot be used in a " +
+        "dimension expression or outside an aggregation."
     )
 }
 
@@ -110,9 +113,9 @@ final class MeasureScope(
     case Some(resolve) => resolve(name)
     case None =>
       throw new UnsupportedOperationException(
-        s"t.all('$name') is used in a calc, but this aggregation did not build a totals " +
-          "table. This happens inside a grand-total aggregation or a totals sub-computation " +
-          "where percent-of-total has no meaning."
+        s"t.all('$name') is used in a calc measure, but this aggregation has no " +
+          "percent-of-total context. t.all() is only valid inside a groupBy(...).aggregate(...), " +
+          "not inside a zero-grain aggregate or a totals sub-computation."
       )
   }
 }

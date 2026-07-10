@@ -1,6 +1,7 @@
 package io.semantica
 
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
+import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.functions.col
 
 /** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]] (Phase 5 completion).
@@ -539,6 +540,95 @@ final class SemanticTable private[semantica] (
           s"$label: cannot join after aggregate(). Join tables first, then call groupBy()."
         )
     }
+
+  // -----------------------------------------------------------------------
+  // Catalog accessors (unblocks first-consumer: explore a SemanticTable)
+  // -----------------------------------------------------------------------
+
+  /** All dimensions declared on this semantic table. */
+  def dimensions: Map[String, Dimension] = resolveRootModel.dimensions
+
+  /** All measures declared on this semantic table (base and calc). */
+  def measures: Map[String, Measure] = resolveRootModel.measures
+
+  /** Look up a dimension by name. */
+  def findDimension(name: String): Option[Dimension] = dimensions.get(name)
+
+  /** Look up a measure by name. */
+  def findMeasure(name: String): Option[Measure] = measures.get(name)
+
+  // -------------------------------------------------------------------------
+  // Metastore integration (unblocks BI tools: query via Spark SQL)
+  // -------------------------------------------------------------------------
+
+  /** Compile this semantic table and register it as a Spark temporary view.
+    *
+    * After registration, any Spark SQL query can reference `name` as a table:
+    * {{{
+    * st.createOrReplaceTempView("flights")
+    * spark.sql("SELECT carrier, total_passengers FROM flights WHERE carrier = 'AA'")
+    * }}}
+    *
+    * The view is session-scoped and disappears when the SparkSession stops.
+    * For a global view, use [[createOrReplaceGlobalTempView]].
+    *
+    * @param name the view name (must be a valid Spark identifier)
+    */
+  def createOrReplaceTempView(name: String)(implicit spark: SparkSession): Unit =
+    toDataFrame(spark).createOrReplaceTempView(name)
+
+  /** Compile this semantic table and register it as a session-scoped temp view.
+    *
+    * Unlike [[createOrReplaceTempView]], this throws if `name` already exists.
+    *
+    * @param name the view name
+    */
+  def createTempView(name: String)(implicit spark: SparkSession): Unit =
+    toDataFrame(spark).createTempView(name)
+
+  /** Compile this semantic table and register it as a global Spark temporary view.
+    *
+    * Global views are stored in the global_temp database and persist across sessions
+    * within the same application:
+    * {{{
+    * st.createOrReplaceGlobalTempView("flights")
+    * spark.sql("SELECT * FROM global_temp.flights")
+    * }}}
+    *
+    * @param name the view name
+    */
+  def createOrReplaceGlobalTempView(name: String)(implicit spark: SparkSession): Unit =
+    toDataFrame(spark).createOrReplaceGlobalTempView(name)
+
+  // -------------------------------------------------------------------------
+  // Typed result schema (unblocks first-consumer: preview output before run)
+  // -------------------------------------------------------------------------
+
+  /** Compile this semantic table and return the output schema as a StructType.
+    *
+    * No rows are executed — only the plan is built and resolved to a schema.
+    * Use this to discover what columns `.execute(spark)` will produce before
+    * running it, or to drive code generation, validation, or documentation.
+    *
+    * @param spark the active SparkSession
+    * @return the output schema (dimension columns + measure columns)
+    */
+  def previewSchema(spark: SparkSession): StructType =
+    toDataFrame(spark).schema
+
+  // -------------------------------------------------------------------------
+  // Internals (reordered for readability)
+  // -------------------------------------------------------------------------
+
+  private def resolveRootModel: MergedSemanticModel = root match {
+    case t: SemanticTableOp => MergedSemanticModel(t.dimensions, t.measures)
+    case j: SemanticJoinOp  => j.mergedModel
+    case SemanticAggregateOp(src, _, _) =>
+      new SemanticTable(src).resolveRootModel
+    case SemanticFilterOp(src, _)  => new SemanticTable(src).resolveRootModel
+    case SemanticOrderByOp(src, _) => new SemanticTable(src).resolveRootModel
+    case SemanticLimitOp(src, _)   => new SemanticTable(src).resolveRootModel
+  }
 
   override def toString: String = s"SemanticTable(${root.getClass.getSimpleName})"
 

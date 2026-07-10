@@ -195,6 +195,7 @@ mvn scala:run -DmainClass=io.semantica.examples.FlightsPctTotals
 mvn scala:run -DmainClass=io.semantica.examples.OrdersJoinMany
 mvn scala:run -DmainClass=io.semantica.examples.FiltersRouting
 mvn scala:run -DmainClass=io.semantica.examples.TimeSeries
+mvn scala:run -DmainClass=io.semantica.examples.Benchmark
 ```
 
 Or submit as a Spark app:
@@ -205,7 +206,7 @@ spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.
 
 ## Cross-version compatibility
 
-Verified green on all three lines (49 tests each):
+Verified green on all three lines (53 tests each, Phase D):
 
 | Spark | Scala | Status |
 |---|---|---|
@@ -219,6 +220,9 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 
 - **[`DESIGN.md`](DESIGN.md)** — architecture of record: op tree, scopes, calc compilation,
   joins, percent-of-total, filters, time semantics, invariants.
+- **[`docs/known-limitations.md`](docs/known-limitations.md)** — what doesn't work in v0.1 (streaming, metastore registration, multi-hop joins, etc.). Read before first consumer.
+- **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
+- **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
 - **[`docs/adr/`](docs/adr/)** — recorded decisions:
   - [0001](docs/adr/0001-adopt-karpathy-guidelines-not-app-design.md) — karpathy guidelines adopted (think-before-coding, simplicity-first, surgical changes, goal-driven execution); app-design plugin/portal rejected.
   - [0002](docs/adr/0002-streaming-batch-first-streaming-shaped.md) — batch-first, streaming-shaped (DSL/source-agnostic op tree; batch terminal now, streaming terminal deferred).

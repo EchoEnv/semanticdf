@@ -431,8 +431,9 @@ final case class SemanticAggregateOp(
 
     if (baseMeasures.isEmpty)
       throw new IllegalArgumentException(
-        "aggregate() resolved no base measures. Every requested measure is a calc, " +
-          "but a calc must bottom out in at least one base measure."
+        "aggregate(" + measureNames.map(m => "'" + m + "'").mkString(", ") + "): all requested " +
+          "measures are calcs with no base measure at the root of their dependency chain. " +
+          "A calc must reference at least one base measure (e.g. sum, count, avg of a column)."
       )
 
     // --- Pass 1: group-by + aggregate the base measures ---
@@ -554,7 +555,10 @@ final case class SemanticAggregateOp(
       probe.referencedMeasures.foreach { dep =>
         if (!resolved.contains(dep)) {
           val dm = model.measures.getOrElse(dep,
-            throw new IllegalArgumentException(s"Calc '$name' references unknown measure '$dep'."))
+            throw new IllegalArgumentException(
+              s"Calc measure '$name' references '$dep', which is not declared in the semantic model. " +
+                s"Add Measure(\"$dep\", ...) to .withMeasures(...) before using it in a calc."
+            ))
           resolved(dep) = dm; queue.enqueue(dep)
         }
       }
@@ -563,7 +567,10 @@ final case class SemanticAggregateOp(
       probe.referencedTotals.foreach { dep =>
         if (!resolved.contains(dep)) {
           val dm = model.measures.getOrElse(dep,
-            throw new IllegalArgumentException(s"Calc '$name' references unknown measure '$dep' via t.all()."))
+            throw new IllegalArgumentException(
+              s"Calc measure '$name' uses t.all('$dep'), but '$dep' is not declared in .withMeasures(...). " +
+                s"Add Measure(\"$dep\", ...) to use it in a percent-of-total."
+            ))
           resolved(dep) = dm; queue.enqueue(dep)
         }
       }

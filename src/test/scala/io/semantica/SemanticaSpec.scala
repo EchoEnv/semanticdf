@@ -694,4 +694,90 @@ class SemanticaSpec
     // The DEBUG messages (base/calc classification, layers) go to the test log.
     st.execute(spark).collect() should have size 3
   }
+
+  // -------------------------------------------------------------------------
+  // Phase D: Metastore + Catalog + Schema
+  // -------------------------------------------------------------------------
+
+  test("catalog accessors — dimensions and measures") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(
+        Dimension("carrier", t => t("carrier")),
+        Dimension("origin", t => t("origin")),
+      )
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count", t => count(lit(1))),
+        Measure("avg_passengers", t => t("total_passengers") / t("flight_count")),
+      )
+
+    st.dimensions.keys should contain theSameElementsAs Set("carrier", "origin")
+    st.measures.keySet should contain theSameElementsAs Set(
+      "total_passengers", "flight_count", "avg_passengers",
+    )
+    st.findDimension("carrier") shouldBe defined
+    st.findDimension("nonexistent") shouldBe empty
+    st.findMeasure("total_passengers") shouldBe defined
+    st.findMeasure("nonexistent") shouldBe empty
+  }
+
+  test("catalog accessors — joined table") {
+    val leftDf  = spark.createDataFrame(Seq((1, "Alice"), (2, "Bob"))).toDF("id", "name")
+    val rightDf = spark.createDataFrame(Seq((1, 100), (2, 200))).toDF("id", "score")
+
+    val joined = toSemanticTable(leftDf)
+      .withDimensions(
+        Dimension("id",   t => t("id")),
+        Dimension("name", t => t("name")),
+      )
+      .join_one(
+        toSemanticTable(rightDf)
+          .withDimensions(Dimension("id",    t => t("id")))
+          .withMeasures(Measure("score_sum", t => sum(t("score")))),
+        (l, r) => l("id") === r("id"),
+      )
+
+    joined.dimensions.keys.toSet should contain theSameElementsAs Set("id", "name")
+    joined.measures.keySet should contain ("score_sum")
+  }
+
+  test("createOrReplaceTempView — query via Spark SQL") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+
+    implicit val sparkSession = spark
+    st.createOrReplaceTempView("flights_view")
+
+    val result = spark.sql("SELECT carrier, total_passengers FROM flights_view ORDER BY carrier")
+    val rows = result.collect()
+    rows should have size 3
+    rows.map(_.getString(0)).sorted shouldEqual Seq("AA", "DL", "UA")
+  }
+
+  test("previewSchema — returns correct types without executing rows") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count",     t => count(lit(1))),
+        Measure("avg_passengers", t => t("total_passengers") / t("flight_count")),
+      )
+      .groupBy("carrier")
+      .aggregate("total_passengers", "avg_passengers")
+
+    val schema = st.previewSchema(spark)
+    // allMeasuresClosed pulls in flight_count transitively (referenced by avg_passengers),
+    // so the output includes it even though only total_passengers and avg_passengers
+    // were explicitly requested.
+    schema.fieldNames should contain theSameElementsAs
+      Seq("carrier", "total_passengers", "flight_count", "avg_passengers")
+    // Dimension columns keep their source type; measure columns are the result of aggregation
+    val carrierField = schema.apply("carrier")
+    (carrierField.dataType.typeName) should include("string")
+    val passengersField = schema.apply("total_passengers")
+    (passengersField.dataType.typeName) should include("long")
+  }
 }
