@@ -635,4 +635,104 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     val carrierJs: String = carrierRows.head.getAs[String]("join_source")
     assert(carrierJs == null, "join_source for 'carrier' should be null: " + carrierJs)
   }
+
+  // -------------------------------------------------------------------------
+  // loadDir — directory-based multi-file loading
+  // -------------------------------------------------------------------------
+
+  test("loadDir: loads all *.yml files in a directory into one merged map") {
+    // Create a temp directory with two YAML files.
+    val dir = java.nio.file.Files.createTempDirectory("semantica-loadDir").toFile
+    dir.deleteOnExit()
+
+    def writeFile(name: String, content: String): Unit = {
+      val f = new java.io.File(dir, name)
+      f.deleteOnExit()
+      new java.io.PrintWriter(f) { write(content); close() }
+    }
+
+    writeFile("flights.yml",
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_passengers: "sum(passengers)"
+        |""".stripMargin)
+
+    writeFile("carriers.yml",
+      """
+        |carriers:
+        |  table: carriers_tbl
+        |  dimensions:
+        |    code: carrier
+        |    name: name
+        |""".stripMargin)
+
+    val models = YamlLoader.loadDir(dir.getAbsolutePath, flightsTables)
+
+    assert(models.size == 2, s"Expected 2 models, got ${models.size}: ${models.keySet}")
+    assert(models.contains("flights"), "Should contain 'flights'")
+    assert(models.contains("carriers"), "Should contain 'carriers'")
+
+    // Verify models are functional.
+    val rows = models("flights").groupBy("carrier").aggregate("total_passengers")
+      .toDataFrame(spark).collect()
+    assert(rows.nonEmpty, "Should produce rows from flights model")
+  }
+
+  test("loadDir: throws on duplicate model name across files") {
+    val dir = java.nio.file.Files.createTempDirectory("semantica-loadDir-dup").toFile
+    dir.deleteOnExit()
+
+    def writeFile(name: String, content: String): Unit = {
+      val f = new java.io.File(dir, name)
+      f.deleteOnExit()
+      new java.io.PrintWriter(f) { write(content); close() }
+    }
+
+    writeFile("flights_a.yml",
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |""".stripMargin)
+
+    writeFile("flights_b.yml",
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    origin: origin
+        |""".stripMargin)
+
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.loadDir(dir.getAbsolutePath, flightsTables)
+    }
+    assert(ex.getMessage.contains("Duplicate model names"),
+      s"Expected duplicate-model error, got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("flights"),
+      s"Error should mention 'flights': ${ex.getMessage}")
+  }
+
+  test("loadDir: throws when directory does not exist") {
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.loadDir("/nonexistent/directory/path", flightsTables)
+    }
+    assert(ex.getMessage.contains("not found") || ex.getMessage.contains("Nonexistent"))
+  }
+
+  test("loadDir: throws when directory has no .yml files") {
+    val dir = java.nio.file.Files.createTempDirectory("semantica-loadDir-empty").toFile
+    dir.deleteOnExit()
+    new java.io.PrintWriter(new java.io.File(dir, "readme.txt")) {
+      write("just a text file"); close()
+    }
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.loadDir(dir.getAbsolutePath, flightsTables)
+    }
+    assert(ex.getMessage.contains("no .yml files") || ex.getMessage.contains("no .yml"))
+  }
 }

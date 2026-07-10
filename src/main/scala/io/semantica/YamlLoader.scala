@@ -105,6 +105,111 @@ object YamlLoader {
   def load(path: String, spark: SparkSession): Map[String, SemanticTable] =
     buildModels(parseYaml(path), name => spark.table(name))
 
+  /** Load all semantic models from every `*.yml` file in a directory.
+    *
+    * Each file is loaded independently and all models are merged into a single map.
+    * This is the natural entry point for users: put all your YAML model files in a
+    * directory and load them all at once.
+    *
+    * @param path   directory path containing YAML model files
+    * @param tables map of table-name → DataFrame, keyed by the `table:` field in YAML
+    * @return merged map of model-name → [[SemanticTable]]
+    * @throws IllegalArgumentException if two files define the same model name, or if
+    *                                  `path` is not a directory or contains no `.yml` files
+    *
+    * @example
+    * {{{
+    *   // my-semantic-models/
+    *   //   flights.yml
+    *   //   sales.yml
+    *   //   products.yml
+    *
+    *   val models = YamlLoader.loadDir("my-semantic-models/", Map(
+    *     "flights_tbl"  -> spark.read.parquet("s3://data/flights"),
+    *     "sales_tbl"    -> spark.read.parquet("s3://data/sales"),
+    *     "products_tbl" -> spark.read.parquet("s3://data/products"),
+    *   ))
+    *   models("flights").groupBy("carrier").aggregate("total_passengers").execute(spark)
+    *   models("sales").groupBy("region").aggregate("total_revenue").execute(spark)
+    *   }}}
+    */
+  def loadDir(path: String, tables: Map[String, DataFrame]): Map[String, SemanticTable] = {
+    val dir = new java.io.File(path)
+    if (!dir.exists())
+      throw new IllegalArgumentException(s"Directory not found: '$path'")
+    if (!dir.isDirectory)
+      throw new IllegalArgumentException(s"Expected a directory, got a file: '$path'")
+
+    val files = dir.listFiles { f: java.io.File =>
+      f.isFile && f.getName.endsWith(".yml")
+    }
+    if (files == null || files.isEmpty)
+      throw new IllegalArgumentException(
+        s"Directory '$path' contains no .yml files")
+
+    val allModels = files.map { f =>
+      try load(f.getAbsolutePath, tables)
+      catch { case e: Exception =>
+        throw new IllegalArgumentException(s"Failed to load models from '${f.getName}': ${e.getMessage}", e)
+      }
+    }
+
+    mergeModelMaps(allModels: _*)
+  }
+
+  /** Load all semantic models from every `*.yml` file in a directory, resolving
+    * `table:` references from the Spark metastore via `spark.table(name)`.
+    *
+    * @param path  directory path containing YAML model files
+    * @param spark active SparkSession with access to the metastore
+    * @return merged map of model-name → [[SemanticTable]]
+    * @throws IllegalArgumentException if two files define the same model name
+    */
+  def loadDir(path: String, spark: SparkSession): Map[String, SemanticTable] = {
+    val dir = new java.io.File(path)
+    if (!dir.exists())
+      throw new IllegalArgumentException(s"Directory not found: '$path'")
+    if (!dir.isDirectory)
+      throw new IllegalArgumentException(s"Expected a directory, got a file: '$path'")
+
+    val files = dir.listFiles { f: java.io.File =>
+      f.isFile && f.getName.endsWith(".yml")
+    }
+    if (files == null || files.isEmpty)
+      throw new IllegalArgumentException(
+        s"Directory '$path' contains no .yml files")
+
+    val allModels = files.map { f =>
+      try load(f.getAbsolutePath, spark)
+      catch { case e: Exception =>
+        throw new IllegalArgumentException(s"Failed to load models from '${f.getName}': ${e.getMessage}", e)
+      }
+    }
+
+    mergeModelMaps(allModels: _*)
+  }
+
+  /** Merge multiple model maps, failing loudly on duplicate model names. */
+  private def mergeModelMaps(
+      maps: Map[String, SemanticTable]*
+  ): Map[String, SemanticTable] = {
+    val all = maps.flatMap(_.toSeq)
+    val dups = all.groupBy(_._1).filter(_._2.size > 1)
+    if (dups.nonEmpty) {
+      val dupNames = dups.keys.toSeq.sorted
+      val sources = dupNames.map { name =>
+        val files = maps.filter(_.contains(name)).map {
+          case m if m == maps.head => "..."
+          case _ => "<another file>"
+        }.distinct.mkString(" and ")
+        s"  - '$name' (defined in $files)"
+      }.mkString("\n")
+      throw new IllegalArgumentException(
+        s"Duplicate model names across files:\n$sources")
+    }
+    all.toMap
+  }
+
   // -------------------------------------------------------------------------
   // Parsing
   // -------------------------------------------------------------------------
