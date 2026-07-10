@@ -111,7 +111,14 @@ object YamlLoader {
 
   private def parseYaml(path: String): Map[String, Map[String, Any]] = {
     val yaml = new Yaml()
-    val raw = yaml.load[java.util.Map[String, AnyRef]](new java.io.FileInputStream(path))
+    // Use the loan pattern to guarantee the FileInputStream is closed even if
+    // parsing throws. SnakeYAML does NOT close the stream itself — leaving it
+    // open would leak a file descriptor per load on a long-lived Spark driver.
+    val raw = {
+      val stream = new java.io.FileInputStream(path)
+      try yaml.load[java.util.Map[String, AnyRef]](stream)
+      finally stream.close()
+    }
     if (raw == null)
       throw new IllegalArgumentException(s"YAML file '$path' is empty or could not be parsed.")
     raw.asScala.view.mapValues(_.asInstanceOf[AnyRef]).toMap.map { case (k, v) =>

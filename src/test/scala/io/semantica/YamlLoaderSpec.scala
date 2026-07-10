@@ -372,6 +372,19 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     CalcExpr(scope, "(a + b) * c")  // parens override
   }
 
+  test("CalcExpr: identical expression returns the same cached AST node") {
+    // The AST cache must be keyed by expression string so the parser runs once
+    // and every subsequent invocation is a pure tree-walk eval. This test pins
+    // that contract: if caching regresses (e.g. someone removes parseCached),
+    // the node identity check fails.
+    val a = CalcExpr.parseCached("total_a / total_b")
+    val b = CalcExpr.parseCached("total_a / total_b")
+    assert(a eq b, "identical expressions must return the same cached AST node")
+    // A different expression returns a different node.
+    val c = CalcExpr.parseCached("total_a * 2")
+    assert(a ne c)
+  }
+
   test("CalcExpr: trailing input is rejected") {
     val df = spark.emptyDataFrame.withColumn("a", lit(1))
     val scope = new MeasureScope(df, Set("a"))
