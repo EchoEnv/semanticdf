@@ -206,7 +206,7 @@ spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.
 
 ## Cross-version compatibility
 
-Verified green on all three lines (59 tests each, Phase D + integration):
+Verified green on all three lines (76 tests each, Phase D + integration + YAML loader):
 
 | Spark | Scala | Status |
 |---|---|---|

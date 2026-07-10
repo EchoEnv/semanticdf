@@ -53,6 +53,16 @@
       <version>${scalatest.version}</version>
       <scope>test</scope>
     </dependency>
+
+    <!-- YAML model loader (DESIGN: declarative model definitions for non-Scala consumers).
+         SnakeYAML is standalone (no transitive deps) and API-stable, avoiding the Jackson
+         version-matching problem that arises when jackson-dataformat-yaml must match
+         Spark's own provided jackson-core version across 3.5.x → 4.x. -->
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+      <version>1.33</version>
+    </dependency>
   </dependencies>
 
   <build>

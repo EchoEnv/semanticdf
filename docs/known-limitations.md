@@ -124,4 +124,57 @@ joined
 
 ---
 
-*This document is updated after each production soak cycle. Last updated: v0.1 Phase C.*
+## YAML loader limitations
+
+### Join keys must be symmetric (same column name on both sides)
+
+The YAML loader requires `left_on == right_on` — the join key must have the same column name on both tables. This matches semantica's equi-join engine.
+
+**Don't do this:**
+```yaml
+joins:
+  carriers:
+    left_on: carrier   # flights.carrier
+    right_on: code      # carriers.code — DIFFERENT name → error
+```
+
+**Do this:**
+```yaml
+# Rename the column in one table so both use the same key name
+carriers:
+  table: carriers_tbl
+  dimensions:
+    carrier: carrier   # renamed from 'code' to 'carrier' to match flights
+```
+
+Asymmetric-key support is a future enhancement (requires either relaxing the
+join engine's symmetric-key constraint or column-rename preprocessing).
+
+### Base measures use Spark SQL expressions
+
+YAML `measures:` are Spark SQL aggregate strings (`sum(distance)`, `count(distinct user_id)`).
+These are NOT type-checked at compile time — typos surface at runtime. The Scala DSL
+(`t => sum(t("distance"))`) catches column-name typos earlier via scope resolution.
+
+### Calc measures: arithmetic only
+
+YAML `calculated_measures:` support `+`, `-`, `*`, `/`, parentheses, numeric literals,
+measure-name references, and `all(name)` for percent-of-total. They do NOT support
+function calls (e.g. `abs(x)`, `round(x, n)`). For those, use the Scala DSL.
+
+### Shared column names across joined tables
+
+If two joined tables share a column name (e.g. both have `qty`), a base measure
+referencing that column (`sum(qty)`) will be pre-aggregated on BOTH sides of a
+`join_many`, producing an ambiguous-reference error. Ensure each measure references
+at least one column unique to its table (the standard star-schema case).
+
+### orderBy with dotted dimension names
+
+`orderBy("carriers.name")` is parsed by Spark as `catalog.table.column`, not a literal
+dotted column name. Group-by and aggregation on dotted names work fine; only `orderBy`
+is affected. Sort results in Scala as a workaround.
+
+---
+
+*This document is updated after each production soak cycle. Last updated: v0.1 Phase D + YAML loader.*

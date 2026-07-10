@@ -1,0 +1,44 @@
+# semantica YAML model definition — flights demo
+#
+# This mirrors the Scala DSL example (FlightsBasic) but in declarative YAML.
+# Run via: mvn scala:run -DmainClass=io.semantica.examples.YamlFlightsExample
+#
+# Each top-level key is a model name. The 'table' field names a source DataFrame
+# (resolved from the tables map or Spark metastore at load time).
+
+flights:
+  table: flights_tbl
+  description: "Flight data with origin, destination, and metrics"
+
+  dimensions:
+    carrier: carrier
+    origin:
+      expr: origin
+      description: "Origin airport code"
+
+  measures:
+    total_passengers: "sum(passengers)"
+    flight_count: "count(1)"
+    total_distance: "sum(distance)"
+
+  calculated_measures:
+    avg_passengers: "total_passengers / flight_count"
+    avg_distance: "total_distance / flight_count"
+    # Percent-of-total: all() recomputes the measure at zero grain (grand total),
+    # NOT the sum of per-group values — the classic BI trap is avoided.
+    pct_of_total: "total_passengers / all(total_passengers)"
+
+carriers:
+  table: carriers_tbl
+  description: "Airline carrier reference data"
+
+  dimensions:
+    code: code
+    name: name
+
+  measures:
+    carrier_count: "count(1)"
+
+  # Joins are applied after all models exist (two-pass loading).
+  # This demonstrates a join in the JOINED model rather than the base —
+  # either direction works.
