@@ -15,19 +15,33 @@ import io.semantica._
   */
 object Benchmark {
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder().getOrCreate()
+    val spark = SparkSession.builder()
+      .master("local[2]")
+      .config("spark.ui.enabled", "false")
+      .config("spark.sql.shuffle.partitions", "2")
+      .config("spark.sql.ansi.enabled", "false")
+      .getOrCreate()
     try {
       println("\n" + "=" * 60)
       println("semantica benchmark — establishing baseline")
       println("=" * 60)
 
-      val flights = spark.createDataFrame(Seq(
-        ("AA", "LAX", "JFK", 100, 5),
-        ("AA", "JFK", "LAX", 120, 4),
-        ("UA", "LAX", "ORD",  80, 3),
-        ("UA", "ORD", "LAX",  90, 2),
-        ("DL", "ATL", "JFK", 150, 6),
-      )).toDF("carrier", "origin", "dest", "distance", "passengers")
+      val flights =
+        if (args.nonEmpty && args.head != "--small") {
+          // Read from a CSV path supplied as the first argument (e.g. src/test/resources/flights_large.csv)
+          println(s"Reading from $args head: ${args.head}")
+          spark.read.option("header", "true").option("inferSchema", "true").csv(args.head)
+        } else {
+          println("Using 5-row in-memory fixture (pass a CSV path arg for larger data)")
+          spark.createDataFrame(Seq(
+            ("AA", "LAX", "JFK", 100, 5),
+            ("AA", "JFK", "LAX", 120, 4),
+            ("UA", "LAX", "ORD",  80, 3),
+            ("UA", "ORD", "LAX",  90, 2),
+            ("DL", "ATL", "JFK", 150, 6),
+          )).toDF("carrier", "origin", "dest", "distance", "passengers")
+        }
+      println(s"Row count: ${flights.count()}")
 
       val model = toSemanticTable(flights, name = Some("flights"))
         .withDimensions(
