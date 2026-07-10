@@ -2,7 +2,7 @@ package io.semantica
 
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.types.StructType
-import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.functions._
 
 /** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]] (Phase 5 completion).
   *
@@ -136,6 +136,105 @@ final class SemanticTable private[semantica] (
     df.queryExecution.explainString(
       org.apache.spark.sql.execution.ExplainMode.fromString("simple")
     )
+  }
+
+  /** Return a DataFrame describing every field (dimensions + measures) in this model.
+    *
+    * This is the analogue of Spark's `df.schema` for a semantic model — it flattens
+    * all model metadata into a queryable DataFrame so you can explore, filter, and
+    * catalog the model programmatically.
+    *
+    * {{{
+    *   val catalog = model.schema(spark)
+    *
+    *   // Find all PII fields
+    *   catalog.filter(c => c("metadata_keys").contains("pii")).show()
+    *
+    *   // List all measures owned by finance
+    *   catalog.filter(c => c("metadata_owner") === "finance").show()
+    *
+    *   // Export the full schema to a Delta table
+    *   catalog.write.format("delta").save("_semantica/model_schema")
+    * }}}
+    *
+    * The DataFrame has one row per field with these columns:
+    *   - `model_name`: source table / joined model name
+    *   - `model_description`: human description of the model
+    *   - `field_name`: dimension or measure name
+    *   - `field_type`: `"dimension"` or `"measure"`
+    *   - `description`: the field's description (empty if none)
+    *   - `metadata_keys`: comma-separated list of metadata keys
+    *   - `metadata_values`: comma-separated list of metadata values (aligned with keys)
+    *   - `is_entity`: true for entity (join-key) dimensions
+    *   - `is_time_dimension`: true for time/timestamp dimensions
+    *   - `smallest_grain`: for time dims, the finest supported time grain
+    *   - `join_alias`: if this field comes from a joined table, the join alias
+    *
+    * @param spark the active SparkSession (used only to create the result DataFrame)
+    */
+  def schema(spark: SparkSession): DataFrame = {
+    import spark.implicits._
+
+    val rows = collectSchemaFields(root, None, None)
+
+    val resultSchema = org.apache.spark.sql.types.StructType(Seq(
+      org.apache.spark.sql.types.StructField("model_name",          org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("model_description",  org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("field_name",          org.apache.spark.sql.types.StringType,  nullable = false),
+      org.apache.spark.sql.types.StructField("field_type",          org.apache.spark.sql.types.StringType,  nullable = false),
+      org.apache.spark.sql.types.StructField("description",         org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("metadata_keys",        org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("metadata_values",      org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("is_entity",            org.apache.spark.sql.types.BooleanType, nullable = false),
+      org.apache.spark.sql.types.StructField("is_time_dimension",    org.apache.spark.sql.types.BooleanType, nullable = false),
+      org.apache.spark.sql.types.StructField("smallest_grain",       org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("join_source",          org.apache.spark.sql.types.StringType,  nullable = true),
+      org.apache.spark.sql.types.StructField("join_cardinality",     org.apache.spark.sql.types.StringType,  nullable = true),
+    ))
+
+    val sparkRows = rows.map { case (mName, mDesc, fName, fType, desc, mKeys, mVals, isEnt, isTime, grain, jSrc, jCard) =>
+      org.apache.spark.sql.Row(
+        mName.orNull, mDesc.orNull, fName, fType, desc.orNull,
+        if (mKeys.isEmpty) null else mKeys,
+        if (mVals.isEmpty) null else mVals,
+        isEnt: java.lang.Boolean, isTime: java.lang.Boolean,
+        grain.orNull, jSrc.orNull, jCard.orNull,
+      )
+    }
+    spark.createDataFrame(spark.sparkContext.parallelize(sparkRows), resultSchema)
+  }
+
+  /** Recursively collect schema fields from the op tree. Returns flat list of row tuples. */
+  private def collectSchemaFields(
+      op: SemanticOp,
+      joinSource: Option[String],
+      joinCardinality: Option[String],
+  ): List[(Option[String], Option[String], String, String, Option[String], String, String, Boolean, Boolean, Option[String], Option[String], Option[String])] = op match {
+    case t: SemanticTableOp =>
+      val modelName = t.name.orElse(Some("anonymous"))
+      val modelDesc = t.description
+      val dimRows = t.dimensions.values.map(d =>
+        (modelName, modelDesc, d.name, "dimension",
+          d.description, d.metadata.keys.mkString(","), d.metadata.values.mkString(","),
+          d.isEntity, d.isTimeDimension, d.smallestTimeGrain, joinSource, joinCardinality)
+      ).toList
+      val measRows = t.measures.values.map(m =>
+        (modelName, modelDesc, m.name, "measure",
+          m.description, m.metadata.keys.mkString(","), m.metadata.values.mkString(","),
+          false, false, None, joinSource, joinCardinality)
+      ).toList
+      dimRows ::: measRows
+
+    case j: SemanticJoinOp =>
+      val leftFields  = collectSchemaFields(j.left,  None,             None)
+      val rightSource = j.rightRoot.name.orElse(Some("joined"))
+      val rightFields = collectSchemaFields(j.right, rightSource, Some(j.cardinality.toString))
+      leftFields ::: rightFields
+
+    case f: SemanticFilterOp  => collectSchemaFields(f.source, joinSource, joinCardinality)
+    case o: SemanticOrderByOp => collectSchemaFields(o.source, joinSource, joinCardinality)
+    case l: SemanticLimitOp   => collectSchemaFields(l.source, joinSource, joinCardinality)
+    case a: SemanticAggregateOp => collectSchemaFields(a.source, joinSource, joinCardinality)
   }
 
   // -------------------------------------------------------------------------

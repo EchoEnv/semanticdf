@@ -3,7 +3,7 @@ package io.semantica
 import java.io.{File, PrintWriter}
 
 import org.apache.spark.sql.DataFrame
-import org.apache.spark.sql.functions.lit
+import org.apache.spark.sql.functions.{col, lit}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
@@ -535,5 +535,104 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     totalPax.metadata("owner") shouldEqual "analytics-team"
     totalPax.metadata("unit") shouldEqual "count"
     totalPax.metadata("aggregation") shouldEqual "sum"
+  }
+
+  // -------------------------------------------------------------------------
+  // Model introspection — schema(spark)  (the analogue of df.schema)
+  // -------------------------------------------------------------------------
+
+  test("schema(spark): returns a DataFrame with one row per field") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  description: "Flight facts"
+        |  dimensions:
+        |    carrier:
+        |      expr: carrier
+        |      description: "Airline code"
+        |      metadata:
+        |        owner: platform-team
+        |  measures:
+        |    total_passengers:
+        |      expr: "sum(passengers)"
+        |      description: "Total passengers"
+        |      metadata:
+        |        owner: analytics-team
+        |        unit: count
+        |""".stripMargin)
+
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    val schema = flights.schema(spark)
+
+    schema.columns should contain theSameElementsAs Seq(
+      "model_name", "model_description", "field_name", "field_type",
+      "description", "metadata_keys", "metadata_values",
+      "is_entity", "is_time_dimension", "smallest_grain",
+      "join_source", "join_cardinality",
+    )
+
+    val rows = schema.collect()
+    rows.length shouldEqual 2  // 1 dimension + 1 measure
+
+    val dimRow = rows.find(_.getAs[String]("field_type") == "dimension").get
+    dimRow.getAs[String]("field_name") shouldEqual "carrier"
+    dimRow.getAs[String]("model_name") shouldEqual "flights"
+    dimRow.getAs[String]("model_description") shouldEqual "Flight facts"
+    dimRow.getAs[String]("description") shouldEqual "Airline code"
+    dimRow.getAs[String]("metadata_keys") shouldEqual "owner"
+    dimRow.getAs[String]("metadata_values") shouldEqual "platform-team"
+    dimRow.getAs[Boolean]("is_entity") shouldEqual false
+
+    val measRow = rows.find(_.getAs[String]("field_type") == "measure").get
+    measRow.getAs[String]("field_name") shouldEqual "total_passengers"
+    measRow.getAs[String]("description") shouldEqual "Total passengers"
+    measRow.getAs[Boolean]("is_entity") shouldEqual false  // measures are never entity dims
+    measRow.getAs[Boolean]("is_time_dimension") shouldEqual false
+  }
+
+  test("schema(spark): join_source is set for fields from a joined table") {
+    // Both models must be in the same YAML file so load() sees both at once.
+    // carriers_tbl uses 'carrier' as the key column (same as flights_tbl) for symmetric join.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  description: "Flight facts"
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_passengers: "sum(passengers)"
+        |  joins:
+        |    carriers:
+        |      model: carriers
+        |      type: one
+        |      left_on: carrier
+        |      right_on: carrier
+        |carriers:
+        |  table: carriers_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |    name: name
+        |""".stripMargin)
+
+    val models = YamlLoader.load(path, flightsTables)
+    val flights: io.semantica.SemanticTable = models("flights")
+    val schema: org.apache.spark.sql.DataFrame = flights.schema(spark)
+
+    // The "name" field (from carriers) should have join_source set.
+    val nameRows = schema.filter(col("field_name") === "name").collect()
+    assert(nameRows.length >= 1, "Expected at least 1 'name' row from carriers join")
+    val nameRow = nameRows.head
+    val js: String = nameRow.getAs[String]("join_source")
+    val jc: String = nameRow.getAs[String]("join_cardinality")
+    assert(js == "carriers", "join_source for 'name' should be 'carriers': " + js)
+    assert(jc == "One", "join_cardinality for 'name' should be 'One': " + jc)
+
+    // Primary model fields (carrier) have no join_source.
+    val carrierRows = schema.filter(col("field_name") === "carrier").collect()
+    assert(carrierRows.length >= 1, "Expected at least 1 'carrier' row")
+    val carrierJs: String = carrierRows.head.getAs[String]("join_source")
+    assert(carrierJs == null, "join_source for 'carrier' should be null: " + carrierJs)
   }
 }

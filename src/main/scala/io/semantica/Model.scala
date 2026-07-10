@@ -29,7 +29,7 @@ final class Dimension(
     val isTimeDimension: Boolean = false,
     val isEventTimestamp: Boolean = false,
     val smallestTimeGrain: Option[String] = None,
-) {
+) extends Serializable {
 
   def copy(
       name: String = this.name,
