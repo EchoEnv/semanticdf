@@ -3,6 +3,7 @@ package io.semantica
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.functions._
+import scala.jdk.CollectionConverters._
 
 /** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]] (Phase 5 completion).
   *
@@ -201,7 +202,7 @@ final class SemanticTable private[semantica] (
         grain.orNull, jSrc.orNull, jCard.orNull,
       )
     }
-    spark.createDataFrame(spark.sparkContext.parallelize(sparkRows), resultSchema)
+    spark.createDataFrame(sparkRows.asJava, resultSchema)
   }
 
   /** Recursively collect schema fields from the op tree. Returns flat list of row tuples. */
