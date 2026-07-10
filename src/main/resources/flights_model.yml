@@ -11,22 +11,64 @@ flights:
   description: "Flight data with origin, destination, and metrics"
 
   dimensions:
-    carrier: carrier
+    carrier:
+      expr: carrier
+      description: "Airline carrier code (IATA two-letter identifier)"
+      metadata:
+        owner: data-platform-team
+        tags: [airline, identifier]
     origin:
       expr: origin
       description: "Origin airport code"
+      metadata:
+        owner: data-platform-team
+        tags: [airport]
 
   measures:
-    total_passengers: "sum(passengers)"
-    flight_count: "count(1)"
-    total_distance: "sum(distance)"
+    total_passengers:
+      expr: "sum(passengers)"
+      description: "Total passengers across all flights in the group"
+      metadata:
+        owner: analytics-team
+        unit: count
+        aggregation: sum
+    flight_count:
+      expr: "count(1)"
+      description: "Number of flights (rows) in the group"
+      metadata:
+        owner: analytics-team
+        unit: count
+        aggregation: count
+    total_distance:
+      expr: "sum(distance)"
+      description: "Total distance in miles across all flights"
+      metadata:
+        owner: analytics-team
+        unit: miles
+        aggregation: sum
 
   calculated_measures:
-    avg_passengers: "total_passengers / flight_count"
-    avg_distance: "total_distance / flight_count"
-    # Percent-of-total: all() recomputes the measure at zero grain (grand total),
-    # NOT the sum of per-group values — the classic BI trap is avoided.
-    pct_of_total: "total_passengers / all(total_passengers)"
+    avg_passengers:
+      expr: "total_passengers / flight_count"
+      description: "Average passengers per flight"
+      metadata:
+        owner: analytics-team
+        unit: count
+    avg_distance:
+      expr: "total_distance / flight_count"
+      description: "Average flight distance in miles"
+      metadata:
+        owner: analytics-team
+        unit: miles
+    pct_of_total:
+      expr: "total_passengers / all(total_passengers)"
+      description: |
+        Fraction of total passengers. all() re-evaluates total_passengers at zero
+        grain — avoids the classic BI trap where pct = sum(pct) > 100%.
+      metadata:
+        owner: analytics-team
+        unit: ratio
+        format: percent
 
 carriers:
   table: carriers_tbl

@@ -461,4 +461,79 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     depTime.get.isTimeDimension shouldEqual true
     depTime.get.smallestTimeGrain shouldEqual Some("day")
   }
+
+  // -------------------------------------------------------------------------
+  // Metadata fields (description + arbitrary key-value pairs)
+  // -------------------------------------------------------------------------
+
+  test("DSL: Dimension carries description and metadata") {
+    import MeasureExtra._
+    val d = Dimension(
+      "carrier",
+      t => t("carrier"),
+      description = Some("Airline code"),
+      metadata = Map("owner" -> "platform", "tier" -> "core", "pii" -> "false"),
+    )
+    d.description shouldEqual Some("Airline code")
+    d.metadata("owner") shouldEqual "platform"
+    d.metadata("tier") shouldEqual "core"
+    d.metadata("pii") shouldEqual "false"
+  }
+
+  test("DSL: Measure carries description and metadata") {
+    import MeasureExtra._
+    val m = Measure(
+      "total_rev",
+      t => org.apache.spark.sql.functions.sum(t("amount")),
+      description = Some("Total revenue in USD"),
+      metadata = Map("owner" -> "finance", "unit" -> "USD", "aggregation" -> "sum"),
+    )
+    m.description shouldEqual Some("Total revenue in USD")
+    m.metadata("owner") shouldEqual "finance"
+    m.metadata("unit") shouldEqual "USD"
+    m.metadata("aggregation") shouldEqual "sum"
+  }
+
+  test("DSL: MeasureExtra helper methods work") {
+    import MeasureExtra._
+    val base = Measure("rev", t => org.apache.spark.sql.functions.sum(t("amount")))
+    val tagged = owner(unit(tag(base, "tier" -> "primary"), "USD"), "finance")
+    tagged.metadata shouldEqual Map("tier" -> "primary", "unit" -> "USD", "owner" -> "finance")
+    describe(tagged, "Total revenue").description shouldEqual Some("Total revenue")
+  }
+
+  test("YAML: dimensions and measures carry metadata through load") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier:
+        |      expr: carrier
+        |      description: "Airline code"
+        |      metadata:
+        |        owner: platform-team
+        |        pii: "false"
+        |  measures:
+        |    total_passengers:
+        |      expr: "sum(passengers)"
+        |      description: "Total passengers"
+        |      metadata:
+        |        owner: analytics-team
+        |        unit: count
+        |        aggregation: sum
+        |""".stripMargin)
+
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    val carrier = flights.dimensions("carrier")
+    carrier.description shouldEqual Some("Airline code")
+    carrier.metadata("owner") shouldEqual "platform-team"
+    carrier.metadata("pii") shouldEqual "false"
+
+    val totalPax = flights.measures("total_passengers")
+    totalPax.description shouldEqual Some("Total passengers")
+    totalPax.metadata("owner") shouldEqual "analytics-team"
+    totalPax.metadata("unit") shouldEqual "count"
+    totalPax.metadata("aggregation") shouldEqual "sum"
+  }
 }

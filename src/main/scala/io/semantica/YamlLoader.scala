@@ -227,17 +227,20 @@ object YamlLoader {
     */
   private def buildDimension(name: String, cfg: Any): Dimension = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "dimension", name)
+    val metadata = extra.get("metadata").map(_.asInstanceOf[Map[String, String]].map { case (k, v) =>
+      k -> v.toString
+    }).getOrElse(Map.empty[String, String])
     val isTimeDim = extra.getOrElse("is_time_dimension", false).asInstanceOf[Boolean]
     val isEntity = extra.getOrElse("is_entity", false).asInstanceOf[Boolean]
     val smallestGrain = extra.get("smallest_time_grain").map(_.toString)
 
     if (isTimeDim)
       Dimension.time(name, dimensionExpr(exprStr), smallestTimeGrain = smallestGrain,
-        description = description)
+        description = description, metadata = metadata)
     else if (isEntity)
-      Dimension.entity(name, dimensionExpr(exprStr), description)
+      Dimension.entity(name, dimensionExpr(exprStr), description, metadata)
     else
-      Dimension(name, dimensionExpr(exprStr), description)
+      Dimension(name, dimensionExpr(exprStr), description, metadata)
   }
 
   /** A dimension lambda: simple identifiers go through the scope (for clean
