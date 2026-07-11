@@ -80,6 +80,7 @@ You'll see the 7 steps run in sequence:
 | **WRITE** | Save as parquet, partitioned by year | Silver layer. Partitioning lets downstream queries prune. |
 | **CATALOG** | Re-read parquet, register temp views | The bridge: parquet on disk → queryable table |
 | **SEMANTIC** | Load YAML models, run queries | Gold layer. Declarative metrics on top of silver. |
+| **PERSIST** | Write `model.schema(spark)` to parquet | Catalog the gold layer's metadata. Anyone can query "what models exist?" without parsing YAML. |
 
 ---
 
@@ -132,11 +133,38 @@ orders
 ## What this teaches
 
 - **Bronze/silver/gold layering** — each layer has a clear contract and audience
+- **Gold has two parts** — the YAML model is the *definition*; the catalog table (`_semantica_catalog/`) is the *queryable metadata*. Both live alongside the data.
 - **Idempotent ETL** — re-running produces the same output (parquet overwrite)
 - **Schema validation** — drop nulls, dedupe, cast types — the basics of any pipeline
 - **Partitioning** — `partitionBy("order_year")` for query pruning
 - **Parquet as the trusted layer** — columnar, typed, compressed, Spark-native
 - **Semantic layer on top** — analysts get clean YAML, not raw parquet columns
+
+## Querying the gold catalog
+
+After the pipeline runs, `output/_semantica_catalog/` contains every field of every model as a row. Anyone in the org can query it like any other table:
+
+```scala
+// Find all fields owned by a specific team
+spark.read.parquet("output/_semantica_catalog")
+  .filter(col("metadata_values").contains("finance-team"))
+  .select("model_name", "field_name", "description")
+  .show(false)
+
+// Find all PII fields across all models
+spark.read.parquet("output/_semantica_catalog")
+  .filter(col("metadata_keys").contains("pii"))
+  .select("model_name", "field_name")
+  .show(false)
+
+// Audit: which dimensions are time dimensions?
+spark.read.parquet("output/_semantica_catalog")
+  .filter(col("is_time_dimension") && col("field_type") === "dimension")
+  .select("model_name", "field_name", "smallest_grain")
+  .show(false)
+```
+
+In production you'd write this to a Delta/Iceberg table in your lake and surface it through your catalog (Unity Catalog, Glue, Hive).
 
 ---
 

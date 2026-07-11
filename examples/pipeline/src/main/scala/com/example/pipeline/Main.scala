@@ -159,12 +159,43 @@ object Main {
 
       // Schema introspection — every field from every model as a DataFrame
       println("\n--- Model schema (every field, full metadata) ---")
-      orders.schema(spark).show(50, false)
+      val schema = orders.schema(spark)
+      schema.show(50, false)
+
+      println("\n" + "=" * 70)
+      println("STEP 8: PERSIST schema as catalog table (the gold layer metadata)")
+      println("=" * 70)
+
+      // The YAML model is the gold layer's *definition*. Persisting the schema
+      // as a catalog table makes it *queryable* — anyone in the org can ask
+      // "what models exist, what fields do they have, who owns them?" without
+      // parsing YAML files. In production, write to Delta/Iceberg for ACID.
+      val catalogPath = "output/_semantica_catalog"
+      schema
+        .withColumn("loaded_at", current_timestamp())
+        .withColumn("source_path", lit("models/orders.yml"))
+        .write
+        .mode(SaveMode.Overwrite)
+        .parquet(catalogPath)
+      println(s"  wrote catalog: $catalogPath")
+      println("  query example:")
+      println("    spark.read.parquet(\"output/_semantica_catalog\")")
+      println("      .filter(col(\"metadata_owner\") === \"finance-team\")")
+      println("      .select(\"model_name\", \"field_name\", \"metadata_values\")")
+      println("      .show(false)")
+
+      // Verify by re-reading the catalog
+      val catalog = spark.read.parquet(catalogPath)
+      println(s"\n  re-read catalog: ${catalog.count()} rows")
+      catalog.filter(col("metadata_values").contains("finance-team"))
+        .select("model_name", "field_name", "metadata_values")
+        .show(false)
 
       println("\n" + "=" * 70)
       println("Pipeline complete.")
-      println("  Parquet output:  output/orders/, output/customers/")
-      println("  Semantic models: models/orders.yml, models/customers.yml")
+      println("  Parquet output:   output/orders/, output/customers/")
+      println("  Semantic models:  models/orders.yml, models/customers.yml")
+      println("  Schema catalog:   output/_semantica_catalog/")
       println("  Edit raw/*.csv and re-run to test the pipeline with new data.")
       println("=" * 70)
     } finally spark.stop()
