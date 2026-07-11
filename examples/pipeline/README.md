@@ -351,4 +351,5 @@ For a real deployment:
 - [starter template](../starter/README.md) — for the semantic-layer-only path (no ETL)
 - [README](../../README.md) — main semantica documentation
 - [DESIGN](../../DESIGN.md) — architecture and design decisions
+- [runtime-quickstart](../../docs/runtime-quickstart.md) — JDK/Scala/Spark matrix, build & run commands, the four runtime traps
 - [known-limitations](../../docs/known-limitations.md) — what semantica does NOT support yet

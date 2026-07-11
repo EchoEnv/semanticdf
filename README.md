@@ -245,6 +245,9 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 
 - **[`DESIGN.md`](DESIGN.md)** — architecture of record: op tree, scopes, calc compilation,
   joins, percent-of-total, filters, time semantics, invariants.
+- **[`docs/runtime-quickstart.md`](docs/runtime-quickstart.md)** — JDK/Scala/Spark/Maven
+  matrix, build & test commands, CLI tools, the four runtime traps (Java-17
+  module flags, `scala:run` arg leak, deprecated import, version files).
 - **[`docs/known-limitations.md`](docs/known-limitations.md)** — what doesn't work in v0.1 (streaming, metastore registration, multi-hop joins, etc.). Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
 - **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
