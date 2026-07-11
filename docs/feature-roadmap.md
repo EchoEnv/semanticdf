@@ -91,24 +91,16 @@ Emits a starter YAML file the user can edit.
 
 ---
 
-### 1.4 Auto-generate HTML/Markdown documentation from YAML
+### 1.4 Auto-generate HTML/Markdown documentation from YAML ✅ (v0.1.0)
 
-**Problem:** The schema catalog (parquet) is queryable but not browsable. A new analyst doesn't know what's available unless they read every YAML file or run a Spark query.
+**Done.** `io.semantica.tools.DocsGen` reads YAML model files and emits a self-contained HTML page — no external CSS, no templates:
 
-**Solution:** A CLI tool: `semantica docs models/ [--format html|md] [--output docs/]` reads all YAML, produces a static site with:
-- Index page: every model with description
-- Per-model page: dimensions (with type, entity/time flags), measures (with unit, format), metadata, joins
-- Per-field page: who owns it, when it was added (git blame), example queries
+```scala
+val docsGen = new DocsGen()
+docsGen.write("docs/index.html", docsGen.fromFile("models/"))
+```
 
-**Effort:** 3-4 person-days
-**Impact:** Medium-High — makes the catalog actually usable by non-engineers.
-
-**New files:**
-- `src/main/scala/io/semantica/tools/DocsGen.scala`
-- `src/main/resources/templates/model-page.html` (Handlebars or simple string template)
-- README section showing the output
-
-**Why T1:** Documentation compounds. Once you have the generator, you can re-run it on every model change.
+Output: sidebar nav (all models), per-model cards with dimension/measure/join tables, time/entity/pii badges, embedded CSS. Works from tests; CLI wiring deferred (suffers `-deprecation` flag leak from scala-maven-plugin — filed separately).
 
 ---
 
