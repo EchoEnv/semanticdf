@@ -16,9 +16,12 @@ import org.yaml.snakeyaml.Yaml
   */
 class DocsGen {
 
-  /** Generate HTML docs for a single YAML file. */
-  def fromFile(path: String): String =
-    generateHtml(loadFile(path))
+  /** Generate HTML docs for one YAML file or a directory of YAML files. */
+  def fromFile(path: String): String = {
+    val f = new File(path)
+    if (f.isDirectory) generateHtml(loadDir(path))
+    else generateHtml(loadFile(path))
+  }
 
   /** Write HTML content to a file. */
   def write(path: String, content: String): Unit = {
@@ -31,6 +34,16 @@ class DocsGen {
   // -------------------------------------------------------------------------
   // YAML parsing
   // -------------------------------------------------------------------------
+
+  private def loadDir(dir: String): Seq[ModelEntry] = {
+    val d = new File(dir)
+    require(d.isDirectory, s"$dir is not a directory")
+    val filter = new java.io.FileFilter {
+      override def accept(f: File) =
+        f.isFile && (f.getName.endsWith(".yml") || f.getName.endsWith(".yaml"))
+    }
+    d.listFiles(filter).toSeq.sortBy(_.getName).flatMap(f => loadFile(f.getPath))
+  }
 
   private def loadFile(path: String): Seq[ModelEntry] = {
     val yaml = new Yaml()
