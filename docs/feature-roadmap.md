@@ -26,6 +26,8 @@ These solve known universal pain and don't require consumer validation.
 
 ### 1.1 Lazy measure evaluation (column pruning)
 
+**Status:** ✅ **SHIPPED** (commit a2a4b06) — infrastructure was already in place (`compileWithBase` already filtered by `measuresToCompute`); added 8 regression tests that lock in the behavior. Microbenchmark: **2.09x speedup** (167ms → 80ms) on 10-measure wide model when requesting 1 vs 10 measures.
+
 **Problem:** `groupBy("carrier").aggregate("total_revenue", "avg_passengers")` evaluates BOTH measures in the Spark plan, even though only two were requested. With 20+ measures per model, this wastes cycles on every query.
 
 **Solution:** Only compile and execute the measures the caller asked for. The current code evaluates all measures in `mergedModel.measures`; we should filter to `measureNames` before compiling.
@@ -38,6 +40,9 @@ These solve known universal pain and don't require consumer validation.
 - Add a test that confirms unrequested measures aren't in the Spark plan
 
 **Why T1:** Universal pain — every wide-model query is affected. No consumer signal needed.
+
+**What shipped:**
+- `ColumnPruningSpec.scala` — 8 regression tests that assert which aggregation functions appear in the Spark plan for various request shapes (1 measure, 2 measures, calc with transitive deps, calc + unrelated measure, empty measures, non-existent measure, result schema correctness).
 
 ---
 
