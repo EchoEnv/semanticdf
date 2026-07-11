@@ -169,6 +169,13 @@ referencing that column (`sum(qty)`) will be pre-aggregated on BOTH sides of a
 `join_many`, producing an ambiguous-reference error. Ensure each measure references
 at least one column unique to its table (the standard star-schema case).
 
+**Dimensions** with the same name across joined tables also collide. If both tables
+have a dimension named `shared`, grouping by it after a join throws
+`[AMBIGUOUS_REFERENCE] Reference 'shared' is ambiguous` at execution time. This is
+Spark's error, not a helpful semantica message. **Workaround:** reference the joined
+table's copy via its prefixed name (e.g. `"right.shared"`), or alias the conflicting
+dimension to a unique name before joining.
+
 ### orderBy with dotted dimension names
 
 `orderBy("carriers.name")` is parsed by Spark as `catalog.table.column`, not a literal
