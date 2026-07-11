@@ -85,6 +85,9 @@ object Main {
     println(
       """semantica-tools — CLI utilities for the semantica semantic layer
         |
+        |Run with:
+        |  mvn exec:java -Dexec.mainClass=io.semantica.tools.Main -Dexec.args="..."
+        |
         |Subcommands:
         |  docsgen    --path <file-or-dir> [--out FILE]
         |              Read YAML model files and produce browsable HTML documentation.
@@ -94,8 +97,8 @@ object Main {
         |            Read a data file and infer a starter YAML model.
         |
         |Examples:
-        |  docsgen    --path models/ --out docs/index.html
-        |  introspect --path ./data/orders.csv --format csv --model orders
+        |  mvn exec:java -Dexec.args="docsgen --path models/ --out docs/index.html"
+        |  mvn exec:java -Dexec.args="introspect --path data/orders.csv --format csv --model orders"
         |""".stripMargin)
   }
 
@@ -117,7 +120,7 @@ object Main {
             optionArgs(kv(0)) = kv(1)
             i += 2
           case flag if flag.startsWith("--") =>
-            val key   = flag.drop(2)
+            val key   = flag  // store full "--path" so require("--path", ..) finds it
             val value = if (i + 1 < args.length && !args(i + 1).startsWith("--")) {
               i += 1; args(i)
             } else "true"

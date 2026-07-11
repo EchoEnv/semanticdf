@@ -93,5 +93,7 @@ class DocsGenSpec extends AnyFunSpec with Matchers {
       html must include("dim_only")
       html must include("d1")
     }
+
+
   }
 }
