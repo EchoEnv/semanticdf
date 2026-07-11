@@ -48,22 +48,22 @@ These solve known universal pain and don't require consumer validation.
 
 ### 1.2 Auto-generate YAML from a DataFrame
 
+**Status:** ✅ **SHIPPED** (commit 31dd61f)
+
 **Problem:** A new user has a parquet table and wants a semantic model. Today they must hand-write the YAML from scratch — listing every column, writing Spark SQL expressions, picking aggregation types. This is the #1 onboarding friction.
 
-**Solution:** A CLI tool: `semantica introspect <path> [--sample-size N]` reads a parquet/csv, infers:
+**Solution:** A CLI tool: `mvn exec:java -Dexec.mainClass=io.semantica.tools.Main -Dexec.args="introspect <path>"` reads a parquet/csv, infers:
 - Dimensions: all string/timestamp/date columns → dims, with `is_time_dimension` set on timestamp/date
 - Measures: numeric columns → base measures with `sum()`/`count()`/`avg()` suggestions
-- Metadata: column-name-based heuristics (`email` → pii, `id` → identifier, etc.)
+- Metadata: column-name-based heuristics (`email` → pii, `id` → identifier, `_at`/`_date` → time dimension)
 
 Emits a starter YAML file the user can edit.
 
-**Effort:** 4-5 person-days
-**Impact:** High — removes the biggest barrier to adoption for non-Scala users.
-
-**New files:**
-- `src/main/scala/io/semantica/tools/Introspect.scala` — the introspector
-- `src/main/scala/io/semantica/tools/Main.scala` — CLI entry point
-- `pom.xml` — add `exec-maven-plugin` config to make `mvn exec:java -Dexec.mainClass=io.semantica.tools.Main` work
+**What shipped:**
+- `Introspector.scala` — `Introspector` class with full heuristics: `fromFile()` reads any Spark format, `toYaml()` produces the YAML string, configurable `maxMeasures` (default 8) to avoid overwhelming users with wide tables
+- `Main.scala` — CLI with subcommands: `--path`, `--format`, `--model`, `--max-measures`, `--sample-size`, `--out`
+- `pom.xml` — `exec-maven-plugin` with JVM `--add-opens` flags for Java 17+
+- `IntrospectorSpec.scala` — 10 regression tests: string dims, numeric measures, entity dims (id/_id/_key), PII detection (email/phone/ssn), timestamp → time dimension, maxMeasures limiting, mixed-schema flights table, CSV fromFile, empty model name validation, flights demo output
 
 **Why T1:** Every new user hits this. Universal.
 
