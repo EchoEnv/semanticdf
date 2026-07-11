@@ -55,7 +55,7 @@ mvn install -DskipTests
 ### Step 2: run the pipeline
 ```bash
 cd examples/pipeline
-mvn scala:run -DmainClass=com.example.pipeline.Main
+mvn exec:java -Dexec.mainClass=com.example.pipeline.Main
 ```
 
 You'll see the 7 steps run in sequence:
@@ -66,6 +66,13 @@ You'll see the 7 steps run in sequence:
 5. WRITE — saves parquet partitioned by year
 6. CATALOG — registers as temp views
 7. SEMANTIC — runs YAML-defined queries against the parquet
+
+> **Tip:** generate browsable HTML docs from the YAML models:
+> ```bash
+> cd /path/to/semantica
+> mvn exec:java -Dexec.args="docsgen --path examples/pipeline/models/ --out docs/pipeline.html"
+> open docs/pipeline.html   # macOS; for Linux: xdg-open
+> ```
 
 ---
 

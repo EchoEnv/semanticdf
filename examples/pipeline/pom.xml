@@ -55,12 +55,29 @@
                     <execution>
                         <goals>
                             <goal>compile</goal>
-                            <goal>run</goal>
                         </goals>
                     </execution>
                 </executions>
                 <configuration>
                     <scalaVersion>${scala.version}</scalaVersion>
+                </configuration>
+            </plugin>
+
+            <!--
+              Run the pipeline with `mvn exec:java -Dexec.mainClass=com.example.pipeline.Main`.
+              Java-17 module-system flags are passed via `.mvn/jvm.config`,
+              which Maven reads at startup. exec-maven-plugin v3.5.0 runs
+              in-process and inherits those flags automatically.
+              Note: `mvn scala:run` is NOT used here. The scala-maven-plugin
+              leaks its compiler args (e.g. `-deprecation`) as program args.
+            -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <mainClass>com.example.pipeline.Main</mainClass>
+                    <classpathScope>compile</classpathScope>
                 </configuration>
             </plugin>
         </plugins>
