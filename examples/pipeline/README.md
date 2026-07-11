@@ -140,7 +140,7 @@ orders
 - **Parquet as the trusted layer** — columnar, typed, compressed, Spark-native
 - **Semantic layer on top** — analysts get clean YAML, not raw parquet columns
 
-## Querying the gold catalog
+## Querying the gold catalog (demo mode)
 
 After the pipeline runs, `output/_semantica_catalog/` contains every field of every model as a row. Anyone in the org can query it like any other table:
 
@@ -164,7 +164,78 @@ spark.read.parquet("output/_semantica_catalog")
   .show(false)
 ```
 
-In production you'd write this to a Delta/Iceberg table in your lake and surface it through your catalog (Unity Catalog, Glue, Hive).
+**This is a demo**, not enterprise-grade. See the next section for production patterns.
+
+---
+
+## Production-grade catalog patterns
+
+The demo uses `SaveMode.Overwrite` on a local parquet path. That works for showing the concept but fails enterprise requirements:
+
+| Requirement | Demo (what we have) | Production (what you need) |
+|---|---|---|
+| **Schema evolution** | Breaks when YAML changes | Delta Lake / Iceberg auto-handles |
+| **Time travel / history** | `Overwrite` destroys history | Delta `VERSION AS OF` / Iceberg snapshots |
+| **Concurrent writers** | One wins, one fails | Optimistic concurrency control |
+| **Atomicity** | Partial writes possible | Delta transactions (commit or rollback) |
+| **Access control** | Anyone with FS access | Unity Catalog / IAM / table ACLs |
+| **Lineage** | Just a `source_path` string | Unity Catalog column-level lineage |
+| **Git SHA tracking** | Missing | Add `git_sha` column from `git rev-parse HEAD` in CI |
+| **Notifications** | None | CDC events → Kafka → downstream subscribers |
+| **Audit trail** | `loaded_at` only | Full audit log (who/when/what changed) |
+
+### Recommended: Delta Lake + Unity Catalog
+
+For a real deployment, replace Step 8 with:
+
+```scala
+// Append-only Delta table, partitioned by date for time travel
+newSnapshot
+  .withColumn("git_sha", lit(gitSha))      // from CI: `git rev-parse HEAD`
+  .withColumn("snapshot_date", current_date())
+  .write
+  .format("delta")
+  .mode("append")
+  .partitionBy("snapshot_date")
+  .saveAsTable("main._semantica.catalog")
+
+// Register in Unity Catalog for IAM, audit, and discovery
+```
+
+Now your org can do:
+
+```sql
+-- Latest snapshot
+SELECT * FROM main._semantica.catalog
+WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM main._semantica.catalog)
+
+-- What changed since yesterday?
+SELECT * FROM main._semantica.catalog WHERE snapshot_date = current_date()
+EXCEPT
+SELECT * FROM main._semantica.catalog WHERE snapshot_date = current_date() - INTERVAL 1 DAY
+
+-- Time travel to last week's schema
+SELECT * FROM main._semantica.catalog TIMESTAMP AS OF '2024-03-15'
+
+-- Audit: who loaded which model when
+SELECT model_name, git_sha, loaded_at, source_path
+FROM main._semantica.catalog
+ORDER BY loaded_at DESC
+```
+
+Unity Catalog adds column-level lineage automatically (you can see which pipeline step produces each field) and enforces IAM so only authorized users can read the catalog.
+
+### For non-Databricks stacks
+
+| Catalog tool | Pattern |
+|---|---|
+| **AWS Glue / Hive Metastore** | `CREATE EXTERNAL TABLE` over parquet on S3/HDFS |
+| **Apache Polaris** | Iceberg REST catalog, open-standard |
+| **DataHub** (LinkedIn) | Push metadata via REST or Kafka emitter |
+| **Amundsen** (Lyft) | Push via metadata service API |
+| **Apache Atlas** | Push via Kafka notification |
+
+All of these work with semantica's `model.schema(spark)` output — it's just a DataFrame. The integration pattern is the same: write the DataFrame to your catalog backend, register it, and let your BI tools discover it.
 
 ---
 
@@ -174,10 +245,12 @@ For a real deployment:
 
 1. **Replace local parquet with Delta Lake or Apache Iceberg** — gives you ACID, time travel, schema evolution
 2. **Use a real catalog** — Unity Catalog, Hive Metastore, AWS Glue — instead of temp views
-3. **Version your raw data** — keep bronze immutable; rebuild silver when logic changes
-4. **Add data quality checks** — Great Expectations, Soda, or a simple custom validator
-5. **Monitor the pipeline** — track row counts, null rates, schema drift
-6. **Parameterize paths** — pass input/output paths as Spark job args, not hardcoded
+3. **Replace the Step 8 demo with Delta Lake write** — append-only, partitioned by date, with git_sha
+4. **Version your raw data** — keep bronze immutable; rebuild silver when logic changes
+5. **Add data quality checks** — Great Expectations, Soda, or a simple custom validator
+6. **Monitor the pipeline** — track row counts, null rates, schema drift
+7. **Parameterize paths** — pass input/output paths as Spark job args, not hardcoded
+8. **Wire to CI/CD** — Airflow DAG, Databricks workflow, GitHub Actions
 
 ---
 

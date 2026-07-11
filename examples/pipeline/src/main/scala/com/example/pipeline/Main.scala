@@ -163,13 +163,19 @@ object Main {
       schema.show(50, false)
 
       println("\n" + "=" * 70)
-      println("STEP 8: PERSIST schema as catalog table (the gold layer metadata)")
+      println("STEP 8: PERSIST schema as catalog table (gold layer metadata)")
       println("=" * 70)
 
       // The YAML model is the gold layer's *definition*. Persisting the schema
       // as a catalog table makes it *queryable* — anyone in the org can ask
       // "what models exist, what fields do they have, who owns them?" without
-      // parsing YAML files. In production, write to Delta/Iceberg for ACID.
+      // parsing YAML files.
+      //
+      // ⚠ DEMO-ONLY CODE. For production, replace with:
+      //   - Delta Lake: .format("delta").mode("append").partitionBy("snapshot_date")
+      //   - Git SHA tracking: .withColumn("git_sha", lit(getCurrentSha()))
+      //   - Catalog registration: saveAsTable("main._semantica.catalog")
+      // See README → "Production-grade catalog patterns" for the full pattern.
       val catalogPath = "output/_semantica_catalog"
       schema
         .withColumn("loaded_at", current_timestamp())
