@@ -204,6 +204,31 @@ mvn package -q
 spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.jar
 ```
 
+## CLI Tools
+
+Two tools live in `src/main/scala/io/semantica/tools/`:
+
+### docsgen — YAML model → browsable HTML
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semantica.tools.Main \
+  -Dexec.args="docsgen --path examples/starter/models/ --out docs/index.html"
+# Open docs/index.html in a browser
+```
+
+Reads one YAML file or a directory of `.yml` files, emits a self-contained HTML page with sidebar nav, per-model cards, dimension/measure/join tables, and time/entity/pii badges. No external dependencies.
+
+### introspect — DataFrame → YAML model starter
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semantica.tools.Main \
+  -Dexec.args="introspect --path data/orders.csv --format csv --model orders --out models/orders.yml"
+```
+
+Reads a data file via Spark, infers dimensions (StringType → dim, NumericType → sum/avg, TimestampType → time dimension) and measures, and emits a starter YAML model. Edit the output to refine types, add descriptions, and customise expressions.
+
 ## Cross-version compatibility
 
 Verified green on all three lines (76 tests each, Phase D + integration + YAML loader):

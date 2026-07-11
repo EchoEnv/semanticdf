@@ -100,7 +100,7 @@ val docsGen = new DocsGen()
 docsGen.write("docs/index.html", docsGen.fromFile("models/"))
 ```
 
-Output: sidebar nav (all models), per-model cards with dimension/measure/join tables, time/entity/pii badges, embedded CSS. Works from tests; CLI wiring deferred (suffers `-deprecation` flag leak from scala-maven-plugin — filed separately).
+Output: sidebar nav (all models), per-model cards with dimension/measure/join tables, time/entity/pii badges, embedded CSS. CLI: `mvn exec:java -Dexec.mainClass=io.semantica.tools.Main -Dexec.args="docsgen --path models/"`.
 
 ---
 
