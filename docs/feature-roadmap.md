@@ -71,17 +71,21 @@ Emits a starter YAML file the user can edit.
 
 ### 1.3 Better error messages with "did you mean"
 
+**Status:** ✅ **SHIPPED** (commit bbd766a)
+
 **Problem:** Typo in a measure name: `aggregate("total_revneue")` → throws `IllegalArgumentException: Unknown measure 'total_revneue'`. The user has to scroll through the YAML to find the correct name.
 
-**Solution:** On any "unknown X" error, compute Levenshtein distance to all known Xs. If closest match is within edit-distance 3, suggest it: `Unknown measure 'total_revneue'. Did you mean 'total_revenue'?`
+**What shipped:**
+- Extracted `closestMatch` (Levenshtein, threshold ≤ 3) to `package.scala` — shared across all error sites
+- `SemanticOp.scala`: `"Unknown measure '$n'."` → `"Unknown measure '$n'. Did you mean: '$c'?"`
+- `SemanticTable.scala`: `"atTimeGrain: dimension '$dimName' not found"` → adds "Did you mean" suggestion
+- `Scope.scala`: the pre-existing calc-layer `UnknownFieldError` already had "Did you mean" via the shared `closestMatch`
+- **Bug fix (incidental):** Measures with column typos (e.g. `t("flight_cont")`) were misclassified as base measures. Now caught in Pass 1 and retried via `MeasureScope` in Pass 2, surfacing the suggestion correctly
+
+**Tests:** 4 new tests in `HardeningSpec.scala` (unknown measure suggestion, close-but-wrong names, nothing-close guard, atTimeGrain dimension suggestion). Phase 1b pre-existing calc-typo test now passes. **121/121 total.**
 
 **Effort:** 2-3 person-days
 **Impact:** Medium — every error path benefits.
-
-**Files to change:**
-- `src/main/scala/io/semantica/SemanticOp.scala` — `UnknownFieldError` and similar
-- `src/main/scala/io/semantica/YamlLoader.scala` — `Unknown measure/dimension` paths
-- Add `DidYouMean` helper class with Levenshtein distance
 
 **Why T1:** Universal — every error message improves. Cheap.
 
