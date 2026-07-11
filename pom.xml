@@ -108,6 +108,30 @@
       </plugin>
 
       <plugin>
+        <groupId>org.codehaus.mojo</groupId>
+        <artifactId>exec-maven-plugin</artifactId>
+        <version>3.5.0</version>
+        <configuration>
+          <mainClass>io.semantica.tools.Main</mainClass>
+          <additionalJvmElements>
+            <jvmElement>--add-opens=java.base/java.lang=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.lang.invoke=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.lang.reflect=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.io=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.net=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.nio=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.util=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.util.concurrent=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/sun.nio.cs=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/sun.security.action=ALL-UNNAMED</jvmElement>
+            <jvmElement>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</jvmElement>
+          </additionalJvmElements>
+        </configuration>
+      </plugin>
+
+      <plugin>
         <groupId>org.scalatest</groupId>
         <artifactId>scalatest-maven-plugin</artifactId>
         <version>${scalatest.maven.plugin.version}</version>
