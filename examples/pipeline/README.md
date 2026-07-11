@@ -134,11 +134,96 @@ orders
 
 - **Bronze/silver/gold layering** — each layer has a clear contract and audience
 - **Gold has two parts** — the YAML model is the *definition*; the catalog table (`_semantica_catalog/`) is the *queryable metadata*. Both live alongside the data.
+- **Gold data vs gold metadata** — see the next section for the distinction
 - **Idempotent ETL** — re-running produces the same output (parquet overwrite)
 - **Schema validation** — drop nulls, dedupe, cast types — the basics of any pipeline
 - **Partitioning** — `partitionBy("order_year")` for query pruning
 - **Parquet as the trusted layer** — columnar, typed, compressed, Spark-native
 - **Semantic layer on top** — analysts get clean YAML, not raw parquet columns
+
+## Gold data vs gold metadata
+
+This template produces **silver data + gold metadata**, not **gold data**. That distinction matters:
+
+| Layer | What | Example |
+|---|---|---|
+| **Silver** | Cleaned, validated, normalized fact data | `orders_clean.parquet` (33 rows, deduped, typed) |
+| **Gold metadata** | Catalog of what models exist | `_semantica_catalog.parquet` (15 rows: every field, owner, description) |
+| **Gold data** | Pre-aggregated tables for hot queries | `daily_revenue_by_country.parquet` (small, dashboard-ready) |
+
+**This template has silver + gold metadata, but NOT gold data.** For most analytical workloads, the semantic layer compiles silver into the right shape on-the-fly — no materialization needed. But for production hot paths:
+
+- **Dashboards refreshing every minute** → pre-aggregate daily/hourly
+- **Same query running 1000x/day** → cache or materialize the result
+- **Sub-second latency required** → pre-compute and point the dashboard at the materialized table
+
+### When to add gold data materialization
+
+Add a materialization step when you observe:
+
+```sql
+-- The same query runs thousands of times per day
+SELECT customer_id, sum(amount)
+FROM orders
+WHERE date >= current_date - INTERVAL '30 days'
+GROUP BY 1
+```
+
+Materialize it as `gold.daily_revenue_by_customer`, refresh hourly. The dashboard reads the materialized table directly — no semantic compilation, no silver scan.
+
+### How to add it to the pipeline
+
+```scala
+// Step 9 (optional): materialize hot queries
+val dailyByCountry = orders
+  .groupBy("country", "order_date")
+  .aggregate("total_revenue", "order_count")
+  .toDataFrame(spark)
+
+dailyByCountry
+  .withColumnRenamed("order_date", "snapshot_date")
+  .write
+  .format("delta")                       // ACID + time travel
+  .mode(SaveMode.Overwrite)
+  .partitionBy("snapshot_date")
+  .saveAsTable("gold.daily_revenue_by_country")
+```
+
+Point your dashboard at `gold.daily_revenue_by_country` instead of running the semantic query each refresh.
+
+### Materialization trade-offs
+
+| Pro | Con |
+|---|---|
+| Sub-second dashboard latency | Storage cost (one table per materialized query) |
+| Decouples dashboard from source data | Refresh lag (data is N hours old) |
+| Reduces load on silver | Schema changes require rebuild |
+| Easy to backfill | Hard to choose *which* queries to materialize |
+
+**The semantic layer + on-demand compilation is the default.** Materialization is the optimization for hot paths. Don't materialize everything — that's a data warehouse, and warehouses are expensive.
+
+### A materialization spec (future work)
+
+This template doesn't implement materialization. The design would be:
+
+```yaml
+# models/orders.yml (extended)
+materializations:
+  - name: daily_revenue_by_country
+    grain: [country, order_date]
+    measures: [total_revenue, order_count]
+    refresh: daily
+    destination: gold.daily_revenue_by_country
+  - name: monthly_revenue_by_product
+    grain: [product, month]
+    measures: [total_revenue, total_units]
+    refresh: hourly
+    destination: gold.monthly_revenue_by_product
+```
+
+The pipeline reads the materialization specs, generates the aggregated tables, and writes them. The semantic model stays available for ad-hoc queries; the materialized tables serve dashboards.
+
+This is a future enhancement, gated on real consumer demand. See `docs/first-consumer-plan.md` for when to add it.
 
 ## Querying the gold catalog (demo mode)
 
