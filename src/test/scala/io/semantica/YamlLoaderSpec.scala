@@ -537,6 +537,50 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     totalPax.metadata("aggregation") shouldEqual "sum"
   }
 
+  test("YAML: calc measures also carry metadata (not silently dropped)") {
+    // Regression: buildCalcMeasure used to discard metadata, breaking the
+    // schema introspection for calculated_measures.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total: "sum(passengers)"
+        |  calculated_measures:
+        |    pct:
+        |      expr: "total / all(total)"
+        |      description: "Percent of total"
+        |      metadata:
+        |        owner: analytics-team
+        |        unit: ratio
+        |""".stripMargin)
+
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    val pct = flights.measures("pct")
+    pct.description shouldEqual Some("Percent of total")
+    pct.metadata("owner") shouldEqual "analytics-team"
+    pct.metadata("unit") shouldEqual "ratio"
+  }
+
+  test("YAML: metadata values may be lists (auto-joined to comma-string)") {
+    // Lists in metadata are coerced to comma-separated strings so they fit in
+    // Map[String, String]. This avoids ClassCastException at load time.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier:
+        |      expr: carrier
+        |      metadata:
+        |        tags: [airline, identifier]
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    flights.dimensions("carrier").metadata("tags") shouldEqual "airline,identifier"
+  }
+
   // -------------------------------------------------------------------------
   // Model introspection — schema(spark)  (the analogue of df.schema)
   // -------------------------------------------------------------------------
@@ -734,5 +778,58 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
       YamlLoader.loadDir(dir.getAbsolutePath, flightsTables)
     }
     assert(ex.getMessage.contains("no .yml files") || ex.getMessage.contains("no .yml"))
+  }
+
+  test("loadDir: cross-file joins work (model in file A references model in file B)") {
+    // This is the real-world pattern: each YAML file defines one logical model,
+    // and joins across models span files. Without the two-pass build, the join
+    // would fail because the lookup model isn't yet defined when flights.yml is
+    // parsed.
+    val dir = java.nio.file.Files.createTempDirectory("semantica-loadDir-crossjoin").toFile
+    dir.deleteOnExit()
+
+    def writeFile(name: String, content: String): Unit = {
+      val f = new java.io.File(dir, name)
+      f.deleteOnExit()
+      new java.io.PrintWriter(f) { write(content); close() }
+    }
+
+    writeFile("flights.yml",
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total: "sum(passengers)"
+        |  joins:
+        |    carriers:
+        |      model: carriers
+        |      type: one
+        |      left_on: carrier
+        |      right_on: carrier
+        |""".stripMargin)
+
+    writeFile("carriers.yml",
+      """
+        |carriers:
+        |  table: carriers_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |    name: name
+        |""".stripMargin)
+
+    val models = YamlLoader.loadDir(dir.getAbsolutePath, flightsTables)
+    assert(models.size == 2, s"Expected 2 models, got ${models.size}")
+    assert(models.contains("flights"))
+    assert(models.contains("carriers"))
+
+    // The cross-file join should compile and run.
+    val rows = models("flights")
+      .groupBy("carrier", "name")
+      .aggregate("total")
+      .toDataFrame(spark)
+      .collect()
+    assert(rows.nonEmpty, "Cross-file join should produce rows")
   }
 }

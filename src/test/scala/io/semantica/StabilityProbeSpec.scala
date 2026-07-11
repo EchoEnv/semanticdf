@@ -147,4 +147,33 @@ class StabilityProbeSpec extends AnyFunSuite with SparkSessionFixture with Fligh
     assert(rows.length == 2, s"Join should succeed, got ${rows.length} rows")
     info(s"Join-key collision case produced ${rows.length} rows")
   }
+
+  test("EDGE: where().groupBy().aggregate() on a JOINED model works") {
+    // Previously failed: SemanticAggregateOp.resolveModel didn't walk through
+    // SemanticFilterOp before looking for SemanticJoinOp, so a filter wrapping
+    // a join would throw IllegalStateException. This regression test ensures
+    // the standard query pattern works end-to-end.
+    import Predicate._
+    val session = spark
+    import session.implicits._
+    val left = Seq(("AA", "JFK", 100), ("AA", "LAX", 200), ("BB", "SFO", 50))
+      .toDF("carrier", "origin", "val")
+    val right = Seq(("AA", "American"), ("BB", "BigBrand"))
+      .toDF("carrier", "name")
+    val leftModel = toSemanticTable(left, name = Some("left"))
+      .withDimensions(Dimension("carrier", t => t("carrier")), Dimension("origin", t => t("origin")))
+      .withMeasures(Measure("val", t => org.apache.spark.sql.functions.sum(t("val"))))
+    val rightModel = toSemanticTable(right, name = Some("right"))
+      .withDimensions(Dimension("carrier", t => t("carrier")), Dimension("name", t => t("name")))
+    val joined = leftModel.join_one(rightModel, (l, r) => l("carrier") === r("carrier"))
+
+    val rows = joined
+      .where("carrier" === "AA")
+      .groupBy("origin")
+      .aggregate("val")
+      .toDataFrame(spark)
+      .collect()
+    assert(rows.nonEmpty, "Filter + groupBy + aggregate on joined model should produce rows")
+    info(s"Filter+groupBy+agg on joined model: ${rows.length} rows")
+  }
 }

@@ -537,17 +537,25 @@ final case class SemanticAggregateOp(
     * Single-table: creates a MergedSemanticModel from the leaf SemanticTableOp.
     * Joined: uses the SemanticJoinOp's pre-built merged model, which raises an error
     * on bare-name collisions (callers use explicit table-prefixed names). */
-  private def resolveModel(src: SemanticOp): MergedSemanticModel = src match {
-    case join: SemanticJoinOp =>
-      join.mergedModel
-
-    case _ =>
-      val root = SemanticOp.rootModel(src).getOrElse(
+  private def resolveModel(src: SemanticOp): MergedSemanticModel = {
+    // Walk through transparent wrappers (filter/orderBy/limit) before checking
+    // for join or single-table roots. Without this, `where(...).groupBy().aggregate()`
+    // on a joined model throws "no root SemanticTableOp or SemanticJoinOp".
+    def unwrap(op: SemanticOp): SemanticOp = op match {
+      case SemanticFilterOp(s, _)    => unwrap(s)
+      case SemanticOrderByOp(s, _)   => unwrap(s)
+      case SemanticLimitOp(s, _)     => unwrap(s)
+      case other                     => other
+    }
+    unwrap(src) match {
+      case join: SemanticJoinOp =>
+        join.mergedModel
+      case root: SemanticTableOp =>
+        MergedSemanticModel(dimensions = root.dimensions, measures = root.measures)
+      case other =>
         throw new IllegalStateException(
-          "SemanticAggregateOp has no root SemanticTableOp or SemanticJoinOp"
-        )
-      )
-      MergedSemanticModel(dimensions = root.dimensions, measures = root.measures)
+          s"SemanticAggregateOp has no root SemanticTableOp or SemanticJoinOp (got ${other.getClass.getSimpleName})")
+    }
   }
 
   // --- Transitive closure (Phase 2a) ---

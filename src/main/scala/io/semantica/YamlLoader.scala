@@ -147,14 +147,15 @@ object YamlLoader {
       throw new IllegalArgumentException(
         s"Directory '$path' contains no .yml files")
 
-    val allModels = files.map { f =>
-      try load(f.getAbsolutePath, tables)
-      catch { case e: Exception =>
-        throw new IllegalArgumentException(s"Failed to load models from '${f.getName}': ${e.getMessage}", e)
-      }
-    }
-
-    mergeModelMaps(allModels: _*)
+    // Parse all YAML files into a merged config, then build all models in a single
+    // two-pass (pass 1: dims/measures for every model, pass 2: joins across all
+    // models). Calling load() per-file would fail because a join in file A may
+    // reference a model defined in file B — we need ALL models visible to joins.
+    val mergedConfig = mergeConfigs(files.toSeq)
+    val models = buildModels(mergedConfig, name =>
+      tables.getOrElse(name, throw tableNotFound(name, tables.keys)))
+    checkNoDuplicateModels(models, files.length)
+    models
   }
 
   /** Load all semantic models from every `*.yml` file in a directory, resolving
@@ -179,36 +180,38 @@ object YamlLoader {
       throw new IllegalArgumentException(
         s"Directory '$path' contains no .yml files")
 
-    val allModels = files.map { f =>
-      try load(f.getAbsolutePath, spark)
+    val mergedConfig = mergeConfigs(files.toSeq)
+    val models = buildModels(mergedConfig, name => spark.table(name))
+    checkNoDuplicateModels(models, files.length)
+    models
+  }
+
+  /** Parse each YAML file, merge into a single config map. Fails fast if any
+    * file fails to parse, with the offending file named in the error message. */
+  private def mergeConfigs(files: Seq[java.io.File]): Map[String, Map[String, Any]] = {
+    files.foldLeft(Map.empty[String, Map[String, Any]]) { (acc, f) =>
+      val cfg = try parseYaml(f.getAbsolutePath)
       catch { case e: Exception =>
-        throw new IllegalArgumentException(s"Failed to load models from '${f.getName}': ${e.getMessage}", e)
+        throw new IllegalArgumentException(s"Failed to parse '${f.getName}': ${e.getMessage}", e)
       }
+      if ((acc.keySet intersect cfg.keySet).nonEmpty)
+        throw new IllegalArgumentException(
+          s"Duplicate model names across files: " +
+            (acc.keySet intersect cfg.keySet).toSeq.sorted.mkString(", "))
+      acc ++ cfg
     }
-
-    mergeModelMaps(allModels: _*)
   }
 
-  /** Merge multiple model maps, failing loudly on duplicate model names. */
-  private def mergeModelMaps(
-      maps: Map[String, SemanticTable]*
-  ): Map[String, SemanticTable] = {
-    val all = maps.flatMap(_.toSeq)
-    val dups = all.groupBy(_._1).filter(_._2.size > 1)
-    if (dups.nonEmpty) {
-      val dupNames = dups.keys.toSeq.sorted
-      val sources = dupNames.map { name =>
-        val files = maps.filter(_.contains(name)).map {
-          case m if m == maps.head => "..."
-          case _ => "<another file>"
-        }.distinct.mkString(" and ")
-        s"  - '$name' (defined in $files)"
-      }.mkString("\n")
-      throw new IllegalArgumentException(
-        s"Duplicate model names across files:\n$sources")
-    }
-    all.toMap
+  /** Check that the number of loaded models matches what was expected from the file count. */
+  private def checkNoDuplicateModels(
+      models: Map[String, SemanticTable], fileCount: Int): Unit = {
+    // Duplicates are already caught by mergeConfigs; this is a hook in case we
+    // ever loosen that check (e.g. for overrides).
+    if (models.isEmpty && fileCount > 0)
+      throw new IllegalArgumentException("Directory contained YAML files but no models were built.")
   }
+
+  /** Sanity check on the final map (called from buildModels). */
 
   // -------------------------------------------------------------------------
   // Parsing
@@ -240,6 +243,36 @@ object YamlLoader {
     case other =>
       throw new IllegalArgumentException(
         s"Expected a YAML mapping but got ${other.getClass.getSimpleName}: $other")
+  }
+
+  /** Safely extract metadata from a YAML `metadata:` block.
+    *
+    * YAML metadata values can be strings, lists, numbers, or nested maps. We coerce
+    * all values to strings for the in-memory `Map[String, String]` representation:
+    *   - String → as-is
+    *   - Seq/List → comma-joined
+    *   - Map/other → .toString
+    *
+    * The previous implementation did an unsafe `_.asInstanceOf[Map[String, String]]`
+    * which crashed at runtime when a value was a YAML list (e.g. `tags: [a, b]`).
+    * This helper makes that safe.
+    */
+  private def metadataFromYaml(raw: Option[Any]): Map[String, String] = raw match {
+    case None => Map.empty
+    case Some(m: Map[_, _]) =>
+      m.asInstanceOf[Map[String, Any]].map { case (k, v) =>
+        val coerced = v match {
+          case s: String      => s
+          case xs: Seq[_]     => xs.map(_.toString).mkString(",")
+          case xs: java.util.List[_] =>
+            xs.asScala.map(_.toString).mkString(",")
+          case other          => other.toString
+        }
+        k.toString -> coerced
+      }
+    case Some(other) =>
+      throw new IllegalArgumentException(
+        s"metadata: expected a YAML mapping, got ${other.getClass.getSimpleName}: $other")
   }
 
   /** Convert nested java.util.Map / java.util.List to Scala equivalents, leaving
@@ -332,9 +365,7 @@ object YamlLoader {
     */
   private def buildDimension(name: String, cfg: Any): Dimension = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "dimension", name)
-    val metadata = extra.get("metadata").map(_.asInstanceOf[Map[String, String]].map { case (k, v) =>
-      k -> v.toString
-    }).getOrElse(Map.empty[String, String])
+    val metadata = metadataFromYaml(extra.get("metadata"))
     val isTimeDim = extra.getOrElse("is_time_dimension", false).asInstanceOf[Boolean]
     val isEntity = extra.getOrElse("is_entity", false).asInstanceOf[Boolean]
     val smallestGrain = extra.get("smallest_time_grain").map(_.toString)
@@ -367,9 +398,7 @@ object YamlLoader {
     * Probing column refs through the scope makes the resolvability test accurate. */
   private def buildBaseMeasure(name: String, cfg: Any): Measure = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "measure", name)
-    val metadata = extra.get("metadata").map(_.asInstanceOf[Map[String, String]].map { case (k, v) =>
-      k -> v.toString
-    }).getOrElse(Map.empty[String, String])
+    val metadata = metadataFromYaml(extra.get("metadata"))
     val colRefs = extractColumnRefs(exprStr)
     Measure(name, t => {
       colRefs.foreach(c => t(c))  // throws UnknownFieldError if a column is missing
@@ -406,8 +435,9 @@ object YamlLoader {
     * SemanticScope — this is what makes the framework's calc classification work.
     * `all(name)` references become `t.all(name)` for percent-of-total. */
   private def buildCalcMeasure(name: String, cfg: Any): Measure = {
-    val (exprStr, description, _) = parseMetricConfig(cfg, "calculated measure", name)
-    Measure(name, t => CalcExpr(t, exprStr), description)
+    val (exprStr, description, extra) = parseMetricConfig(cfg, "calculated measure", name)
+    val metadata = metadataFromYaml(extra.get("metadata"))
+    Measure(name, t => CalcExpr(t, exprStr), description, metadata)
   }
 
   // -------------------------------------------------------------------------

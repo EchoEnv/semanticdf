@@ -1,0 +1,25 @@
+# semantica model: carriers
+#
+# Simple lookup table — joined to flights via the 'carriers' alias.
+# Schema: carrier, name, hub, year_founded
+
+carriers:
+  table: carriers_csv
+  description: "Airline carrier reference data (lookup)"
+
+  dimensions:
+    carrier:
+      expr: carrier
+      description: "Airline carrier code (IATA)"
+      metadata:
+        owner: data-platform-team
+    name:
+      expr: name
+      description: "Full airline name"
+      metadata:
+        owner: data-platform-team
+    hub:
+      expr: hub
+      description: "Primary hub airport"
+      metadata:
+        owner: data-platform-team
