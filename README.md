@@ -223,6 +223,7 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 - **[`docs/known-limitations.md`](docs/known-limitations.md)** — what doesn't work in v0.1 (streaming, metastore registration, multi-hop joins, etc.). Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
 - **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
+- **[`docs/feature-roadmap.md`](docs/feature-roadmap.md)** — T1-T4 prioritized list of features and performance improvements. T1 ships next; T2-T4 gated on real consumer demand.
 - **[`docs/adr/`](docs/adr/)** — recorded decisions:
   - [0001](docs/adr/0001-adopt-karpathy-guidelines-not-app-design.md) — karpathy guidelines adopted (think-before-coding, simplicity-first, surgical changes, goal-driven execution); app-design plugin/portal rejected.
   - [0002](docs/adr/0002-streaming-batch-first-streaming-shaped.md) — batch-first, streaming-shaped (DSL/source-agnostic op tree; batch terminal now, streaming terminal deferred).
