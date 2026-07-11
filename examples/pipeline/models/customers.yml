@@ -1,0 +1,41 @@
+# semantica model: customers
+#
+# Customer master data (silver layer from raw/customers_raw.csv).
+# Joined to orders via the orders.yml `joins:` block.
+
+customers:
+  table: customers_csv
+  description: "Cleaned customer reference data"
+
+  dimensions:
+    customer_id:
+      expr: customer_id
+      description: "Unique customer identifier (join key from orders)"
+      metadata:
+        owner: data-platform-team
+        tags: [identifier]
+    name:
+      expr: name
+      description: "Customer full name"
+      metadata:
+        owner: data-platform-team
+        tags: [pii]
+    city:
+      expr: city
+      description: "Customer city"
+      metadata:
+        owner: data-platform-team
+    country:
+      expr: country
+      description: "Customer country (ISO code, 2-letter)"
+      metadata:
+        owner: data-platform-team
+
+  measures:
+    customer_count:
+      expr: "count(1)"
+      description: "Number of customers"
+      metadata:
+        owner: analytics-team
+        unit: count
+        aggregation: count

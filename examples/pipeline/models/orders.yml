@@ -1,0 +1,97 @@
+# semantica model: orders
+#
+# This model points to the parquet-backed temp view 'orders' created by
+# the pipeline. In a real setup you'd replace 'orders_csv' with a Spark
+# managed table or a Delta/Iceberg table.
+#
+# Schema (after the pipeline):
+#   order_id, customer_id, product, qty, price_usd, total_amount,
+#   order_date, order_year, status
+#
+# Joined dimensions from customers (via the join below):
+#   name (exposed as 'customer_name'), city, country
+
+orders:
+  table: orders_csv
+  description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
+
+  dimensions:
+    order_id:
+      expr: order_id
+      description: "Unique order identifier"
+      metadata:
+        owner: data-platform-team
+        tags: [identifier]
+    customer_id:
+      expr: customer_id
+      description: "Customer who placed the order (join key to customers)"
+      metadata:
+        owner: data-platform-team
+        tags: [identifier]
+    product:
+      expr: product
+      description: "Product name"
+      metadata:
+        owner: data-platform-team
+    status:
+      expr: status
+      description: "Order status (shipped, pending, cancelled, returned)"
+      metadata:
+        owner: data-platform-team
+    order_date:
+      expr: order_date
+      description: "Date the order was placed"
+      is_time_dimension: true
+      smallest_time_grain: day
+      metadata:
+        owner: data-platform-team
+
+  # NOTE: city, country, and customer_name come from the joined customers
+  # table. They're queryable in this model after the join runs (they appear in
+  # the merged SemanticJoinOp.mergedModel). Don't redeclare them here — that
+  # would trigger the dimension-collision check (the check is there to catch
+  # genuine ambiguity, not to permit duplication).
+  #
+
+  measures:
+    total_revenue:
+      expr: "sum(total_amount)"
+      description: "Total revenue from this group"
+      metadata:
+        owner: finance-team
+        unit: USD
+        aggregation: sum
+    order_count:
+      expr: "count(1)"
+      description: "Number of orders in this group"
+      metadata:
+        owner: analytics-team
+        unit: count
+        aggregation: count
+    total_units:
+      expr: "sum(qty)"
+      description: "Total units sold in this group"
+      metadata:
+        owner: analytics-team
+        unit: count
+        aggregation: sum
+    avg_order_value:
+      expr: "total_revenue / order_count"
+      description: "Average order value in USD"
+      metadata:
+        owner: finance-team
+        unit: USD
+    pct_of_total_revenue:
+      expr: "total_revenue / all(total_revenue)"
+      description: "Fraction of all revenue from this group"
+      metadata:
+        owner: finance-team
+        unit: ratio
+        format: percent
+
+  joins:
+    customers:
+      model: customers
+      type: one
+      left_on: customer_id
+      right_on: customer_id
