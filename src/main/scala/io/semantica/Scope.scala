@@ -40,34 +40,9 @@ object SemanticScope {
     }
     s"'$name' is not a known column or measure.$suggestion"
   }
+  import io.semantica.closestMatch
 
-  private def closestMatch(name: String, candidates: Iterable[String]): Option[String] =
-    if (name.isEmpty || candidates.isEmpty) None
-    else candidates.minByOption(c => editDistance(name.toLowerCase, c.toLowerCase))
-
-  private def editDistance(a: String, b: String): Int = {
-    val n = a.length
-    val m = b.length
-    if (n == 0) return m
-    if (m == 0) return n
-    val prev = Array.tabulate(m + 1)(identity)
-    val curr = new Array[Int](m + 1)
-    var i = 1
-    while (i <= n) {
-      curr(0) = i
-      var j = 1
-      while (j <= m) {
-        val cost = if (a(i - 1) == b(j - 1)) 0 else 1
-        curr(j) = math.min(math.min(curr(j - 1) + 1, prev(j) + 1), prev(j - 1) + cost)
-        j += 1
-      }
-      i += 1
-      prev.indices.foreach(k => prev(k) = curr(k))
-    }
-    prev(m)
-  }
 }
-
 /** Scope over a base DataFrame. `apply(name)` returns the base column when present.
   *
   * Used for plain base measures and for dimension expressions.

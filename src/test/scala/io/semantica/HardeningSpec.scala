@@ -175,4 +175,72 @@ class HardeningSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
     val revenueType = rows("AA").schema("revenue").dataType.toString
     revenueType should include ("DecimalType(28,4)")
   }
+
+  // ---- "Did you mean" suggestions (Tier 1.3) ----------------------------------
+
+  test("Phase A: Unknown measure error suggests closest match") {
+    val d = df("AA" -> 100, "UA" -> 200)
+    val st = toSemanticTable(d, name = Some("f")).withDimensions(
+      Dimension("carrier", t => t("carrier"))
+    ).withMeasures(
+      Measure("total_revenue",   t => sum(t("distance"))),
+      Measure("avg_passengers",  t => sum(t("distance"))),
+      Measure("total_count",     t => count(t("distance"))),
+    )
+
+    val ex = the[IllegalArgumentException] thrownBy st.groupBy("carrier").aggregate("total_revneue").execute(spark)
+    ex.getMessage should include("Unknown measure 'total_revneue'")
+    ex.getMessage should include("Did you mean: 'total_revenue'")
+  }
+
+  test("Phase A: Unknown measure suggestion works for close-but-wrong names") {
+    val d = df("AA" -> 100)
+    val st = toSemanticTable(d, name = Some("f")).withDimensions(
+      Dimension("carrier", t => t("carrier"))
+    ).withMeasures(
+      Measure("total_count",  t => count(t("distance"))),
+      Measure("avg_passengers", t => sum(t("distance"))),
+    )
+
+    // "totla" → "total_count" (edit distance 2: insert 'a', swap 'l')
+    val ex = the[IllegalArgumentException] thrownBy st.groupBy("carrier").aggregate("totla_count").execute(spark)
+    ex.getMessage should include("totla_count")
+    ex.getMessage should include("Did you mean: 'total_count'")
+  }
+
+  test("Phase A: Unknown measure shows no suggestion when nothing is close") {
+    val d = df("AA" -> 100)
+    val st = toSemanticTable(d, name = Some("f")).withDimensions(
+      Dimension("carrier", t => t("carrier"))
+    ).withMeasures(
+      Measure("total_revenue", t => sum(t("distance"))),
+    )
+
+    val ex = the[IllegalArgumentException] thrownBy st.groupBy("carrier").aggregate("xyz_measure").execute(spark)
+    ex.getMessage should include("xyz_measure")
+    // No suggestion when name is completely unrelated
+    ex.getMessage should not include("Did you mean")
+  }
+
+  test("Phase A: atTimeGrain: unknown dimension suggests closest match") {
+    val d = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(
+        Row("AA", java.sql.Timestamp.valueOf("2024-01-01 08:00:00")),
+      )),
+      new StructType()
+        .add("carrier", "string")
+        .add("flight_date", org.apache.spark.sql.types.TimestampType),
+    )
+    val st = toSemanticTable(d, name = Some("f")).withDimensions(
+      Dimension("carrier",    t => t("carrier")),
+      Dimension.time("flight_date", t => t("flight_date"), smallestTimeGrain = Some("day")),
+    ).withMeasures(
+      Measure("total_revenue", t => sum(t("distance"))),
+    )
+
+    // "fligt_date" → "flight_date" (edit distance 1: missing 'h')
+    val ex = the[IllegalArgumentException] thrownBy st.atTimeGrain("fligt_date", "month")
+    ex.getMessage should include("fligt_date")
+    ex.getMessage should include("Did you mean: 'flight_date'")
+  }
 }

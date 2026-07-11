@@ -421,7 +421,7 @@ final case class SemanticAggregateOp(
     // --- Resolve requested measures ---
     val allMeasures = measuresToCompute.map { n =>
       model.measures.getOrElse(n,
-        throw new IllegalArgumentException(s"Unknown measure '$n'."))
+        throw new IllegalArgumentException(s"Unknown measure '$n'.${closestMatch(n, model.measures.keys).map(c => s" Did you mean: '$c'?").getOrElse("")}"))
     }
 
     if (allMeasures.isEmpty)
@@ -469,12 +469,34 @@ final case class SemanticAggregateOp(
     // in `base` (from preAggregateAtGrain). Re-aggregating them requires summing the
     // existing column, NOT re-evaluating the original source-column expression (which
     // would fail because source columns like `qty` are gone post-join).
-    val aggCols: Seq[Column] = baseMeasures.map { m =>
-      if (base.columns.contains(m.name))
-        sum(col(m.name)).as(m.name)   // pre-aggregated: re-sum at the new grain
-      else
-        m.expr(baseScope).as(m.name)  // fresh aggregate against source columns
+    // Some measures that look base may fail in Pass 1 because they reference a column
+    // that exists in the aggregated result but not in the base scope (e.g. t("flight_cont")
+    // in a calc measure — the column is resolved as a measure in ClassificationScope but
+    // as a missing column in BaseScope). Catch the error; if the failing name is a typo
+    // (edit distance ≤ 3 to a base column), move to calcMeasuresFixed so Pass 2's
+    // MeasureScope surfaces a "Did you mean?" error with the full column set.
+    val (aggColsWorked, calcFromBaseFailure) = {
+      val ok  = Seq.newBuilder[Column]
+      val bad = Seq.newBuilder[Measure]
+      baseMeasures.foreach { m =>
+        if (base.columns.contains(m.name)) {
+          ok += sum(col(m.name)).as(m.name)
+        } else {
+          try { ok += m.expr(baseScope).as(m.name) }
+          catch { case e: SemanticScope.UnknownFieldError =>
+            val n = Option(e.getMessage).flatMap(_.split("'").lift(1)).getOrElse("")
+            // Catches column TYPOS that are close to either a base column OR a known measure.
+            // Pass 2's MeasureScope will surface a proper "Did you mean?" error.
+            val suggestionCandidates = base.columns ++ model.measures.keys
+            if (closestMatch(n, suggestionCandidates).isDefined) bad += m
+            else throw e
+          }
+        }
+      }
+      (ok.result(), bad.result())
     }
+    val calcMeasuresFixed = if (calcFromBaseFailure.nonEmpty) calcMeasures ++ calcFromBaseFailure else calcMeasures
+    val aggCols = aggColsWorked
 
     var aggregated: DataFrame =
       if (groupKeys.isEmpty) base.agg(aggCols.head, aggCols.tail: _*)
@@ -516,9 +538,14 @@ final case class SemanticAggregateOp(
       } else None
 
     // --- Pass 2: calc measures one select per topological layer (Phase 2a) ---
-    if (calcMeasures.nonEmpty) {
-      layers.foreach { layer =>
-        val layerMeasures = calcMeasures.filter(m => layer.contains(m.name))
+    // Recompute calcDeps and layers from calcMeasuresFixed (may include misclassified base calcs)
+    val calcDepsFixed: Map[String, Set[String]] =
+      calcMeasuresFixed.map(m => m.name -> classifications.getOrElse(m.name, Classification(Set.empty, Set.empty)).deps).toMap
+    val layersFixed = topologicalLayers(calcMeasuresFixed.map(_.name), calcDepsFixed)
+    if (layersFixed.nonEmpty) SemanticLogger.logCalcLayers(layersFixed)
+    if (calcMeasuresFixed.nonEmpty) {
+      layersFixed.foreach { layer =>
+        val layerMeasures = calcMeasuresFixed.filter(m => layer.contains(m.name))
         val scope = new MeasureScope(aggregated, aggregated.columns.toSet, totalsResolver)
         val derived: Seq[Column] = layerMeasures.map(m => m.expr(scope).as(m.name))
         aggregated = aggregated.select((aggregated.columns.map(col) ++ derived): _*)

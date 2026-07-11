@@ -575,7 +575,7 @@ final class SemanticTable private[semantica] (
   def atTimeGrain(dimName: String, grain: String): SemanticTable = {
     val unit = TimeGrain.normalize(grain)
     val dim  = resolveDimension(dimName).getOrElse(throw new IllegalArgumentException(
-      s"atTimeGrain: dimension '$dimName' not found on this table."))
+      s"atTimeGrain: dimension '$dimName' not found on this table.${closestMatch(dimName, dimensions.keys).map(c => s" Did you mean: '$c'?").getOrElse("")}"))
     if (!dim.isTimeDimension)
       throw new IllegalArgumentException(
         s"atTimeGrain: '$dimName' is not a time dimension. " +
