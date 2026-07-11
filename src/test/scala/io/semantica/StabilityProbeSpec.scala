@@ -89,13 +89,12 @@ class StabilityProbeSpec extends AnyFunSuite with SparkSessionFixture with Fligh
     assert(rows.nonEmpty)
   }
 
-  test("EDGE: column name collision after join — KNOWN ISSUE (ambiguous reference)") {
+  test("EDGE: column name collision after join — clear semantica error before query") {
     val session = spark
     import session.implicits._
-    // Both tables have a column named 'shared' — collision risk.
-    // Known issue: Spark throws AMBIGUOUS_REFERENCE at execution time, not a helpful
-    // semantica error. Consumers should alias conflicting columns or reference them
-    // by their prefixed join name (e.g. "right.shared").
+    // Both tables have a dimension named 'shared' — collision risk.
+    // semantica should detect this at JOIN time and throw a helpful error,
+    // not let Spark throw AMBIGUOUS_REFERENCE at query execution time.
     val left = Seq(("AA", "L1"), ("BB", "L2")).toDF("carrier", "shared")
     val right = Seq(("AA", "R1"), ("BB", "R2")).toDF("carrier", "shared")
 
@@ -106,14 +105,46 @@ class StabilityProbeSpec extends AnyFunSuite with SparkSessionFixture with Fligh
       )
       .withMeasures(Measure("cnt", t => count(t("carrier"))))
     val rightModel = toSemanticTable(right, name = Some("right"))
-      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withDimensions(
+        Dimension("carrier", t => t("carrier")),
+        Dimension("shared", t => t("shared")),  // also on right → real collision
+      )
 
     val joined = leftModel.join_one(rightModel, (l, r) => l("carrier") === r("carrier"))
-    val ex = intercept[Exception] {
-      joined.groupBy("carrier", "shared").aggregate("cnt").toDataFrame(spark).collect()
+
+    // The collision is detected when the joined model is COMPILED, not at groupBy/aggregate.
+    val ex = intercept[IllegalArgumentException] {
+      joined.toDataFrame(spark).collect()  // compile happens here
     }
-    info(s"Collision error: ${ex.getClass.getSimpleName}: ${ex.getMessage}")
-    assert(ex.getMessage.contains("ambiguous") || ex.getMessage.contains("AMBIGUOUS"),
-      s"Expected ambiguous reference error, got: ${ex.getMessage}")
+    info(s"Collision error: ${ex.getMessage}")
+    assert(ex.getMessage.contains("collision"),
+      s"Expected semantica 'collision' error, got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("shared"),
+      s"Error should mention the conflicting dimension name: ${ex.getMessage}")
+    assert(ex.getMessage.contains("'shared'") || ex.getMessage.contains("shared"),
+      s"Error should name the conflicting dim: ${ex.getMessage}")
+  }
+
+  test("EDGE: collision check ALLOWS the join key itself to collide (necessary)") {
+    // The join key 'carrier' exists on both sides by design. That collision
+    // must NOT trigger our check — it's the whole point of the join.
+    val session = spark
+    import session.implicits._
+    val left = Seq(("AA", 100), ("BB", 200)).toDF("carrier", "val")
+    val right = Seq(("AA", "American"), ("BB", "United")).toDF("carrier", "name")
+
+    val leftModel = toSemanticTable(left, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("val", t => sum(t("val"))))
+    val rightModel = toSemanticTable(right, name = Some("carriers"))
+      .withDimensions(
+        Dimension("carrier", t => t("carrier")),  // join key — allowed to collide
+        Dimension("name", t => t("name")),
+      )
+
+    val joined = leftModel.join_one(rightModel, (l, r) => l("carrier") === r("carrier"))
+    val rows = joined.groupBy("carrier").aggregate("val").toDataFrame(spark).collect()
+    assert(rows.length == 2, s"Join should succeed, got ${rows.length} rows")
+    info(s"Join-key collision case produced ${rows.length} rows")
   }
 }

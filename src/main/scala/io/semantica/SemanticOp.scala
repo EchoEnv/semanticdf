@@ -186,6 +186,25 @@ final case class SemanticJoinOp(
           s"Left keys: $leftKeys, right keys: $rightKeys"
       )
 
+    // --- Dimension name collision detection (ambiguous-reference guard) ---
+    // Both sides may declare dimensions with the same name. Join-key columns are
+    // allowed to collide by necessity; other collisions would surface at Spark
+    // execution time as `[AMBIGUOUS_REFERENCE] Reference 'x' is ambiguous, could
+    // be: ['x', 'x']` — a confusing error. Detect early with a clear message.
+    val leftDims  = leftRoot.dimensions.keys.toSet
+    val rightDims = rightRoot.dimensions.keys.toSet
+    val keySet    = leftKeys.toSet
+    val collisions = (leftDims intersect rightDims) -- keySet
+    if (collisions.nonEmpty) {
+      val sorted = collisions.toSeq.sorted
+      val rightName = rightRoot.name.getOrElse("right")
+      throw new IllegalArgumentException(
+        s"Dimension name collision across joined tables: ${sorted.map(n => s"'$n'").mkString(", ")} " +
+          s"exists on both the left and right sides of the join. " +
+          s"Reference the right-side copy via its prefixed name " +
+          s"(\"$rightName.shared\"), or rename one side to a unique name before joining.")
+    }
+
     // --- Pre-aggregation for Many (fan-out prevention) ---
     // Each side is pre-aggregated at the join-key grain. We pass the MERGED model's
     // dims+measures (which include extras from withDimensions/withMeasures), but

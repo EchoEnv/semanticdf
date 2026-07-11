@@ -162,19 +162,23 @@ YAML `calculated_measures:` support `+`, `-`, `*`, `/`, parentheses, numeric lit
 measure-name references, and `all(name)` for percent-of-total. They do NOT support
 function calls (e.g. `abs(x)`, `round(x, n)`). For those, use the Scala DSL.
 
-### Shared column names across joined tables
+### Dimension name collision across joined tables
 
-If two joined tables share a column name (e.g. both have `qty`), a base measure
-referencing that column (`sum(qty)`) will be pre-aggregated on BOTH sides of a
-`join_many`, producing an ambiguous-reference error. Ensure each measure references
-at least one column unique to its table (the standard star-schema case).
+If two joined tables both declare a dimension with the same non-key name
+(e.g. both have `shared`), semantica detects this at join time and throws
+a clear error:
 
-**Dimensions** with the same name across joined tables also collide. If both tables
-have a dimension named `shared`, grouping by it after a join throws
-`[AMBIGUOUS_REFERENCE] Reference 'shared' is ambiguous` at execution time. This is
-Spark's error, not a helpful semantica message. **Workaround:** reference the joined
-table's copy via its prefixed name (e.g. `"right.shared"`), or alias the conflicting
-dimension to a unique name before joining.
+```
+Dimension name collision across joined tables: 'shared' exists on both the
+left and right sides of the join. Reference the right-side copy via its
+prefixed name ("right.shared"), or rename one side to a unique name before
+joining.
+```
+
+**Workaround (one of):**
+- Reference the right-side copy via its prefixed name: `"right.shared"`
+- Rename one side to a unique name before joining
+- Use the Scala DSL's `.alias(name)` (future feature)
 
 ### orderBy with dotted dimension names
 
