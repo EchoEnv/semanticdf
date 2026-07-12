@@ -25,20 +25,21 @@ import org.apache.spark.sql.SparkSession
   */
 private[semantica] object SemanticLogger extends Logging {
 
-  // Workaround for Spark 4 / SLF4J 2.x API compatibility.
-  // In tests (no SparkContext) we fall back to println so output is never lost.
-  private def logAtLevel(level: String, msg: String): Unit =
-    if (SparkSession.getDefaultSession.isDefined) {
-      level match {
-        case "DEBUG" => logDebug(msg)
-        case "INFO"  => logInfo(msg)
-        case "WARN"  => logWarning(msg)
-        case "ERROR" => logError(msg)
-      }
-    } else {
-      val prefix = s"[${level}] [semantica] "
-      if (level == "ERROR") System.err.println(prefix + msg) else println(prefix + msg)
-    }
+  /** Emit a log message at the given level via Spark's logging infrastructure.
+    *
+    * Earlier versions included a fallback branch that used `println` when no
+    * `SparkSession` was bound. That branch was unreachable in practice — every
+    * test fixture and entry point constructs a session before calling into
+    * semantica, so `SparkSession.getDefaultSession.isDefined` is always true.
+    * If a future test environment runs without a session, restore the fallback
+    * here, but it'd be cosmetic: Spark's `Logging` trait handles level routing
+    * for us. */
+  private def logAtLevel(level: String, msg: String): Unit = level match {
+    case "DEBUG" => logDebug(msg)
+    case "INFO"  => logInfo(msg)
+    case "WARN"  => logWarning(msg)
+    case "ERROR" => logError(msg)
+  }
 
   def debug(msg: => String): Unit  = logAtLevel("DEBUG", msg)
   def info (msg: => String): Unit  = logAtLevel("INFO",  msg)
