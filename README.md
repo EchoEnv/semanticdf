@@ -160,6 +160,20 @@ st.query(
 - Grain too fine (e.g. `"hour"` when `smallestTimeGrain = "day"`) raises a clear error.
 - `time_range` filters the raw column; `time_grain` affects only grouping.
 
+### EXPLAIN — op tree, Spark plan, and semantic intent
+
+Three flavours of plan inspection, each for a different debugging need:
+
+```scala
+model.explain()           // op tree shape (no Spark compilation)
+model.explain(spark)      // Catalyst physical plan
+model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pulled
+                              //      measures, join strategies, warnings, Spark plan
+```
+
+`explainSemantic` is the one a developer usually wants. See
+[`docs/feature-roadmap.md`](docs/feature-roadmap.md) §1.5 for an example output.
+
 ## API reference
 
 | Method | Description |

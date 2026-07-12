@@ -104,11 +104,60 @@ Output: sidebar nav (all models), per-model cards with dimension/measure/join ta
 
 ---
 
-### 1.5 EXPLAIN that shows semantic intent
+### 1.5 EXPLAIN that shows semantic intent ✅ (v0.1.0)
 
-**Problem:** `model.explain()` shows the op tree. `model.explain(spark)` shows Spark's physical plan. Neither explains **why** semantica routed a filter to WHERE vs HAVING, or why a join was pre-aggregated.
+**Done.** `SemanticTable.explainSemantic(spark)` produces a multi-section plan:
 
-**Solution:** A new method `model.explainSemantic(spark)` that produces a human-readable plan:
+```
+PLAN SUMMARY
+------------
+  1 filter(s)  ·  groupBy(carrier).aggregate(flight_count)
+
+================================================================================
+SEMANTIC ROUTING
+----------------
+  WHERE  (pre-agg)   carrier = AA
+                     refs: [carrier]
+
+================================================================================
+TRANSITIVE DEPENDENCIES
+-----------------------
+  Requested: flight_count
+  Measure catalog (all reachable): flight_count
+
+================================================================================
+DIMENSIONS (1)
+--------------
+  carrier
+
+================================================================================
+MEASURES (1)
+------------
+  flight_count  [base]
+
+================================================================================
+JOINS (0)
+---------
+  (none)
+
+================================================================================
+SPARK PLAN (df.explain)
+-----------------------
+  == Physical Plan ==
+  AdaptiveSparkPlan ...
+```
+
+Sections: PLAN SUMMARY, SEMANTIC ROUTING, TRANSITIVE DEPENDENCIES, DIMENSIONS,
+MEASURES, JOINS, WARNINGS (when applicable), SPARK PLAN (when spark is provided).
+
+The previous `explain()` and `explain(spark)` methods are unchanged.
+
+**Files changed:**
+- `src/main/scala/io/semantica/SemanticTable.scala` — added `explainSemantic` and
+  private `SemanticPlanRenderer` (~420 LOC).
+- `src/test/scala/io/semantica/ExplainSemanticSpec.scala` — 7 regression tests.
+
+**Effort:** ~1 person-day (rendering logic only; primitives already existed).
 
 ```
 PLAN for orders.groupBy("carrier").where("status === 'shipped'").aggregate("total_revenue"):
