@@ -220,7 +220,7 @@ spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.
 
 ## CLI Tools
 
-Two tools live in `src/main/scala/io/semantica/tools/`:
+Two tools live in `src/main/scala/io/semantica/tools/`, both runnable via `mvn exec:java`:
 
 ### docsgen — YAML model → browsable HTML
 
@@ -231,17 +231,20 @@ mvn exec:java \
 # Open docs/index.html in a browser
 ```
 
-Reads one YAML file or a directory of `.yml` files, emits a self-contained HTML page with sidebar nav, per-model cards, dimension/measure/join tables, and time/entity/pii badges. No external dependencies.
+Reads one YAML file or a directory of `.yml` files and emits a self-contained HTML page (sidebar nav, per-model cards, dimension/measure/join tables, time/entity/pii badges). No Spark needed; no external dependencies.
 
 ### introspect — DataFrame → YAML model starter
 
 ```bash
 mvn exec:java \
   -Dexec.mainClass=io.semantica.tools.Main \
-  -Dexec.args="introspect --path data/orders.csv --format csv --model orders --out models/orders.yml"
+  -Dexec.args="introspect --path examples/starter/data/flights.csv --format csv --model flights"
+# Writes a starter YAML to stdout (or --out models/flights.yml to write to a file).
 ```
 
-Reads a data file via Spark, infers dimensions (StringType → dim, NumericType → sum/avg, TimestampType → time dimension) and measures, and emits a starter YAML model. Edit the output to refine types, add descriptions, and customise expressions.
+Reads a data file via Spark, infers dimensions (StringType → dim, NumericType → sum/avg, TimestampType → time dimension with `is_time_dimension: true`), and emits a starter YAML model. Edit the output to refine types, add descriptions, and customise expressions.
+
+**Note — JDK 17 + Spark needs `--add-opens` flags** for any command that touches Spark (which includes `introspect`). Without them, the JVM crashes with `sun.nio.ch.DirectBuffer` access errors. Either set `MAVEN_OPTS` to the full flag set (see [`docs/runtime-quickstart.md`](docs/runtime-quickstart.md#traps) trap #1) or, for project-local reproducibility, drop a `.mvn/jvm.config` with one flag per line. `docsgen` does not need Spark, so it works without the flags.
 
 ## Cross-version compatibility
 
