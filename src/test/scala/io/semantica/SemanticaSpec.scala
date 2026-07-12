@@ -764,6 +764,59 @@ class SemanticaSpec
     result.warnings.exists(_.contains("compound predicate mixes")) shouldBe true
   }
 
+  // ---- withHint (Spark planner hints) -----------------------------------------
+
+  test("Phase B: withHint('broadcast') appears in the analyzed plan") {
+    // The hint wraps the compiled DataFrame in `df.hint("broadcast")`. The
+    // hint shows up in the *analyzed* plan as `ResolvedHint (strategy=broadcast)`.
+    // (Spark strips broadcast hints from the *optimized* plan when there's
+    // no downstream join to apply them to — that's expected behaviour, not a
+    // bug. We assert against the analyzed plan because that's where the
+    // hint-name is reliably present.)
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+      .withHint("broadcast")
+
+    val planStr = st.execute(spark).queryExecution.analyzed.toString
+    planStr should include("strategy=broadcast")
+  }
+
+  test("Phase B: withHint with parameters threads through to a Repartition op") {
+    // `repartition` with a partition count: the executed plan should show
+    // an Exchange with `REPARTITION_BY_NUM` and the requested partition
+    // count (4 in this case).
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+      .withHint("repartition", 4)
+
+    val planStr = st.execute(spark).queryExecution.executedPlan.toString
+    planStr should include("REPARTITION_BY_NUM")
+    planStr should include("RoundRobinPartitioning(4)")
+  }
+
+  test("Phase B: withHint with no parameters still produces a working DataFrame") {
+    // Sanity: a hint with no params (the typical case for "broadcast") is
+    // handled by a separate code path in SemanticHintOp.compile. This test
+    // pins that path and that the underlying aggregation still works.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+      .groupBy("carrier")
+      .aggregate("flight_count")
+      .withHint("broadcast")
+
+    val df = st.execute(spark)
+    df.queryExecution.analyzed.toString should include("strategy=broadcast")
+    // Aggregation still works under the hint: one row per unique carrier.
+    df.count() shouldBe 3
+  }
+
   test("Phase B: SemanticLogger emits DEBUG classification for a calc measure") {
     // This test verifies the logger is wired correctly: no crash, non-empty debug output.
     // The DEBUG output goes to the test log (captured by ScalaTest's reporter).

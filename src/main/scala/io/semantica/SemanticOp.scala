@@ -367,6 +367,24 @@ final case class SemanticLimitOp(source: SemanticOp, n: Int) extends SemanticOp 
     source.compile(spark).limit(n)
 }
 
+/** A planner hint applied to the compiled DataFrame (Phase 8: `withHint`).
+  *
+  * Wraps the source's compiled DataFrame with `df.hint(strategy, params*)`. Common
+  * uses: forcing a known-small dimension to broadcast on downstream joins, or
+  * setting a partition count for a shuffle-heavy aggregate. Unknown strategies
+  * are tolerated by Spark (the hint is added but ignored by Catalyst), so we
+  * don't validate the name here.
+  */
+final case class SemanticHintOp(
+    source: SemanticOp,
+    strategy: String,
+    params: Seq[Any],
+) extends SemanticOp {
+  override def compile(spark: SparkSession): DataFrame =
+    if (params.isEmpty) source.compile(spark).hint(strategy)
+    else                 source.compile(spark).hint(strategy, params: _*)
+}
+
 /** A merged model assembled from two joined tables. Used by [[SemanticAggregateOp]]
   * so that measure/dimension lookups are resolved from the correct side (via prefix). */
 private[semantica] final case class MergedSemanticModel(

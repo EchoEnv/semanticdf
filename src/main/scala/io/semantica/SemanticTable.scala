@@ -590,6 +590,35 @@ final class SemanticTable private[semantica] (
   def limit(n: Int): SemanticTable =
     new SemanticTable(SemanticLimitOp(root, n), postAggPredicates)
 
+  /** Add a Spark planner hint to this SemanticTable.
+    *
+    * Wraps the underlying compiled DataFrame in `df.hint(strategy, params*)`. The
+    * hint is then visible to the Spark planner and propagates to downstream
+    * operations (e.g. a broadcast hint marks the result as broadcastable for the
+    * next join that uses it as a side).
+    *
+    * Common uses:
+    * {{{
+    *   // Force a known-small dimension to broadcast on downstream joins.
+    *   smallDim.withHint("broadcast")
+    *
+    *   // Set the partition count for a shuffle-heavy aggregate.
+    *   bigFact.withHint("repartition", 200)
+    * }}}
+    *
+    * The hint is applied to the *whole* compiled result, not to a specific
+    * sub-expression. For a join-slot-specific hint, model the join inline
+    * (`join_one(...).withHint("broadcast")`) and use the result downstream.
+    *
+    * Unknown strategies are tolerated by Spark (the hint is recorded but
+    * ignored), so no name validation happens here.
+    *
+    * @param strategy the hint name (e.g. `"broadcast"`, `"repartition"`, `"sort"`)
+    * @param params   optional parameters for the hint (e.g. an Int for `repartition_n`)
+    * @return a new SemanticTable that emits a hinted DataFrame */
+  def withHint(strategy: String, params: Any*): SemanticTable =
+    new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates)
+
   /** One-shot bundled query (Phase 5 completion).
     *
     * Pure sugar over the fluent API — chains `where → groupBy → aggregate[having] →
