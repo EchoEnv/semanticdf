@@ -1254,13 +1254,15 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         case JoinCardinality.Many  => ("PRE-AGG, then JOIN", "each side pre-aggregated at join-key grain — prevents fan-out explosion")
         case JoinCardinality.Cross => ("CROSS JOIN",         "every row on the left × every row on the right")
       }
-      val keys = Option(j.grainCols).getOrElse(Seq.empty)
+      // grainCols is read via DynamicVariable, which falls back to Seq.empty
+      // when the calling thread hasn't compiled this op (e.g. explainSemantic
+      // called from a different thread than execute). Render the placeholder in
+      // that case so the plan is still informative.
+      val keys = j.grainCols
       j.cardinality match {
         case JoinCardinality.Cross =>
           sb.append(s"  $card  $verb — $blurb\n")
         case _ =>
-          // grainCols is populated during compile(); before that it's null. Fall
-          // back to a placeholder so an uncompiled SemanticTable still renders sanely.
           val keysStr = if (keys.isEmpty) "(uncompiled)" else keys.mkString("[", ", ", "]")
           sb.append(s"  $card  $verb on $keysStr\n")
           sb.append(s"       $blurb\n")

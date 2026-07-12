@@ -3,6 +3,8 @@ package io.semantica
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, lit, sum}
 
+import scala.util.DynamicVariable
+
 /** Root of the immutable semantic op tree (DESIGN §4.1).
   *
   * Invariants (DESIGN §4.4): nodes are pure case classes; the compiled DataFrame is
@@ -127,8 +129,15 @@ final case class SemanticJoinOp(
     )
   }
 
-  /** Names of the grain (join key) columns, populated during `compile`. */
-  private var _grainCols: Seq[String] = _
+  /** Per-thread storage for the grain (join key) column names captured during
+    * `compile`. Replaces a `var _grainCols: Seq[String]` field that violated the
+    * immutability invariant in DESIGN §4.4 and made concurrent compiles racy.
+    *
+    * `DynamicVariable` (Scala's typed wrapper around `ThreadLocal`) gives each
+    * thread its own slot. A compile on thread A leaves thread B's view untouched,
+    * which is the right semantics: a thread that didn't compile this op can't
+    * observe its keys. */
+  private val _grainColsDyn = new DynamicVariable[Seq[String]](Seq.empty)
 
   override def compile(spark: SparkSession): DataFrame = {
     val leftDf  = left.compile(spark)
@@ -136,7 +145,7 @@ final case class SemanticJoinOp(
 
     cardinality match {
       case JoinCardinality.Cross =>
-        _grainCols = Seq.empty
+        _grainColsDyn.value = Seq.empty
         leftDf.crossJoin(rightDf)
 
       case JoinCardinality.One | JoinCardinality.Many =>
@@ -145,8 +154,9 @@ final case class SemanticJoinOp(
     }
   }
 
-  /** Grain (join key) column names from the most recent compile. */
-  private[semantica] def grainCols: Seq[String] = _grainCols
+  /** Grain (join key) column names from the most recent compile on the *calling*
+    * thread. Reads via the `DynamicVariable` set during `compile`. */
+  private[semantica] def grainCols: Seq[String] = _grainColsDyn.value
 
   /** Scala 2.13 workaround: spread a Seq[Column] as the only varargs arg.
     * Used for `df.groupBy(all: _*)` and `df.select(all: _*)`.
@@ -223,7 +233,7 @@ final case class SemanticJoinOp(
         throw new IllegalStateException("Cross handled in compile().")
     }
 
-    _grainCols = leftKeys
+    _grainColsDyn.value = leftKeys
     SemanticLogger.logJoinCompiled(cardinality.toString, leftKeys, cardinality == JoinCardinality.Many)
 
     // --- Build Spark equi-join condition ---

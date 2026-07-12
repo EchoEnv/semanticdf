@@ -266,13 +266,55 @@ class ExplainSemanticSpec
       .withMeasures(Measure("order_count", t => count(lit(1))))
       .join_one(customers, on = (l, r) => l("customer_id") === r("customer_id"))
 
-    // Force a compile() so _grainCols is populated (execute() runs it).
+    // Force a compile() so the per-thread grain-key dynamic is populated.
     orders.execute(spark)
     val plan = orders.explainSemantic(spark)
     plan should include("LEFT JOIN on [customer_id]")
     plan should include("ONE")
     // The old "join keys visible in SPARK PLAN below" filler must be gone.
     plan should not include "join keys visible in SPARK PLAN below"
+  }
+
+  test("explainSemantic JOINS keys are isolated per SemanticJoinOp instance, not shared") {
+    // Replaces a `var _grainCols` field on the case class (which violated the
+    // immutability invariant in DESIGN §4.4) with a `scala.util.DynamicVariable`.
+    // Each SemanticJoinOp instance gets its own DynamicVariable, so two distinct
+    // join ops don't share state. Compiling one must NOT leak into the other.
+    val customers = toSemanticTable(customersDf, name = Some("customers"))
+      .withDimensions(Dimension("customer_id", t => t("customer_id")))
+      .withMeasures(Measure("customer_count", t => count(lit(1))))
+
+    val orders1 = toSemanticTable(ordersDf, name = Some("orders"))
+      .withDimensions(
+        Dimension("order_id",    t => t("order_id")),
+        Dimension("customer_id", t => t("customer_id")),
+      )
+      .withMeasures(Measure("order_count", t => count(lit(1))))
+      .join_one(customers, on = (l, r) => l("customer_id") === r("customer_id"))
+
+    // Second independent join: re-use the same orders one but with a fresh
+    // join_one call. Produces a brand new SemanticJoinOp instance with its own
+    // DynamicVariable slot.
+    val orders2 = toSemanticTable(ordersDf, name = Some("orders"))
+      .withDimensions(
+        Dimension("order_id",    t => t("order_id")),
+        Dimension("customer_id", t => t("customer_id")),
+      )
+      .withMeasures(Measure("order_count", t => count(lit(1))))
+      .join_one(customers, on = (l, r) => l("customer_id") === r("customer_id"))
+
+    orders1.execute(spark)  // populates orders1's DynamicVariable
+
+    // orders2 has NOT been compiled. If the case class's grain state were
+    // shared (the old `var _grainCols` design), orders2 would falsely surface
+    // customer_id too. With DynamicVariable, orders2's instance has its own
+    // empty slot, and the renderer falls back to "(uncompiled)".
+    val plan2 = orders2.explainSemantic(None)
+    plan2 should include("(uncompiled)")
+    plan2 should not include "on [customer_id]"
+
+    // Sanity: orders1 (compiled on this thread) DOES show its keys.
+    orders1.explainSemantic(None) should include("LEFT JOIN on [customer_id]")
   }
 
   // ---- Scope filtering -----------------------------------------------------
