@@ -1116,36 +1116,33 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     val willCompute = closed.keys.toSet
     val autoPulled   = willCompute -- requestedDirect
 
-    val all        = allMs.keySet
-    val skipped    = all -- willCompute
-    val unknown    = requestedDirect -- all
+    val all     = allMs.keySet
+    val skipped = all -- willCompute
+    val unknown = requestedDirect -- all
 
     val sb = new StringBuilder
     sb.append(heading("TRANSITIVE DEPENDENCIES"))
-    sb.append("  Measures the framework will compute vs. ones it pulled in for you.\n")
-    sb.append("  Column pruning means Spark only reads the columns it actually needs.\n")
-    sb.append("\n")
-    if (requestedDirect.isEmpty && allMs.nonEmpty) {
-      sb.append(s"  (all ${allMs.size} measures available but none requested yet)\n")
+
+    // Three compact blocks: DIRECT / PULLED IN / SKIPPED. No redundant summary
+    // line — the union is implicit from the two source lists. When the user has
+    // not requested any measures yet, emit a hint instead of empty blocks.
+    if (requestedDirect.isEmpty && allMs.isEmpty) {
+      sb.append("  (no measures declared)\n")
+    } else if (requestedDirect.isEmpty) {
+      sb.append(s"  (all ${allMs.size} declared measures available; .aggregate / .orderBy selected none)\n")
     } else {
-      sb.append(s"  REQUESTED (called by .aggregate / .orderBy):\n")
-      if (requestedDirect.isEmpty)
-        sb.append("    (none — no aggregate / orderBy measures touched)\n")
-      else
-        requestedDirect.toSeq.sorted.foreach(n =>
-          sb.append(s"    ${n}${if (autoPulled.contains(n)) "  [re-stated by transitives]" else ""}\n"))
+      sb.append("  DIRECT (you asked for these):\n")
+      requestedDirect.toSeq.sorted.foreach(n => sb.append(s"    $n\n"))
       if (autoPulled.nonEmpty) {
-        sb.append(s"  AUTO-PULLED (transitive calc dependencies):\n")
+        sb.append("  PULLED IN (by your calcs):\n")
         autoPulled.toSeq.sorted.foreach(n => sb.append(s"    $n\n"))
       }
-      sb.append(s"  Will compute: ${willCompute.toSeq.sorted.mkString(", ")}\n")
-    }
-    if (unknown.nonEmpty) {
-      sb.append(s"  ⚠ Unknown (typo?): ${unknown.toSeq.sorted.mkString(", ")}\n")
     }
     if (skipped.nonEmpty) {
-      sb.append(s"  Skipped (not needed): ${skipped.toSeq.sorted.mkString(", ")}\n")
-      sb.append(s"  Spark will not compute these — column pruning skips them\n")
+      sb.append(s"  SKIPPED (declared but unused): ${skipped.toSeq.sorted.mkString(", ")}\n")
+    }
+    if (unknown.nonEmpty) {
+      sb.append(s"  ⚠ UNKNOWN (typo?): ${unknown.toSeq.sorted.mkString(", ")}\n")
     }
     sb.toString
   }

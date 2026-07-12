@@ -120,7 +120,7 @@ class ExplainSemanticSpec
 
   // ---- Transitive deps ------------------------------------------------------
 
-  test("explainSemantic lists requested measures and split into REQUESTED + AUTO-PULLED") {
+  test("explainSemantic splits measures into DIRECT + PULLED IN") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -132,20 +132,48 @@ class ExplainSemanticSpec
       .aggregate("avg_passengers")
 
     val plan = st.explainSemantic(spark)
-    // All three are computed: avg_passengers (requested) + flight_count + total_passengers (auto-pulled).
+    // All three are computed: avg_passengers (DIRECT) + flight_count + total_passengers (PULLED IN).
     plan should include("avg_passengers")
     plan should include("flight_count")
     plan should include("total_passengers")
-    // The split into REQUESTED vs AUTO-PULLED sub-blocks.
-    plan should include("REQUESTED")
-    plan should include("AUTO-PULLED")
-    // Aggregate label still present.
-    plan should include("Will compute:")
+    // The split into DIRECT vs PULLED IN sub-blocks.
+    plan should include("DIRECT")
+    plan should include("PULLED IN")
+    // Old labels are gone — they were either redundant or jargon.
+    plan should not include "REQUESTED"
+    plan should not include "AUTO-PULLED"
+    plan should not include "Will compute:"
   }
 
-  test("explainSemantic lists declared-but-not-needed measures under Skipped") {
-    // extra_distance is declared but never referenced by any requested measure —
-    // it should appear under "Skipped (not needed)".
+  test("explainSemantic omits PULLED IN block when no transitive work") {
+    // Single base measure, aggregate it. No calc deps at all, no sibling
+    // measures to skip — so neither PULLED IN nor SKIPPED should appear.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+
+    val plan = st.explainSemantic(spark)
+    plan should include("DIRECT")
+    plan should include("total_passengers")
+    plan should not include "PULLED IN"
+    plan should not include "SKIPPED"
+  }
+
+  test("explainSemantic falls back to hint when no .aggregate called") {
+    // A table with measures but no aggregation — the user hasn't asked yet.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+
+    val plan = st.explainSemantic(spark)
+    plan should include("declared measures available")
+    plan should include(".aggregate / .orderBy selected none")
+    plan should not include "DIRECT"
+  }
+
+  test("explainSemantic lists declared-but-not-needed measures under SKIPPED") {
+    // extra_distance is declared but never referenced by any requested measure.
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -157,8 +185,9 @@ class ExplainSemanticSpec
       .aggregate("total_passengers", "flight_count")
 
     val plan = st.explainSemantic(spark)
-    plan should include("Skipped (not needed)")
+    plan should include("SKIPPED (declared but unused)")
     plan should include("extra_distance")
+    plan should not include "Skipped (not needed)"  // old label
   }
 
   // ---- Section polish -------------------------------------------------------
