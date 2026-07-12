@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **150/150 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **159/159 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -187,8 +187,13 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). |
+| `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
+| `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
+| `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
 | `.explain()` | Print the semantica op-tree summary (no Spark compile). |
-| `.explain(spark)` | Run the full query and print Spark's physical plan via `explain`. | |
+| `.explain(spark)` | Run the full query and print Spark's **simple** physical plan. |
+| `.explainExtended(spark)` | Run the full query and print Spark's **extended/cost** plan (incl. logical-plan sections). |
+| `.explainSemantic(spark?)` / `.explainSemantic(spark?, Scope)` | Multi-section human-readable plan: filter routing, transitive deps, join strategies, warnings. | |
 
 `Dimension.time(...)` / `Dimension.entity(...)` are ergonomic factories. `Predicate._`
 brings the filter DSL into scope. `SortKey.desc(...)` / bare `String` (ascending) drive
