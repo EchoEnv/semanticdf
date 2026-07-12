@@ -23,6 +23,14 @@ object SortKey {
   /** Explicit descending key. */
   def desc(name: String): SortKey = Desc(name)
 
+  /** Read the column-name field of any SortKey (private to avoid exposing the sealed
+    * cases to public API). Used by [[SemanticTable.explainSemantic]]. */
+  private[semantica] def nameOf(k: SortKey): String = k match {
+    case Asc(n)  => n
+    case Desc(n) => n
+    case _       => ""
+  }
+
   /** Implicit `String => SortKey` so `orderBy("carrier", SortKey.desc("x"))` works. */
   implicit def strToSortKey(name: String): SortKey = Asc(name)
 }
@@ -137,6 +145,35 @@ final class SemanticTable private[semantica] (
     df.queryExecution.explainString(
       org.apache.spark.sql.execution.ExplainMode.fromString("simple")
     )
+  }
+
+  /** Human-readable plan combining semantic intent + Spark's physical plan (Tier 1.5,
+    * roadmap §1.5).
+    *
+    * Unlike [[explain()]] which is the op-tree shape only, or [[explain(spark)]] which
+    * is just Catalyst output, this method explains *why* semantica routed things the
+    * way it did: where each filter went (WHERE vs HAVING), which transitive measures
+    * were pulled in, what time grains are valid, which joins compiled pre- vs post-agg.
+    *
+    * Sections, in order:
+    *  1. ROUTING          — every filter, where it compiled, which field it references
+    *  2. TRANSITIVE DEPS  — measures requested, transitively-pulled, and skipped
+    *  3. DIMENSIONS       — list with time/pii/entity flags
+    *  4. MEASURES         — list with base/calc classification
+    *  5. JOINS            — cardinality, pre/post-agg strategy
+    *  6. WARNINGS         — anything notable (calc cycles, time-grain risk, etc.)
+    *  7. SPARK PLAN       — `df.explain()` output (only when `spark` is provided)
+    *
+    * Compile is forced iff `spark` is provided — pass `null` for a static-only view
+    * (the cost is just walking the op tree).
+    *
+    * @param spark optional SparkSession. Required only for section 7 (Spark plan).
+    *              Pass `null` to skip compilation.
+    * @return multi-line plan summary
+    */
+  def explainSemantic(spark: SparkSession): String = {
+    val renderer = new SemanticPlanRenderer(this)
+    renderer.render(spark)
   }
 
   /** Return a DataFrame describing every field (dimensions + measures) in this model.
@@ -752,3 +789,387 @@ final class SemanticGroupBy private[semantica] (
     new SemanticTable(op)
   }
 }
+
+// =============================================================================
+// SemanticPlanRenderer — Tier 1.5 explain-semantic renderer
+// =============================================================================
+
+/* Walks a SemanticTable's op tree and produces a multi-section human-readable plan
+ * explaining where every predicate went, what dependencies were pulled in, what
+ * joins compiled pre/post-agg, and which Spark plan was generated.
+ *
+ * Why a separate class:
+ *   - keeps `SemanticTable` small (already 770+ lines)
+ *   - isolates the rendering logic so it can be unit-tested independently
+ *   - it's stateless apart from the captured `SemanticTable` reference
+ *
+ * Output sections (separated by horizontal rules):
+ *   1. PLAN SUMMARY      - one-line description of the query
+ *   2. SEMANTIC ROUTING  - filter decisions (WHERE/HAVING) with reasons
+ *   3. TRANSITIVE DEPS   - measures requested vs pulled in vs skipped
+ *   4. DIMENSIONS        - with time/pii/entity flags
+ *   5. MEASURES          - with base/calc classification + reasons
+ *   6. JOINS             - cardinality + pre/post-agg strategy
+ *   7. WARNINGS          - notable concerns (only if non-empty)
+ *   8. SPARK PLAN        - df.explain() output (only when spark is provided)
+ */
+private class SemanticPlanRenderer(st: SemanticTable) {
+
+  /** Render the multi-section plan. */
+  def render(spark: SparkSession): String = {
+    val sb = new StringBuilder
+
+    sb.append(renderSummary())
+    sb.append(hr()).append(renderRouting())
+    sb.append(hr()).append(renderTransitiveDeps())
+    sb.append(hr()).append(renderDimensions())
+    sb.append(hr()).append(renderMeasures())
+    sb.append(hr()).append(renderJoins())
+
+    val warnings = collectWarnings()
+    if (warnings.nonEmpty) {
+      sb.append(hr()).append(renderWarnings(warnings))
+    }
+
+    if (spark != null) {
+      sb.append(hr()).append(renderSparkPlan(spark))
+    }
+
+    sb.toString
+  }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
+
+  private def hr(): String = "\n" + ("=" * 80) + "\n"
+  private def heading(text: String): String = s"$text\n${"-" * text.length}\n"
+  private def indent(s: String, n: Int = 2): String =
+    s.linesIterator.map(line => if (line.isEmpty) line else (" " * n) + line).mkString("\n")
+
+  /** Walk the op tree and return all referenced field names (dims + measures). */
+  private def referencedFields(): Set[String] = {
+    val acc = scala.collection.mutable.Set[String]()
+    def walk(op: SemanticOp): Unit = op match {
+      case t: SemanticTableOp =>
+        t.dimensions.keys.foreach(acc.add)
+        t.measures.keys.foreach(acc.add)
+      case j: SemanticJoinOp =>
+        j.extraDimensions.keys.foreach(acc.add)
+        j.extraMeasures.keys.foreach(acc.add)
+        walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp =>
+        a.keys.foreach(acc.add)
+        a.measureNames.foreach(acc.add)
+        walk(a.source)
+      case SemanticFilterOp(src, pred) =>
+        pred.fields.foreach(acc.add)
+        walk(src)
+      case SemanticOrderByOp(src, _)   => walk(src)
+      case SemanticLimitOp(src, _)     => walk(src)
+    }
+    walk(st.root)
+    acc.toSet
+  }
+
+  /** All measure names reachable from the root, in stable order. */
+  private def allMeasures(): Seq[(String, Measure)] = {
+    val acc = scala.collection.mutable.LinkedHashMap.empty[String, Measure]
+    def walk(op: SemanticOp): Unit = op match {
+      case t: SemanticTableOp =>
+        t.measures.foreach { case (n, m) => acc.update(n, m) }
+      case j: SemanticJoinOp =>
+        j.extraMeasures.foreach { case (n, m) => acc.update(n, m) }
+        walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp     => walk(a.source)
+      case SemanticFilterOp(src, _)   => walk(src)
+      case SemanticOrderByOp(src, _)  => walk(src)
+      case SemanticLimitOp(src, _)    => walk(src)
+    }
+    walk(st.root)
+    acc.toSeq
+  }
+
+  /** All dimensions reachable from the root, in stable order. */
+  private def allDimensions(): Seq[(String, Dimension)] = {
+    val acc = scala.collection.mutable.LinkedHashMap.empty[String, Dimension]
+    def walk(op: SemanticOp): Unit = op match {
+      case t: SemanticTableOp =>
+        t.dimensions.foreach { case (n, d) => acc.update(n, d) }
+      case j: SemanticJoinOp =>
+        j.extraDimensions.foreach { case (n, d) => acc.update(n, d) }
+        walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp     => walk(a.source)
+      case SemanticFilterOp(src, _)   => walk(src)
+      case SemanticOrderByOp(src, _)  => walk(src)
+      case SemanticLimitOp(src, _)    => walk(src)
+    }
+    walk(st.root)
+    acc.toSeq
+  }
+
+  /** All join operations in the op tree. */
+  private def allJoins(): Seq[SemanticJoinOp] = {
+    val acc = scala.collection.mutable.ListBuffer.empty[SemanticJoinOp]
+    def walk(op: SemanticOp): Unit = op match {
+      case j: SemanticJoinOp =>
+        acc += j; walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp     => walk(a.source)
+      case SemanticFilterOp(src, _)   => walk(src)
+      case SemanticOrderByOp(src, _)  => walk(src)
+      case SemanticLimitOp(src, _)    => walk(src)
+      case _: SemanticTableOp         => // leaf
+    }
+    walk(st.root)
+    acc.toSeq
+  }
+
+  /** All filter operations, in op-tree order (top-down). */
+  private def allFilters(): Seq[(SemanticFilterOp, Boolean)] = {
+    // Boolean = "is HAVING (post-agg)" — true iff the filter's own source is an
+    // aggregate (matches SemanticFilterOp.compile's runtime check).
+    val acc = scala.collection.mutable.ListBuffer.empty[(SemanticFilterOp, Boolean)]
+    def walk(op: SemanticOp): Unit = op match {
+      case f @ SemanticFilterOp(src, pred) =>
+        val isHaving = src match {
+          case _: SemanticAggregateOp => true
+          case _                      => false
+        }
+        acc += ((f, isHaving))
+        walk(src)
+      case j: SemanticJoinOp =>
+        walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp    => walk(a.source)
+      case SemanticOrderByOp(src, _) => walk(src)
+      case SemanticLimitOp(src, _)   => walk(src)
+      case _: SemanticTableOp        => // leaf
+    }
+    walk(st.root)
+    acc.toSeq
+  }
+
+  // ---------------------------------------------------------------------------
+  // Section renderers
+  // ---------------------------------------------------------------------------
+
+  private def renderSummary(): String = {
+    val sb = new StringBuilder
+    val aggDesc = st.root match {
+      case a: SemanticAggregateOp =>
+        val keys = if (a.keys.isEmpty) "(no group)" else a.keys.mkString(", ")
+        s"groupBy($keys).aggregate(${a.measureNames.mkString(", ")})"
+      case _ => "(terminal transform)"
+    }
+    val filterCount = allFilters().size
+    val joinCount   = allJoins().size
+    val pieces = scala.collection.mutable.ListBuffer.empty[String]
+    if (filterCount > 0) pieces += s"$filterCount filter(s)"
+    if (joinCount   > 0) pieces += s"$joinCount join(s)"
+    pieces += aggDesc
+    val summary = pieces.mkString("  ·  ")
+    sb.append(heading("PLAN SUMMARY")).append(s"  $summary\n")
+    sb.toString
+  }
+
+  private def renderRouting(): String = {
+    val measureNames = allMeasures().map(_._1).toSet
+    val filters = allFilters()
+    val sb = new StringBuilder
+    sb.append(heading("SEMANTIC ROUTING")).append("\n")
+
+    if (filters.isEmpty) {
+      sb.append("  (no filters applied)\n")
+      return sb.toString
+    }
+
+    filters.foreach { case (SemanticFilterOp(_, pred), isHaving) =>
+      val raw = if (isHaving) "HAVING (post-agg)" else "WHERE  (pre-agg)"
+      val label = raw + " " * math.max(0, 18 - raw.length)
+      val refs = pred.fields.toSeq.sorted.mkString(", ")
+      val (pre, post) = Predicate.splitFilter(pred, measureNames)
+      val splitNote =
+        if (isHaving && post.nonEmpty && pre.nonEmpty) " — compound AND; whole predicate goes to HAVING"
+        else ""
+      sb.append(s"  $label ${pred.describe}\n")
+      sb.append(s"  ${" " * 18} refs: [$refs]$splitNote\n")
+      // Surface the routing intent for compound predicates
+      if (pred.isInstanceOf[Predicate.And] && pre.nonEmpty && post.nonEmpty) {
+        sb.append(s"  ${" " * 18} pre-agg children: ${pre.map(_.describe).mkString(" AND ")}\n")
+        sb.append(s"  ${" " * 18} post-agg children: ${post.map(_.describe).mkString(" AND ")}\n")
+      }
+    }
+    sb.toString
+  }
+
+  private def renderTransitiveDeps(): String = {
+    val requested = scala.collection.mutable.LinkedHashSet.empty[String]
+    def walk(op: SemanticOp): Unit = op match {
+      case a: SemanticAggregateOp => a.measureNames.foreach(requested.add)
+      case SemanticFilterOp(src, _)   => walk(src)
+      case SemanticOrderByOp(src, keys) =>
+        keys.foreach(k => requested.add(SortKey.nameOf(k)))
+        walk(src)
+      case SemanticLimitOp(src, _)     => walk(src)
+      case _: SemanticJoinOp           =>
+      case _: SemanticTableOp          =>
+    }
+    walk(st.root)
+
+    val all        = allMeasures().map(_._1).toSet
+    val requested0 = requested.toSet
+    val pulledIn   = requested0                      // what runtime will compute
+    val skipped    = all -- pulledIn                 // reachable but unused
+    val unknown    = requested0 -- all               // name typos
+
+    val sb = new StringBuilder
+    sb.append(heading("TRANSITIVE DEPENDENCIES"))
+    sb.append(s"  Requested: ${requested.toSeq.sorted.mkString(", ")}\n")
+    if (unknown.nonEmpty) {
+      sb.append(s"  ⚠ Unknown measure(s) requested: ${unknown.toSeq.sorted.mkString(", ")}\n")
+    }
+    sb.append(s"  Measure catalog (all reachable): ${all.toSeq.sorted.mkString(", ")}\n")
+    if (skipped.nonEmpty) {
+      sb.append(s"  Skipped (not requested): ${skipped.toSeq.sorted.mkString(", ")}\n")
+      sb.append(s"  → column pruning will skip these in the Spark plan\n")
+    }
+    sb.toString
+  }
+
+  private def renderDimensions(): String = {
+    val dims = allDimensions()
+    val sb = new StringBuilder
+    sb.append(heading(s"DIMENSIONS (${dims.size})"))
+    if (dims.isEmpty) {
+      sb.append("  (none)\n")
+      return sb.toString
+    }
+    dims.foreach { case (name, d) =>
+      val flags = scala.collection.mutable.ListBuffer.empty[String]
+      if (d.isTimeDimension)      flags += "time"
+      if (d.isEntity)             flags += "entity"
+      if (d.isEventTimestamp)     flags += "event_ts"
+      if (d.smallestTimeGrain.isDefined) flags += s"grain=${d.smallestTimeGrain.get}"
+      if (d.metadata.get("pii").contains("true")) flags += "pii"
+      val tag = if (flags.isEmpty) "" else s"  [${flags.mkString(", ")}]"
+      val desc = d.description.fold("")(dd => s"  — $dd")
+      sb.append(s"  $name$tag$desc\n")
+    }
+    sb.toString
+  }
+
+  private def renderMeasures(): String = {
+    val measures = allMeasures()
+    val sb = new StringBuilder
+    sb.append(heading(s"MEASURES (${measures.size})"))
+    if (measures.isEmpty) {
+      sb.append("  (none)\n")
+      return sb.toString
+    }
+    measures.foreach { case (name, m) =>
+      val flags = scala.collection.mutable.ListBuffer.empty[String]
+      // We cannot introspect a `SemanticScope => Column` cleanly, so classify heuristically:
+      // a measure is a "calc" iff its expr mentions another measure by name string.
+      val exprSrc = m.expr.toString
+      val othersReferenced = measures.filter(_._1 != name).filter { case (_, other) =>
+        exprSrc.contains(s""""${other.name}""") || exprSrc.contains(s"${other.name} ")
+      }
+      if (othersReferenced.nonEmpty) {
+        flags += "calc"
+      } else {
+        flags += "base"
+      }
+      val tag = s"  [${flags.mkString(", ")}]"
+      val desc = m.description.fold("")(d => s"  — $d")
+      sb.append(s"  $name$tag$desc\n")
+      if (othersReferenced.nonEmpty) {
+        val deps = othersReferenced.map(_._1).toSeq.sorted.mkString(", ")
+        sb.append(s"    depends on: $deps\n")
+      }
+    }
+    sb.toString
+  }
+
+  private def renderJoins(): String = {
+    val joins = allJoins()
+    val sb = new StringBuilder
+    sb.append(heading(s"JOINS (${joins.size})"))
+    if (joins.isEmpty) {
+      sb.append("  (none)\n")
+      return sb.toString
+    }
+    joins.foreach { j =>
+      val strategy = j.cardinality match {
+        case JoinCardinality.One    => "LEFT JOIN — safe to aggregate post-join"
+        case JoinCardinality.Many   => "PRE-AGGREGATE each side, then JOIN — prevents fan-out"
+        case JoinCardinality.Cross  => "CROSS JOIN — combinatorial output"
+      }
+      sb.append(s"  ${j.cardinality.toString.toUpperCase}  ${strategy}\n")
+      // Join keys live inside the `on` predicate (a `(JoinSide, JoinSide) => Column`
+      // function), so we don't extract them here. They appear in the SPARK PLAN below
+      // as the actual join condition.
+      if (j.extraDimensions.nonEmpty) {
+        sb.append(s"    adds dimensions: ${j.extraDimensions.keys.toSeq.sorted.mkString(", ")}\n")
+      }
+      if (j.extraMeasures.nonEmpty) {
+        sb.append(s"    adds measures: ${j.extraMeasures.keys.toSeq.sorted.mkString(", ")}\n")
+      }
+    }
+    sb.toString
+  }
+
+  private def collectWarnings(): Seq[String] = {
+    val out = scala.collection.mutable.ListBuffer.empty[String]
+    val allMs = allMeasures().toMap
+    // 1. Cycle detection on calc measures
+    def isCalcOf(m: Measure, target: String, depth: Int = 0): Boolean = {
+      if (depth > 32) return false
+      val exprSrc = m.expr.toString
+      allMs.values.filter(_ ne m).exists { other =>
+        exprSrc.contains(s""""${other.name}""") && (
+          other.name == target || isCalcOf(other, target, depth + 1)
+        )
+      }
+    }
+    allMs.foreach { case (n, m) =>
+      if (isCalcOf(m, n)) out += s"'$n' depends on itself (cycle)"
+    }
+    // 2. Time dimensions without smallestTimeGrain (might surprise atTimeGrain)
+    allDimensions().foreach { case (n, d) =>
+      if (d.isTimeDimension && d.smallestTimeGrain.isEmpty)
+        out += s"time dimension '$n' has no smallestTimeGrain — atTimeGrain() will raise on any request"
+    }
+    // 3. AND predicate that mixes dim + measure categories (whole predicate goes to HAVING)
+    val measureNames = allMs.keySet
+    allFilters().foreach { case (SemanticFilterOp(_, pred), _) =>
+      if (pred.isInstanceOf[Predicate.And]) {
+        val children = pred.asInstanceOf[Predicate.And].children
+        val refsMeasure   = children.exists(p => Predicate.referencesMeasure(p, measureNames))
+        val refsDimension = children.exists(p => !Predicate.referencesMeasure(p, measureNames))
+        if (refsMeasure && refsDimension) {
+          out += s"compound AND mixes dim + measure conditions: ${pred.describe} — whole predicate goes post-agg"
+        }
+      }
+    }
+    out.toSeq
+  }
+
+  private def renderWarnings(warnings: Seq[String]): String = {
+    val sb = new StringBuilder
+    sb.append(heading("WARNINGS"))
+    warnings.foreach { w => sb.append(s"  ⚠ $w\n") }
+    sb.toString
+  }
+
+  private def renderSparkPlan(spark: SparkSession): String = {
+    val plan = try {
+      val df = st.toDataFrame(spark)
+      df.queryExecution.explainString(
+        org.apache.spark.sql.execution.ExplainMode.fromString("simple")
+      )
+    } catch {
+      case e: Throwable => s"(failed to render Spark plan: ${e.getClass.getSimpleName}: ${e.getMessage})"
+    }
+    heading("SPARK PLAN (df.explain)") + indent(plan) + "\n"
+  }
+}
+
