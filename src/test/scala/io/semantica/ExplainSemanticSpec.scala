@@ -69,10 +69,21 @@ class ExplainSemanticSpec
       .groupBy()
       .aggregate("flight_count")
 
-    // Pass `null` to skip Spark compilation — the rest of the sections still render.
-    val plan = st.explainSemantic(null)
+    // Pass `None` to skip Spark compilation — the rest of the sections still render.
+    val plan = st.explainSemantic(None)
     plan should include("PLAN SUMMARY")
     plan should not include "SPARK PLAN"
+  }
+
+  test("explainSemantic SparkSession overload still works for backwards compat") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+      .groupBy("carrier")
+      .aggregate("flight_count")
+
+    // Pass an actual SparkSession — the non-null overload should compile the plan.
+    val plan = st.explainSemantic(spark)
+    plan should include("SPARK PLAN")
   }
 
   // ---- Routing decisions ----------------------------------------------------
@@ -109,7 +120,7 @@ class ExplainSemanticSpec
 
   // ---- Transitive deps ------------------------------------------------------
 
-  test("explainSemantic lists requested measures and skipped ones") {
+  test("explainSemantic lists requested measures and split into REQUESTED + AUTO-PULLED") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -121,13 +132,96 @@ class ExplainSemanticSpec
       .aggregate("avg_passengers")
 
     val plan = st.explainSemantic(spark)
+    // All three are computed: avg_passengers (requested) + flight_count + total_passengers (auto-pulled).
     plan should include("avg_passengers")
     plan should include("flight_count")
     plan should include("total_passengers")
-    // Only avg_passengers is requested; others are skipped
+    // The split into REQUESTED vs AUTO-PULLED sub-blocks.
+    plan should include("REQUESTED")
+    plan should include("AUTO-PULLED")
+    // Aggregate label still present.
     plan should include("Will compute:")
-    plan should include("avg_passengers")
+  }
+
+  test("explainSemantic lists declared-but-not-needed measures under Skipped") {
+    // extra_distance is declared but never referenced by any requested measure —
+    // it should appear under "Skipped (not needed)".
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count",     t => count(lit(1))),
+        Measure("extra_distance",   t => sum(t("distance"))),
+      )
+      .groupBy("carrier")
+      .aggregate("total_passengers", "flight_count")
+
+    val plan = st.explainSemantic(spark)
     plan should include("Skipped (not needed)")
+    plan should include("extra_distance")
+  }
+
+  // ---- Scope filtering -----------------------------------------------------
+
+  test("explainSemantic Scope.Used collapses dimensions and measures not referenced by the query") {
+    // carrier and avg_passengers are referenced by this query. origin, distance,
+    // total_passengers, flight_count, extra_distance are declared but NOT used.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(
+        Dimension("carrier", t => t("carrier")),
+        Dimension("origin",  t => t("origin")),
+        Dimension("distance", t => t("distance")),
+      )
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count",     t => count(lit(1))),
+        Measure("avg_passengers",   t => t("total_passengers") / t("flight_count")),
+        Measure("extra_distance",   t => sum(t("distance"))),
+      )
+      .groupBy("carrier")
+      .aggregate("avg_passengers")
+
+    val usedPlan  = st.explainSemantic(spark, Scope.Used)
+    val allPlan   = st.explainSemantic(spark)              // default = All
+
+    // Scope.Used: only the query-touched fields appear in DIMENSIONS / MEASURES
+    // (origin is a declared dimension not referenced by groupBy/aggregate/filter/orderBy)
+    usedPlan should include("carrier")
+    usedPlan should not include "origin"
+    usedPlan should include("more declared")
+    usedPlan should include("use Scope.All")
+
+    // Default Scope.All preserves the legacy full inventory
+    allPlan should include("origin")
+    allPlan should include("extra_distance")
+    allPlan should not include "more declared"
+  }
+
+  // ---- t.all() surface ------------------------------------------------------
+
+  test("explainSemantic surfaces t.all() usage under calc measures") {
+    // A calc using t.all(...) should appear with a 'uses grand totals' line so
+    // a user can see that a 1-row cross-join is built for percent-of-total.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count",     t => count(lit(1))),
+        Measure("avg_passengers",   t => t("total_passengers") / t("flight_count")),
+        Measure("pct_of_passengers",
+          t => t("total_passengers") / t.all("total_passengers")),
+      )
+      .groupBy("carrier")
+      .aggregate("avg_passengers", "pct_of_passengers")
+
+    val plan = st.explainSemantic(spark)
+    // pct_of_passengers uses grand totals:
+    plan should include("uses grand totals")
+    plan should include("total_passengers")
+    // The label appears once per cent-of-total calc — count it to ensure
+    // avg_passengers (a plain calc) does NOT get a 'uses grand totals' line.
+    val grandTotalMarkers = "uses grand totals".r.findAllMatchIn(plan).length
+    grandTotalMarkers shouldBe 1
   }
 
   // ---- Joins ----------------------------------------------------------------
@@ -156,7 +250,6 @@ class ExplainSemanticSpec
   }
 
   // ---- Compound predicate split --------------------------------------------
-
   test("explainSemantic shows AND(pred=dim, pred=measure) split into WHERE + HAVING") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))

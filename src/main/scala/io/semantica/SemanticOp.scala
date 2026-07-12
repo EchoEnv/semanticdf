@@ -3,8 +3,6 @@ package io.semantica
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{col, lit, sum}
 
-import scala.annotation.nowarn
-
 /** Root of the immutable semantic op tree (DESIGN §4.1).
   *
   * Invariants (DESIGN §4.4): nodes are pure case classes; the compiled DataFrame is

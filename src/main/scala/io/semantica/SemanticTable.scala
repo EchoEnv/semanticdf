@@ -164,15 +164,43 @@ final class SemanticTable private[semantica] (
     *  6. WARNINGS         — anything notable (calc cycles, time-grain risk, etc.)
     *  7. SPARK PLAN       — `df.explain()` output (only when `spark` is provided)
     *
-    * Compile is forced iff `spark` is provided — pass `null` for a static-only view
+    * Compile is forced iff `spark` is provided — pass `None` for a static-only view
     * (the cost is just walking the op tree).
     *
     * @param spark optional SparkSession. Required only for section 7 (Spark plan).
-    *              Pass `null` to skip compilation.
+    *              Pass `None` to skip compilation.
     * @return multi-line plan summary
     */
-  def explainSemantic(spark: SparkSession): String = {
+  def explainSemantic(spark: Option[SparkSession]): String = {
     val renderer = new SemanticPlanRenderer(this)
+    renderer.render(spark)
+  }
+
+  /** Convenience overload: pass a SparkSession directly (or null to skip the
+    * Spark plan section). Equivalent to `explainSemantic(Option(spark))`. */
+  def explainSemantic(spark: SparkSession): String =
+    explainSemantic(Option(spark))
+
+  /** Scope selector for field inventory sections (DIMENSIONS, MEASURES).
+    *
+    * - `All`   — every dimension and measure declared on the model (default; legacy).
+    * - `Used`  — only fields referenced by this query (groupBy / aggregate / orderBy / filter).
+    *
+    * Models commonly have many more fields than a single query touches, so `Used` lets
+    * you produce a focused, query-specific report without exploding the section size.
+    *
+    * @example
+    * {{{
+    *   model.groupBy("carrier").aggregate("avg_passengers")
+    *     .explainSemantic(spark, Scope.Used)   // collapsed inventory
+    * }}} */
+  def explainSemantic(spark: SparkSession, scope: Scope): String =
+    explainSemantic(Option(spark), scope)
+
+  /** Same as [[explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:io.semantica.SemanticTable#Scope)]]
+    * but accepts an optional SparkSession (e.g. for a static-only view). */
+  def explainSemantic(spark: Option[SparkSession], scope: Scope): String = {
+    val renderer = new SemanticPlanRenderer(this, scope)
     renderer.render(spark)
   }
 
@@ -813,10 +841,10 @@ final class SemanticGroupBy private[semantica] (
  *   7. WARNINGS          - notable concerns (only if non-empty)
  *   8. SPARK PLAN        - df.explain() output (only when spark is provided)
  */
-private class SemanticPlanRenderer(st: SemanticTable) {
+private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) {
 
   /** Render the multi-section plan. */
-  def render(spark: SparkSession): String = {
+  def render(spark: Option[SparkSession]): String = {
     val sb = new StringBuilder
 
     sb.append(renderSummary())
@@ -831,8 +859,8 @@ private class SemanticPlanRenderer(st: SemanticTable) {
       sb.append(hr()).append(renderWarnings(warnings))
     }
 
-    if (spark != null) {
-      sb.append(hr()).append(renderSparkPlan(spark))
+    spark.foreach { sp =>
+      sb.append(hr()).append(renderSparkPlan(sp))
     }
 
     sb.toString
@@ -847,13 +875,21 @@ private class SemanticPlanRenderer(st: SemanticTable) {
   private def indent(s: String, n: Int = 2): String =
     s.linesIterator.map(line => if (line.isEmpty) line else (" " * n) + line).mkString("\n")
 
-  /** Walk the op tree and return all referenced field names (dims + measures). */
+  /** Walk the op tree and return fields actually referenced by this query.
+    *
+    * A field is "referenced" if it appears in: aggregate keys, aggregate measure
+    * names, sort keys, or filter predicate fields. Transitively-pulled calc deps
+    * are added via a [[MeasureProbeScope]] walk on top of the directly-referenced
+    * set, so a calc measure also surfaces its base-measure dependencies.
+    *
+    * Note: a bare [[SemanticTableOp]] does NOT contribute its declared fields —
+    * `referencedFields` is about what this query *touches*, not what the model
+    * *declares*. Used by [[renderDimensions]] / [[renderMeasures]] under
+    * [[Scope.Used]]. */
   private def referencedFields(): Set[String] = {
-    val acc = scala.collection.mutable.Set[String]()
+    val acc = scala.collection.mutable.Set.empty[String]
     def walk(op: SemanticOp): Unit = op match {
-      case t: SemanticTableOp =>
-        t.dimensions.keys.foreach(acc.add)
-        t.measures.keys.foreach(acc.add)
+      case _: SemanticTableOp        => ()  // leaf: do not enumerate declared fields
       case j: SemanticJoinOp =>
         j.extraDimensions.keys.foreach(acc.add)
         j.extraMeasures.keys.foreach(acc.add)
@@ -865,11 +901,32 @@ private class SemanticPlanRenderer(st: SemanticTable) {
       case SemanticFilterOp(src, pred) =>
         pred.fields.foreach(acc.add)
         walk(src)
-      case SemanticOrderByOp(src, _)   => walk(src)
+      case SemanticOrderByOp(src, keys) =>
+        keys.foreach(k => acc.add(SortKey.nameOf(k)))
+        walk(src)
       case SemanticLimitOp(src, _)     => walk(src)
     }
     walk(st.root)
-    acc.toSet
+
+    // Expand transitively-pulled calc measures so Scope.Used surfaces auto-pulled bases.
+    val allMs = allMeasures().toMap
+    val known = allMs.keySet
+    val queue  = scala.collection.mutable.Queue.empty[String]
+    acc.foreach { n => if (known.contains(n)) queue.enqueue(n) }
+    val closed = scala.collection.mutable.Set.empty[String] ++ acc
+    while (queue.nonEmpty) {
+      val name = queue.dequeue()
+      val m    = allMs(name)
+      val probe = new MeasureProbeScope(known - name)
+      try m.expr(probe) catch { case _: Throwable => }
+      probe.referenced.foreach { dep =>
+        if (!closed.contains(dep) && known.contains(dep)) {
+          closed += dep
+          queue.enqueue(dep)
+        }
+      }
+    }
+    closed.toSet
   }
 
   /** All measure names reachable from the root, in stable order. */
@@ -1024,30 +1081,69 @@ private class SemanticPlanRenderer(st: SemanticTable) {
   }
 
   private def renderTransitiveDeps(): String = {
-    val requested = scala.collection.mutable.LinkedHashSet.empty[String]
-    def walk(op: SemanticOp): Unit = op match {
-      case a: SemanticAggregateOp => a.measureNames.foreach(requested.add)
-      case SemanticFilterOp(src, _)    => walk(src)
+    // First pass: collect only what the user *directly* asked for
+    // (SemanticAggregateOp.measureNames + OrderBy sort keys). Filter predicates
+    // reference dimensions or measures but the dimension/measure router handles
+    // WHERE/HAVING placement in the SEMANTIC ROUTING section, so we don't pull
+    // filter refs here.
+    val requestedDirect = scala.collection.mutable.LinkedHashSet.empty[String]
+    def walkDirect(op: SemanticOp): Unit = op match {
+      case a: SemanticAggregateOp => a.measureNames.foreach(requestedDirect.add)
+      case SemanticFilterOp(src, _)    => walkDirect(src)
       case SemanticOrderByOp(src, keys) =>
-        keys.foreach(k => requested.add(SortKey.nameOf(k)))
-        walk(src)
-      case SemanticLimitOp(src, _)     => walk(src)
+        keys.foreach(k => requestedDirect.add(SortKey.nameOf(k)))
+        walkDirect(src)
+      case SemanticLimitOp(src, _)     => walkDirect(src)
       case _: SemanticJoinOp           =>
       case _: SemanticTableOp          =>
     }
-    walk(st.root)
+    walkDirect(st.root)
 
-    val all        = allMeasures().map(_._1).toSet
-    val requested0 = requested.toSet
-    val skipped    = all -- requested0
-    val unknown    = requested0 -- all
+    val allMs = allMeasures().toMap
+
+    // Transitive closure via MeasureProbeScope: start with directly-requested
+    // measures and expand into calc deps using the same classification probe the
+    // compile path uses. Mirrors SemanticAggregateOp.transitiveClosure.
+    val closed = scala.collection.mutable.LinkedHashMap.empty[String, Measure]
+    val queue  = scala.collection.mutable.Queue.empty[String]
+    requestedDirect.foreach { n => allMs.get(n).foreach { m => closed(n) = m; queue.enqueue(n) } }
+    while (queue.nonEmpty) {
+      val name = queue.dequeue()
+      val m    = closed(name)
+      val probe = new MeasureProbeScope(allMs.keySet - name)
+      try m.expr(probe) catch { case _: Throwable => }
+      probe.referenced.foreach { dep =>
+        if (!closed.contains(dep))
+          allMs.get(dep).foreach { dm => closed(dep) = dm; queue.enqueue(dep) }
+      }
+    }
+    val willCompute = closed.keys.toSet
+    val autoPulled   = willCompute -- requestedDirect
+
+    val all        = allMs.keySet
+    val skipped    = all -- willCompute
+    val unknown    = requestedDirect -- all
 
     val sb = new StringBuilder
     sb.append(heading("TRANSITIVE DEPENDENCIES"))
-    sb.append("  Measures computed (requested directly or by other calc measures).\n")
+    sb.append("  Measures the framework will compute vs. ones it pulled in for you.\n")
     sb.append("  Column pruning means Spark only reads the columns it actually needs.\n")
     sb.append("\n")
-    sb.append(s"  Will compute: ${requested.toSeq.sorted.mkString(", ")}\n")
+    if (requestedDirect.isEmpty && allMs.nonEmpty) {
+      sb.append(s"  (all ${allMs.size} measures available but none requested yet)\n")
+    } else {
+      sb.append(s"  REQUESTED (called by .aggregate / .orderBy):\n")
+      if (requestedDirect.isEmpty)
+        sb.append("    (none — no aggregate / orderBy measures touched)\n")
+      else
+        requestedDirect.toSeq.sorted.foreach(n =>
+          sb.append(s"    ${n}${if (autoPulled.contains(n)) "  [re-stated by transitives]" else ""}\n"))
+      if (autoPulled.nonEmpty) {
+        sb.append(s"  AUTO-PULLED (transitive calc dependencies):\n")
+        autoPulled.toSeq.sorted.foreach(n => sb.append(s"    $n\n"))
+      }
+      sb.append(s"  Will compute: ${willCompute.toSeq.sorted.mkString(", ")}\n")
+    }
     if (unknown.nonEmpty) {
       sb.append(s"  ⚠ Unknown (typo?): ${unknown.toSeq.sorted.mkString(", ")}\n")
     }
@@ -1055,55 +1151,69 @@ private class SemanticPlanRenderer(st: SemanticTable) {
       sb.append(s"  Skipped (not needed): ${skipped.toSeq.sorted.mkString(", ")}\n")
       sb.append(s"  Spark will not compute these — column pruning skips them\n")
     }
-    if (requested0.isEmpty && all.nonEmpty) {
-      sb.append(s"  (all ${all.size} measures available but none requested yet)\n")
-    }
     sb.toString
   }
 
   private def renderDimensions(): String = {
-    val dims = allDimensions()
+    val all    = allDimensions()
+    val used   = referencedFields()
+    val (dims, collapsed) = scope match {
+      case Scope.Used => all.partition { case (n, _) => used.contains(n) }
+      case _                        => (all, Nil)
+    }
     val sb = new StringBuilder
-    sb.append(heading(s"DIMENSIONS (${dims.size})"))
+    val showCount = dims.size + collapsed.size
+    sb.append(heading(s"DIMENSIONS (${dims.size} used / $showCount declared)"))
     sb.append("  Columns you can group by, filter on, or use in orderBy.\n")
     sb.append("\n")
     if (dims.isEmpty) {
-      sb.append("  (none)\n")
-      return sb.toString
+      sb.append("  (none referenced by this query)\n")
+    } else {
+      dims.foreach { case (name, d) =>
+        val flags = scala.collection.mutable.ListBuffer.empty[String]
+        if (d.isTimeDimension)        flags += "time"
+        if (d.isEntity)               flags += "entity"
+        if (d.isEventTimestamp)       flags += "event_ts"
+        if (d.smallestTimeGrain.isDefined) flags += s"grain=${d.smallestTimeGrain.get}"
+        if (d.metadata.get("pii").contains("true")) flags += "pii"
+        val tag  = if (flags.isEmpty) "" else s"  [${flags.mkString(", ")}]"
+        val desc = d.description.fold("")(dd => s"  — $dd")
+        sb.append(s"  $name$tag$desc\n")
+      }
     }
-    dims.foreach { case (name, d) =>
-      val flags = scala.collection.mutable.ListBuffer.empty[String]
-      if (d.isTimeDimension)        flags += "time"
-      if (d.isEntity)               flags += "entity"
-      if (d.isEventTimestamp)       flags += "event_ts"
-      if (d.smallestTimeGrain.isDefined) flags += s"grain=${d.smallestTimeGrain.get}"
-      if (d.metadata.get("pii").contains("true")) flags += "pii"
-      val tag  = if (flags.isEmpty) "" else s"  [${flags.mkString(", ")}]"
-      val desc = d.description.fold("")(dd => s"  — $dd")
-      sb.append(s"  $name$tag$desc\n")
-    }
+    if (collapsed.nonEmpty)
+      sb.append(s"  (${collapsed.size} more declared — not referenced by this query; use Scope.All to expand)\n")
     sb.toString
   }
 
   private def renderMeasures(): String = {
-    val measures = allMeasures()
+    val all        = allMeasures()
+    val usedSet    = referencedFields()
+    val (measures, collapsedMeasures) = scope match {
+      case Scope.Used => all.partition { case (n, _) => usedSet.contains(n) }
+      case _                        => (all, Nil)
+    }
     val sb = new StringBuilder
-    sb.append(heading(s"MEASURES (${measures.size})"))
+    val showCount = measures.size + collapsedMeasures.size
+    sb.append(heading(s"MEASURES (${measures.size} used / $showCount declared)"))
     sb.append("  Aggregations: base = direct agg; calc = built from other measures.\n")
     sb.append("\n")
     if (measures.isEmpty) {
-      sb.append("  (none)\n")
+      sb.append("  (none referenced by this query)\n")
+      if (collapsedMeasures.nonEmpty)
+        sb.append(s"  (${collapsedMeasures.size} more declared — not referenced by this query; use Scope.All to expand)\n")
       return sb.toString
     }
 
     // Probe each measure's expr to detect which other measures it references.
     // Uses a SemanticScope that records refs but never executes — same idea as
     // SemanticOp's ClassificationScope, but DataFrame-free.
-    val known = measures.map(_._1).toSet
+    val known = all.map(_._1).toSet
     measures.foreach { case (name, m) =>
       val probe = new MeasureProbeScope(known - name)
       try { m.expr(probe) } catch { case _: Throwable => /* probe failure => base */ }
-      val deps = probe.referenced.toSet
+      val deps     = probe.referenced.toSet
+      val totals   = probe.referencedTotals.toSet
       val kind = if (deps.nonEmpty) "calc" else "base"
       val tag  = s"[$kind]"
       val desc = m.description.fold("")(d => s"  — $d")
@@ -1112,7 +1222,13 @@ private class SemanticPlanRenderer(st: SemanticTable) {
         val sorted = deps.toSeq.sorted.mkString(", ")
         sb.append(s"    pulls in: $sorted\n")
       }
+      if (totals.nonEmpty) {
+        val sorted = totals.toSeq.sorted.mkString(", ")
+        sb.append(s"    uses grand totals: $sorted  (1-row cross-join)\n")
+      }
     }
+    if (collapsedMeasures.nonEmpty)
+      sb.append(s"  (${collapsedMeasures.size} more declared — not referenced by this query; use Scope.All to expand)\n")
     sb.toString
   }
 
@@ -1218,15 +1334,35 @@ private class SemanticPlanRenderer(st: SemanticTable) {
 
 /** Lightweight probe used by [[SemanticPlanRenderer]] to classify a measure as base
   * vs calc without needing a real DataFrame. Records which known-measure names a
-  * lambda references via `t(name)`; returns `lit(0.0)` for everything (never executes).
-  * Mirrors the intent of [[SemanticOp.ClassificationScope]] but is self-contained
-  * here so the renderer does not depend on a SparkSession. */
+  * lambda references via `t(name)` and via `t.all(name)`; returns `lit(0.0)` for
+  * everything (never executes). Mirrors the intent of
+  * [[SemanticOp.ClassificationScope]] but is self-contained here so the renderer
+  * does not depend on a SparkSession. */
 private final class MeasureProbeScope(known: Set[String]) extends SemanticScope {
-  private[semantica] val referenced = scala.collection.mutable.Set.empty[String]
+  private[semantica] val referenced       = scala.collection.mutable.Set.empty[String]
+  private[semantica] val referencedTotals = scala.collection.mutable.Set.empty[String]
   override def apply(name: String): Column = {
     if (known.contains(name)) referenced += name
     org.apache.spark.sql.functions.lit(0.0)
   }
+  override def all(name: String): Column = {
+    if (known.contains(name)) referencedTotals += name
+    org.apache.spark.sql.functions.lit(0.0)
+  }
+}
+
+/** Field-inventory scope selector for `explainSemantic` (see
+  * [[SemanticTable.explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:* Scope)]]).
+  *
+  * - `All`:  every declared dimension and measure (default — legacy behaviour).
+  * - `Used`: only fields referenced by this query; the rest are collapsed.
+  *
+  * Package-level (not nested in `SemanticTable`) because the underlying renderer is a
+  * private class in this same file and path-dependent types are not visible there. */
+sealed trait Scope
+object Scope {
+  case object All  extends Scope
+  case object Used extends Scope
 }
 
 
