@@ -35,6 +35,21 @@ object SortKey {
   implicit def strToSortKey(name: String): SortKey = Asc(name)
 }
 
+/** Structured result of a [[SemanticTable.validate]] call.
+  *
+  * - `errors`   are conditions that would cause `execute()` to throw at runtime.
+  * - `warnings` are conditions that are legal but worth surfacing (e.g. a time
+  *              dimension with no `smallestTimeGrain` would surprise `atTimeGrain()`).
+  *
+  * `isValid` is the boolean summary; CI checks use that directly. */
+final case class ValidationResult(
+    errors: Seq[String],
+    warnings: Seq[String],
+) {
+  def isValid: Boolean = errors.isEmpty
+  def hasIssues: Boolean = errors.nonEmpty || warnings.nonEmpty
+}
+
 /** Immutable facade over the root of a semantic op tree (DESIGN §4.1).
   *
   * A `SemanticTable` is *not* a Spark `DataFrame`; it is a deferred, source-agnostic
@@ -801,6 +816,98 @@ final class SemanticTable private[semantica] (
   def previewSchema(spark: SparkSession): StructType =
     toDataFrame(spark).schema
 
+  /** Validate the op tree without compiling.
+    *
+    * Walks the model definition only — no `SparkSession` is required, no compile,
+    * no DataFrame materialization. Use this in CI to pre-flight a model before
+    * deploying, or in interactive REPLs to check a freshly-built table.
+    *
+    * - **Errors** are conditions that would cause `execute()` to throw. Examples:
+    *   calc measure self-cycles, filter references an unknown field.
+    * - **Warnings** are conditions that are legal but worth surfacing. Examples:
+    *   time dimension declared without `smallestTimeGrain` would raise a clear
+    *   error from `atTimeGrain()` on any request.
+    *
+    * @return structured report; `isValid` is the boolean summary. */
+  def validate(): ValidationResult = {
+    val errors   = scala.collection.mutable.ListBuffer.empty[String]
+    val warnings = scala.collection.mutable.ListBuffer.empty[String]
+
+    // Single op-tree walk to collect everything we need. Inline (rather than calling
+    // the renderer's helpers) so validate() stays compile-free and self-contained.
+    val allMs        = scala.collection.mutable.LinkedHashMap.empty[String, Measure]
+    val allDs        = scala.collection.mutable.LinkedHashMap.empty[String, Dimension]
+    val allFilters   = scala.collection.mutable.ListBuffer.empty[SemanticFilterOp]
+    def walk(op: SemanticOp): Unit = op match {
+      case t: SemanticTableOp =>
+        t.measures.foreach { case (n, m) => allMs.update(n, m) }
+        t.dimensions.foreach { case (n, d) => allDs.update(n, d) }
+      case j: SemanticJoinOp =>
+        j.extraMeasures.foreach { case (n, m) => allMs.update(n, m) }
+        j.extraDimensions.foreach { case (n, d) => allDs.update(n, d) }
+        walk(j.left); walk(j.right)
+      case a: SemanticAggregateOp     => walk(a.source)
+      case f @ SemanticFilterOp(src, _) =>
+        allFilters += f
+        walk(src)
+      case SemanticOrderByOp(src, _)  => walk(src)
+      case SemanticLimitOp(src, _)    => walk(src)
+    }
+    walk(root)
+    val allMsMap      = allMs.toMap
+    val measureNames  = allMsMap.keySet
+    val knownFields   = allDs.keySet ++ measureNames
+
+    // 1. Cycle detection on calc measures (ERROR — topologicalLayers throws at execute()).
+    def isCalcOf(m: Measure, target: String, depth: Int = 0): Boolean = {
+      if (depth > 32) return false
+      val exprSrc = m.expr.toString
+      allMsMap.values.filter(_ ne m).exists { other =>
+        exprSrc.contains(s""""${other.name}""") && (
+          other.name == target || isCalcOf(other, target, depth + 1)
+        )
+      }
+    }
+    allMsMap.foreach { case (n, m) =>
+      if (isCalcOf(m, n)) errors += s"measure '$n' depends on itself (cycle)"
+    }
+
+    // 2. Filter references an unknown field (ERROR).
+    allFilters.foreach { f =>
+      f.predicate.fields.foreach { field =>
+        if (!knownFields.contains(field))
+          errors += s"filter references unknown field '$field'"
+      }
+    }
+
+    // 3. Time dimension without smallestTimeGrain (WARNING).
+    allDs.foreach { case (n, d) =>
+      if (d.isTimeDimension && d.smallestTimeGrain.isEmpty)
+        warnings += s"time dimension '$n' has no smallestTimeGrain — atTimeGrain() will raise on any request"
+    }
+
+    // 4. AND or OR predicate that mixes dim + measure categories (WARNING).
+    //    The whole predicate goes post-agg (which may not be the user's intent).
+    //    Note: `where()` already splits ANDs into separate filter nodes at
+    //    construction time, so AND never reaches this check. OR is preserved
+    //    intact and is the case users will actually see in practice.
+    allFilters.foreach { f =>
+      val mixed = f.predicate match {
+        case Predicate.And(children @ _*) =>
+          children.exists(p => Predicate.referencesMeasure(p, measureNames)) &&
+          children.exists(p => !Predicate.referencesMeasure(p, measureNames))
+        case Predicate.Or(children @ _*) =>
+          children.exists(p => Predicate.referencesMeasure(p, measureNames)) &&
+          children.exists(p => !Predicate.referencesMeasure(p, measureNames))
+        case _ => false
+      }
+      if (mixed)
+        warnings += s"compound predicate mixes dim + measure conditions: ${f.predicate.describe} — whole predicate goes post-agg"
+    }
+
+    ValidationResult(errors.toSeq, warnings.toSeq)
+  }
+
   // -------------------------------------------------------------------------
   // Internals (reordered for readability)
   // -------------------------------------------------------------------------
@@ -950,7 +1057,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
   }
 
   /** All measure names reachable from the root, in stable order. */
-  private def allMeasures(): Seq[(String, Measure)] = {
+  private[semantica] def allMeasures(): Seq[(String, Measure)] = {
     val acc = scala.collection.mutable.LinkedHashMap.empty[String, Measure]
     def walk(op: SemanticOp): Unit = op match {
       case t: SemanticTableOp =>
@@ -968,7 +1075,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
   }
 
   /** All dimensions reachable from the root, in stable order. */
-  private def allDimensions(): Seq[(String, Dimension)] = {
+  /** All dimensions reachable from the root, in stable order. */
+  private[semantica] def allDimensions(): Seq[(String, Dimension)] = {
     val acc = scala.collection.mutable.LinkedHashMap.empty[String, Dimension]
     def walk(op: SemanticOp): Unit = op match {
       case t: SemanticTableOp =>
@@ -1002,7 +1110,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
   }
 
   /** All filter operations, in op-tree order (top-down). */
-  private def allFilters(): Seq[(SemanticFilterOp, Boolean)] = {
+  private[semantica] def allFilters(): Seq[(SemanticFilterOp, Boolean)] = {
     // Boolean = "is HAVING (post-agg)" — true iff the filter's own source is an
     // aggregate (matches SemanticFilterOp.compile's runtime check).
     val acc = scala.collection.mutable.ListBuffer.empty[(SemanticFilterOp, Boolean)]
@@ -1297,41 +1405,9 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     sb.toString
   }
 
-  private def collectWarnings(): Seq[String] = {
-    val out = scala.collection.mutable.ListBuffer.empty[String]
-    val allMs = allMeasures().toMap
-    // 1. Cycle detection on calc measures
-    def isCalcOf(m: Measure, target: String, depth: Int = 0): Boolean = {
-      if (depth > 32) return false
-      val exprSrc = m.expr.toString
-      allMs.values.filter(_ ne m).exists { other =>
-        exprSrc.contains(s""""${other.name}""") && (
-          other.name == target || isCalcOf(other, target, depth + 1)
-        )
-      }
-    }
-    allMs.foreach { case (n, m) =>
-      if (isCalcOf(m, n)) out += s"'$n' depends on itself (cycle)"
-    }
-    // 2. Time dimensions without smallestTimeGrain (might surprise atTimeGrain)
-    allDimensions().foreach { case (n, d) =>
-      if (d.isTimeDimension && d.smallestTimeGrain.isEmpty)
-        out += s"time dimension '$n' has no smallestTimeGrain — atTimeGrain() will raise on any request"
-    }
-    // 3. AND predicate that mixes dim + measure categories (whole predicate goes to HAVING)
-    val measureNames = allMs.keySet
-    allFilters().foreach { case (SemanticFilterOp(_, pred), _) =>
-      if (pred.isInstanceOf[Predicate.And]) {
-        val children = pred.asInstanceOf[Predicate.And].children
-        val refsMeasure   = children.exists(p => Predicate.referencesMeasure(p, measureNames))
-        val refsDimension = children.exists(p => !Predicate.referencesMeasure(p, measureNames))
-        if (refsMeasure && refsDimension) {
-          out += s"compound AND mixes dim + measure conditions: ${pred.describe} — whole predicate goes post-agg"
-        }
-      }
-    }
-    out.toSeq
-  }
+  // Single source of truth for warnings/errors: the public `validate()` method.
+  // The renderer just consumes the warnings half for its WARNINGS section.
+  private def collectWarnings(): Seq[String] = st.validate().warnings
 
   private def renderWarnings(warnings: Seq[String]): String = {
     val sb = new StringBuilder

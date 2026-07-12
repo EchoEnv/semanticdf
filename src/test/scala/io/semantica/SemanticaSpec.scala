@@ -701,6 +701,69 @@ class SemanticaSpec
     extended.length should be > simple.length
   }
 
+  // ---- Validate (compile-free structural check) -------------------------------
+
+  test("Phase B: validate() on a valid model returns no errors") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(
+        Measure("total_passengers", t => sum(t("passengers"))),
+        Measure("flight_count",     t => count(lit(1))),
+      )
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+
+    val result = st.validate()
+    result.isValid shouldBe true
+    result.errors shouldBe empty
+  }
+
+  test("Phase B: validate() flags a filter that references an unknown field") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+      .where("nonexistent_field" === "AA")
+      .groupBy("carrier")
+      .aggregate("flight_count")
+
+    val result = st.validate()
+    result.isValid shouldBe false
+    result.errors.exists(_.contains("nonexistent_field")) shouldBe true
+  }
+
+  test("Phase B: validate() warns when a time dimension has no smallestTimeGrain") {
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(
+        // Dimension.time sets isTimeDimension=true on the dimension regardless of
+        // what the expr resolves to. We're testing the validate() warning, not the
+        // column type, so the column reference is incidental.
+        Dimension.time("ts", t => t("carrier"), smallestTimeGrain = None),
+      )
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+      .groupBy("ts")
+      .aggregate("flight_count")
+
+    val result = st.validate()
+    result.isValid shouldBe true            // warning, not error
+    result.warnings.exists(_.contains("ts")) shouldBe true
+  }
+
+  test("Phase B: validate() warns on OR predicate that mixes dim + measure refs") {
+    // `where()` splits ANDs into separate WHERE/HAVING nodes, so an AND never
+    // reaches validate() intact. OR is preserved as a single node, so the
+    // dim+measure mix is observable.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .where(("carrier" === "AA") or ("total_passengers" > 100))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+
+    val result = st.validate()
+    result.isValid shouldBe true            // warning, not error
+    result.warnings.exists(_.contains("compound predicate mixes")) shouldBe true
+  }
+
   test("Phase B: SemanticLogger emits DEBUG classification for a calc measure") {
     // This test verifies the logger is wired correctly: no crash, non-empty debug output.
     // The DEBUG output goes to the test log (captured by ScalaTest's reporter).
