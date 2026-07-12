@@ -677,6 +677,30 @@ class SemanticaSpec
     sparkPlan should include("=")  // basic explain has === separators
   }
 
+  test("Phase B: explainExtended returns the extended/cost-mode plan") {
+    // The extended plan is a strict superset of the simple one — it includes
+    // Parsed / Analyzed / Optimized logical-plan sections in addition to the
+    // physical plan. Those logical-plan sections are unique to extended mode;
+    // if `explainExtended` is ever silently downgraded to simple, this test
+    // catches it.
+    val st = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
+      .groupBy("carrier")
+      .aggregate("total_passengers")
+
+    val simple   = st.explain(spark)
+    val extended = st.explainExtended(spark)
+
+    extended should not be empty
+    extended should include("== Physical Plan ==")
+    // Only extended mode emits logical-plan sections. This is the discriminator.
+    extended should include("== Parsed Logical Plan ==")
+    extended should include("== Optimized Logical Plan ==")
+    // Sanity: extended is strictly larger than simple (logical plans add bytes).
+    extended.length should be > simple.length
+  }
+
   test("Phase B: SemanticLogger emits DEBUG classification for a calc measure") {
     // This test verifies the logger is wired correctly: no crash, non-empty debug output.
     // The DEBUG output goes to the test log (captured by ScalaTest's reporter).

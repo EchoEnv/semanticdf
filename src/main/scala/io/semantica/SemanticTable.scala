@@ -147,6 +147,26 @@ final class SemanticTable private[semantica] (
     )
   }
 
+  /** Print the extended Spark plan after compiling the op tree.
+    *
+    * Equivalent to `df.explain(true)` — `ExplainMode.fromString("extended")`. Includes
+    * cost/operator-level output that `[[explain(spark)]]` (simple mode) omits, e.g.
+    * whole-stage codegen sections and per-operator formatted detail. Use this when
+    * debugging join strategies, shuffle volume, or codegen paths.
+    *
+    * For a *semantica-aware, human-readable* view (WHERE vs HAVING, transitive deps,
+    * join intent), see `[[explainSemantic]]` instead.
+    *
+    * @param spark the active SparkSession
+    * @return Spark's extended explain output string
+    */
+  def explainExtended(spark: SparkSession): String = {
+    val df = toDataFrame(spark)
+    df.queryExecution.explainString(
+      org.apache.spark.sql.execution.ExplainMode.fromString("extended")
+    )
+  }
+
   /** Human-readable plan combining semantic intent + Spark's physical plan (Tier 1.5,
     * roadmap §1.5).
     *
