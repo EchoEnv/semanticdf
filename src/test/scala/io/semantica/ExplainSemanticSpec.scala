@@ -32,6 +32,37 @@ class ExplainSemanticSpec
     plan should include("SPARK PLAN")
   }
 
+  test("explainSemantic demo: full query with filter, calc measure, and join") {
+    val customers = toSemanticTable(customersDf, name = Some("customers"))
+      .withDimensions(Dimension("customer_id", t => t("customer_id")))
+      .withMeasures(Measure("customer_count", t => count(lit(1))))
+
+    val orders = toSemanticTable(ordersDf, name = Some("orders"))
+      .withDimensions(
+        Dimension("order_id",    t => t("order_id")),
+        Dimension("customer_id", t => t("customer_id")),
+      )
+      .withMeasures(
+        Measure("order_count",   t => count(lit(1))),
+        Measure("orders_per_customer", t => t("order_count") / t("customer_count")),
+      )
+      .join_one(customers,
+        on = (l, r) => l("customer_id") === r("customer_id"))
+      .where("customer_id" === "C001")
+      .groupBy("customer_id")
+      .aggregate("orders_per_customer")
+
+    val plan = orders.explainSemantic(spark)
+
+    // Joined tables both shown in PLAN SUMMARY
+    plan should include("orders")
+    plan should include("customers")
+    plan should include("WHERE")
+    // calc measure classification
+    plan should include("orders_per_customer")
+    plan should include("[calc]")
+  }
+
   test("explainSemantic works without spark (skip SPARK PLAN section)") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withMeasures(Measure("flight_count", t => count(lit(1))))
@@ -91,11 +122,12 @@ class ExplainSemanticSpec
 
     val plan = st.explainSemantic(spark)
     plan should include("avg_passengers")
-    plan should include("flight_count")         // in measure catalog
-    plan should include("total_passengers")     // in measure catalog
-    // avg_passengers is the only one requested
-    plan should include("Requested:")
-    plan should include("Skipped")
+    plan should include("flight_count")
+    plan should include("total_passengers")
+    // Only avg_passengers is requested; others are skipped
+    plan should include("Will compute:")
+    plan should include("avg_passengers")
+    plan should include("Skipped (not needed)")
   }
 
   // ---- Joins ----------------------------------------------------------------
@@ -144,5 +176,10 @@ class ExplainSemanticSpec
     plan should include("HAVING")
     plan should include("carrier = AA")
     plan should include("total_passengers > 100")
+    // Aggregate info still surfaced even though root is wrapped by HAVING
+    plan should include("group by:")
+    plan should include("total_passengers")
   }
+
+
 }

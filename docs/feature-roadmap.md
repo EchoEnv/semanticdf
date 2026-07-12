@@ -106,58 +106,84 @@ Output: sidebar nav (all models), per-model cards with dimension/measure/join ta
 
 ### 1.5 EXPLAIN that shows semantic intent ✅ (v0.1.0)
 
-**Done.** `SemanticTable.explainSemantic(spark)` produces a multi-section plan:
+**Done.** `SemanticTable.explainSemantic(spark)` produces a multi-section plan
+designed to be readable by humans and useful for LLM agents debugging query plans.
+Sections use light-box-drawing separators and plain-language explanations:
 
 ```
 PLAN SUMMARY
-------------
-  1 filter(s)  ·  groupBy(carrier).aggregate(flight_count)
+────────────
+  table:   flights
+  group by: carrier
+  compute:  total_passengers
+  filters: 2 applied
 
-================================================================================
+──────────────────────────────────────────────────
 SEMANTIC ROUTING
-----------------
-  WHERE  (pre-agg)   carrier = AA
-                     refs: [carrier]
+────────────────
+  Why each filter goes WHERE (before agg) vs HAVING (after agg).
+  Think: WHERE = fast pre-aggregation; HAVING = post-aggregation only.
 
-================================================================================
+  HAVING → total_passengers > 100
+      └─ runs after aggregation (slower); touches: total_passengers
+  WHERE  → carrier = AA
+      └─ runs before aggregation (fast); touches: carrier
+
+──────────────────────────────────────────────────
 TRANSITIVE DEPENDENCIES
------------------------
-  Requested: flight_count
-  Measure catalog (all reachable): flight_count
+───────────────────────
+  Measures computed (requested directly or by other calc measures).
+  Column pruning means Spark only reads the columns it actually needs.
 
-================================================================================
+  Will compute: total_passengers
+  Skipped (not needed): flight_count
+  Spark will not compute these — column pruning skips them
+
+──────────────────────────────────────────────────
 DIMENSIONS (1)
---------------
+──────────────
+  Columns you can group by, filter on, or use in orderBy.
+
   carrier
 
-================================================================================
+──────────────────────────────────────────────────
 MEASURES (1)
-------------
-  flight_count  [base]
+────────────
+  Aggregations: base = direct agg; calc = built from other measures.
 
-================================================================================
+  total_passengers  [base]
+
+──────────────────────────────────────────────────
 JOINS (0)
----------
+─────────
   (none)
 
-================================================================================
+──────────────────────────────────────────────────
 SPARK PLAN (df.explain)
------------------------
+───────────────────────
   == Physical Plan ==
-  AdaptiveSparkPlan ...
+  AdaptiveSparkPlan isFinalPlan=false
+  +- Filter (isnotnull(total_passengers#L) AND (total_passengers#L > 100))
+     +- HashAggregate(keys=[carrier#X], functions=[sum(passengers#Y)])
+        ...
 ```
 
-Sections: PLAN SUMMARY, SEMANTIC ROUTING, TRANSITIVE DEPENDENCIES, DIMENSIONS,
-MEASURES, JOINS, WARNINGS (when applicable), SPARK PLAN (when spark is provided).
-
-The previous `explain()` and `explain(spark)` methods are unchanged.
+**Design principles applied:**
+- **Plain language over jargon.** `runs before aggregation (fast)` instead of `pre-agg`.
+- **Tree-drawing glyphs** (`└─`, `→`) to show hierarchy and direction.
+- **Light separators** (`─` × 50) instead of heavy 80-char `===` lines.
+- **Per-section one-liner explainer** so first-time readers know what each section is for.
+- **Joins show all involved tables**: `table: orders + customers` instead of just one.
+- **Aggregate info surfaced even when wrapped** (e.g. by HAVING) — dig through filters.
+- **Calc-vs-base classification uses a real probe** (`MeasureProbeScope`) that records
+  measure references without executing; replaces the previous broken string-match heuristic.
 
 **Files changed:**
-- `src/main/scala/io/semantica/SemanticTable.scala` — added `explainSemantic` and
-  private `SemanticPlanRenderer` (~420 LOC).
-- `src/test/scala/io/semantica/ExplainSemanticSpec.scala` — 7 regression tests.
+- `src/main/scala/io/semantica/SemanticTable.scala` — added `explainSemantic`, private
+  `SemanticPlanRenderer`, `MeasureProbeScope`, plus refactors to renderers (~520 LOC).
+- `src/test/scala/io/semantica/ExplainSemanticSpec.scala` — 8 regression tests.
 
-**Effort:** ~1 person-day (rendering logic only; primitives already existed).
+**Effort:** ~1.5 person-days (rendering + polish after first user feedback).
 
 ```
 PLAN for orders.groupBy("carrier").where("status === 'shipped'").aggregate("total_revenue"):
