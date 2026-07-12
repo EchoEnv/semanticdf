@@ -1020,9 +1020,6 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
                      else tableNames.mkString(" + ")
     sb.append(s"  table:   $tableLabel\n")
 
-    val filterCount = allFilters().size
-    val joinCount   = allJoins().size
-
     // Find the aggregate even if it's wrapped by HAVING/orderBy/limit filters.
     def findAggregate(op: SemanticOp): Option[SemanticAggregateOp] = op match {
       case a: SemanticAggregateOp => Some(a)
@@ -1046,8 +1043,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         }
     }
 
-    if (filterCount > 0) sb.append(s"  filters: $filterCount applied\n")
-    if (joinCount   > 0) sb.append(s"  joins:   $joinCount\n")
+    // (Filters and joins are summarised in their own sections — no duplicate counters here.)
     sb.toString
   }
 
@@ -1162,8 +1158,9 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case _                        => (all, Nil)
     }
     val sb = new StringBuilder
-    val showCount = dims.size + collapsed.size
-    sb.append(heading(s"DIMENSIONS (${dims.size} used / $showCount declared)"))
+    val declared = dims.size + collapsed.size
+    val label    = if (collapsed.isEmpty) s"${dims.size}" else s"${dims.size} of $declared"
+    sb.append(heading(s"DIMENSIONS ($label)"))
     sb.append("  Columns you can group by, filter on, or use in orderBy.\n")
     sb.append("\n")
     if (dims.isEmpty) {
@@ -1194,8 +1191,9 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case _                        => (all, Nil)
     }
     val sb = new StringBuilder
-    val showCount = measures.size + collapsedMeasures.size
-    sb.append(heading(s"MEASURES (${measures.size} used / $showCount declared)"))
+    val declared = measures.size + collapsedMeasures.size
+    val label    = if (collapsedMeasures.isEmpty) s"${measures.size}" else s"${measures.size} of $declared"
+    sb.append(heading(s"MEASURES ($label)"))
     sb.append("  Aggregations: base = direct agg; calc = built from other measures.\n")
     sb.append("\n")
     if (measures.isEmpty) {
@@ -1219,10 +1217,22 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       val desc = m.description.fold("")(d => s"  — $d")
       sb.append(s"  $name  $tag$desc\n")
       if (deps.nonEmpty) {
-        val sorted = deps.toSeq.sorted.mkString(", ")
-        sb.append(s"    pulls in: $sorted\n")
-      }
-      if (totals.nonEmpty) {
+        // When `totals` ⊆ `deps`, mark each in-deps entry that's also a grand-total
+        // reference inline, so the reader doesn't see the same name twice in two
+        // adjacent lines. Standalone totals (those not already in `deps`) keep
+        // their own line.
+        val annotated = deps.toSeq.sorted.map { d =>
+          if (totals.contains(d)) s"$d (as grand total)" else d
+        }
+        sb.append(s"    pulls in: ${annotated.mkString(", ")}\n")
+        val standaloneTotals = totals -- deps
+        if (standaloneTotals.nonEmpty) {
+          val sorted = standaloneTotals.toSeq.sorted.mkString(", ")
+          sb.append(s"    uses grand totals: $sorted  (1-row cross-join)\n")
+        } else if (totals.nonEmpty) {
+          sb.append(s"    (grand totals via 1-row cross-join)\n")
+        }
+      } else if (totals.nonEmpty) {
         val sorted = totals.toSeq.sorted.mkString(", ")
         sb.append(s"    uses grand totals: $sorted  (1-row cross-join)\n")
       }
@@ -1242,19 +1252,28 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     }
     joins.foreach { j =>
       val card     = j.cardinality.toString.toUpperCase
-      val strategy = j.cardinality match {
-        case JoinCardinality.One   => "LEFT JOIN — each row on the right matches at most one on the left"
-        case JoinCardinality.Many  => "PRE-AGGREGATE both sides, then JOIN — prevents fan-out explosion"
-        case JoinCardinality.Cross => "CROSS JOIN — every row on the left x every row on the right"
+      val (verb, blurb) = j.cardinality match {
+        case JoinCardinality.One   => ("LEFT JOIN",          "each row on the right matches at most one on the left")
+        case JoinCardinality.Many  => ("PRE-AGG, then JOIN", "each side pre-aggregated at join-key grain — prevents fan-out explosion")
+        case JoinCardinality.Cross => ("CROSS JOIN",         "every row on the left × every row on the right")
       }
-      sb.append(s"  $card  $strategy\n")
+      val keys = Option(j.grainCols).getOrElse(Seq.empty)
+      j.cardinality match {
+        case JoinCardinality.Cross =>
+          sb.append(s"  $card  $verb — $blurb\n")
+        case _ =>
+          // grainCols is populated during compile(); before that it's null. Fall
+          // back to a placeholder so an uncompiled SemanticTable still renders sanely.
+          val keysStr = if (keys.isEmpty) "(uncompiled)" else keys.mkString("[", ", ", "]")
+          sb.append(s"  $card  $verb on $keysStr\n")
+          sb.append(s"       $blurb\n")
+      }
       if (j.extraDimensions.nonEmpty) {
         sb.append(s"    brings in dimensions: ${j.extraDimensions.keys.toSeq.sorted.mkString(", ")}\n")
       }
       if (j.extraMeasures.nonEmpty) {
         sb.append(s"    brings in measures:  ${j.extraMeasures.keys.toSeq.sorted.mkString(", ")}\n")
       }
-      sb.append(s"    join keys visible in SPARK PLAN below\n")
     }
     sb.toString
   }
