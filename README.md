@@ -9,9 +9,9 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **34/34 tests green** under Spark 3.5.8
-(default), 4.0.0, and 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of record
-and [`docs/adr/`](docs/adr/) for recorded decisions.
+**Status:** v0.1 — core capabilities complete. **150/150 tests green** under Spark
+3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
+record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
 ## Build
 
