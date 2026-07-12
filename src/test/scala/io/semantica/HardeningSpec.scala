@@ -243,4 +243,50 @@ class HardeningSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
     ex.getMessage should include("fligt_date")
     ex.getMessage should include("Did you mean: 'flight_date'")
   }
+
+  // ---- Percent-of-total cross-join: explicit broadcast hint --------------------
+
+  test("Phase A: percent-of-total cross-join is broadcast even when auto-broadcast is disabled") {
+    // The percent-of-total path cross-joins a 1-row totals table against the
+    // aggregated result. With the explicit broadcast() hint the side is
+    // always shipped to executors. Without the hint Catalyst usually
+    // auto-broadcasts (because the side is 1 row) but isn't guaranteed.
+    //
+    // This test sets autoBroadcastJoinThreshold = -1 to disable Catalyst's
+    // auto-broadcast decision, then asserts the physical plan still uses
+    // broadcast. If the explicit hint is ever removed, this test fails.
+    val schema = new org.apache.spark.sql.types.StructType()
+      .add("carrier", org.apache.spark.sql.types.StringType)
+      .add("passengers", org.apache.spark.sql.types.IntegerType)
+    val rows = spark.sparkContext.parallelize(Seq(
+      Row("AA", 100), Row("AA", 200), Row("UA", 50), Row("DL", 75),
+    ))
+    val d = spark.createDataFrame(rows, schema)
+    val st = toSemanticTable(d, name = Some("f"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(
+        Measure("total_passengers",  t => sum(t("passengers"))),
+        Measure("pct_of_passengers", t => t("total_passengers") / t.all("total_passengers")),
+      )
+      .groupBy("carrier").aggregate("pct_of_passengers")
+
+    val originalThreshold = spark.conf.get("spark.sql.autoBroadcastJoinThreshold")
+    try {
+      spark.conf.set("spark.sql.autoBroadcastJoinThreshold", "-1")
+      val plan = st.execute(spark).queryExecution.explainString(
+        org.apache.spark.sql.execution.ExplainMode.fromString("simple")
+      )
+      // Either of these physical operators is proof the side was broadcast:
+      //   BroadcastExchange          — the side shipped to executors
+      //   BroadcastNestedLoopJoin    — the cross-join used a broadcast side
+      //   BroadcastHashJoin          — the join strategy that consumes a broadcast input
+      // (Catalyst may rewrite the plan; any of these is acceptable evidence.)
+      val broadcasted = plan.contains("BroadcastExchange") ||
+                        plan.contains("BroadcastNestedLoopJoin") ||
+                        plan.contains("BroadcastHashJoin")
+      assert(broadcasted, s"Expected a broadcast in physical plan, got:\n$plan")
+    } finally {
+      spark.conf.set("spark.sql.autoBroadcastJoinThreshold", originalThreshold)
+    }
+  }
 }

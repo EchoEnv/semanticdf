@@ -1,7 +1,7 @@
 package io.semantica
 
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
-import org.apache.spark.sql.functions.{col, lit, sum}
+import org.apache.spark.sql.functions.{broadcast, col, lit, sum}
 
 import scala.util.DynamicVariable
 
@@ -534,7 +534,13 @@ final case class SemanticAggregateOp(
         val totalsRenamed = totalsRaw.select(
           totalsRaw.columns.map(c => totalsRaw(c).as(TotalColPrefix + c)): _*
         )
-        aggregated = aggregated.crossJoin(totalsRenamed)
+        // broadcast() forces Catalyst to ship the 1-row totals side to every
+        // executor, eliminating shuffle on the cross-join. Without the hint,
+        // Catalyst may auto-broadcast (because the side is 1 row) but isn't
+        // guaranteed — particularly under `autoBroadcastJoinThreshold=-1`
+        // or when the side gets repartitioned. The explicit hint makes the
+        // contract clear: this cross-join is always broadcast.
+        aggregated = aggregated.crossJoin(broadcast(totalsRenamed))
         val resolve: String => Column = (name: String) => {
           val tc = TotalColPrefix + name
           if (aggregated.columns.contains(tc)) aggregated(tc)
