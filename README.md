@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **193/193 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **196/196 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -281,6 +281,7 @@ parent first).
 | [`examples/customer-analytics`](examples/customer-analytics/README.md) | RFM segmentation + cohort activity (calc-of-calc composition) |
 | [`examples/operations-analytics`](examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (z-score) |
 | [`examples/telco-analytics`](examples/telco-analytics/README.md) | Telco: monthly ARPU per plan, promotion effectiveness, roaming revenue |
+| [`examples/hospital`](examples/hospital/README.md) | Hospital: data cleansing workflow (dedup, normalize, fill), ALOS, 30-day readmission rate |
 
 Run any of them:
 
@@ -319,7 +320,7 @@ Reads a data file via Spark, infers dimensions (StringType → dim, NumericType 
 
 ## Cross-version compatibility
 
-Verified green on all three lines (193 tests each — Phase D + integration + YAML loader +
+Verified green on all three lines (196 tests each — Phase D + integration + YAML loader +
 regression suites):
 
 | Spark | Scala | Status |
