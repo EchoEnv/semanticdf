@@ -427,6 +427,10 @@ object YamlLoader {
       "lag", "lead", "nth_value", "first_value", "last_value",
       // other functions commonly used in measure expressions
       "coalesce", "cast", "round", "floor", "ceil", "abs", "distinct", "over", "partition",
+      // date / time functions
+      "datediff", "date_add", "date_sub", "date_trunc", "trunc", "current_date", "current_timestamp",
+      // case-when syntax
+      "case", "when", "then", "else", "end",
       // SQL clauses / types that may appear in casts
       "as", "by", "int", "long", "double", "decimal", "string", "boolean", "date", "timestamp",
       // window frame syntax
