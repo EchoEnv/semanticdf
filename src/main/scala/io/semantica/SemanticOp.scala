@@ -25,6 +25,7 @@ object SemanticOp {
     case SemanticFilterOp(src, _)       => rootModel(src)
     case SemanticOrderByOp(src, _)      => rootModel(src)
     case SemanticLimitOp(src, _)        => rootModel(src)
+    case SemanticHintOp(src, _, _)      => rootModel(src)
   }
 }
 

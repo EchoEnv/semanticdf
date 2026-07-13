@@ -141,6 +141,9 @@ final class SemanticTable private[semantica] (
       sb.append(s"${indent}limit($n)\n")
       sb.append(s"${indent}  source:\n")
       explainNode(src, sb, indent + "    ")
+
+    // Hint is a Spark planner wrapper; semantically a pass-through for non-compile concerns.
+    case SemanticHintOp(src, _, _) => explainNode(src, sb, indent)
   }
 
   /** Print the Spark physical plan after compiling the op tree.
@@ -336,6 +339,8 @@ final class SemanticTable private[semantica] (
     case o: SemanticOrderByOp => collectSchemaFields(o.source, joinSource, joinCardinality)
     case l: SemanticLimitOp   => collectSchemaFields(l.source, joinSource, joinCardinality)
     case a: SemanticAggregateOp => collectSchemaFields(a.source, joinSource, joinCardinality)
+    // Hint is a Spark planner wrapper; semantically a pass-through.
+    case h: SemanticHintOp    => collectSchemaFields(h.source, joinSource, joinCardinality)
   }
 
   // -------------------------------------------------------------------------
@@ -376,6 +381,11 @@ final class SemanticTable private[semantica] (
         val inner = new SemanticTable(src).withDimensions(dims: _*)
         new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates)
 
+      // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
+      case SemanticHintOp(src, strategy, params) =>
+        val inner = new SemanticTable(src).withDimensions(dims: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates)
+
       case _ =>
         throw new IllegalStateException(
           s"withDimensions: unexpected root type ${root.getClass.getSimpleName}"
@@ -414,6 +424,11 @@ final class SemanticTable private[semantica] (
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
         new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates)
+
+      // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
+      case SemanticHintOp(src, strategy, params) =>
+        val inner = new SemanticTable(src).withMeasures(measures: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates)
 
       case _ =>
         throw new IllegalStateException(
@@ -730,6 +745,7 @@ final class SemanticTable private[semantica] (
     case SemanticFilterOp(src, _)     => new SemanticTable(src).resolveDimension(name)
     case SemanticOrderByOp(src, _)    => new SemanticTable(src).resolveDimension(name)
     case SemanticLimitOp(src, _)      => new SemanticTable(src).resolveDimension(name)
+    case SemanticHintOp(src, _, _)    => new SemanticTable(src).resolveDimension(name)
     case _ => SemanticOp.rootModel(root).flatMap(_.dimensions.get(name))
   }
 
@@ -738,6 +754,9 @@ final class SemanticTable private[semantica] (
     case j: SemanticJoinOp  => j.mergedModel.measures.keySet
     case SemanticFilterOp(src, _) =>
       // Unwrap filters to find the underlying model.
+      new SemanticTable(src).resolveAllMeasureNames
+    case SemanticHintOp(src, _, _) =>
+      // Hint is a Spark planner wrapper; recurse to find the underlying model.
       new SemanticTable(src).resolveAllMeasureNames
     case _ =>
       SemanticOp.rootModel(root).map(_.measures.keySet).getOrElse(Set.empty)
@@ -881,6 +900,7 @@ final class SemanticTable private[semantica] (
         walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
+      case SemanticHintOp(src, _, _)  => walk(src)
     }
     walk(root)
     val allMsMap      = allMs.toMap
@@ -949,6 +969,7 @@ final class SemanticTable private[semantica] (
     case SemanticFilterOp(src, _)  => new SemanticTable(src).resolveRootModel
     case SemanticOrderByOp(src, _) => new SemanticTable(src).resolveRootModel
     case SemanticLimitOp(src, _)   => new SemanticTable(src).resolveRootModel
+    case SemanticHintOp(src, _, _) => new SemanticTable(src).resolveRootModel
   }
 
   override def toString: String = s"SemanticTable(${root.getClass.getSimpleName})"
@@ -1061,6 +1082,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         keys.foreach(k => acc.add(SortKey.nameOf(k)))
         walk(src)
       case SemanticLimitOp(src, _)     => walk(src)
+      case SemanticHintOp(src, _, _)   => walk(src)
     }
     walk(st.root)
 
@@ -1098,6 +1120,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticFilterOp(src, _)   => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
+      case SemanticHintOp(src, _, _)  => walk(src)
     }
     walk(st.root)
     acc.toSeq
@@ -1117,6 +1140,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticFilterOp(src, _)   => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
+      case SemanticHintOp(src, _, _)  => walk(src)
     }
     walk(st.root)
     acc.toSeq
@@ -1133,6 +1157,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case _: SemanticTableOp         => // leaf
+      case SemanticHintOp(src, _, _)  => walk(src)
     }
     walk(st.root)
     acc.toSeq
@@ -1157,6 +1182,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _) => walk(src)
       case SemanticLimitOp(src, _)   => walk(src)
       case _: SemanticTableOp        => // leaf
+      case SemanticHintOp(src, _, _) => walk(src)
     }
     walk(st.root)
     acc.toSeq
@@ -1183,6 +1209,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticFilterOp(src, _)       => findAggregate(src)
       case SemanticOrderByOp(src, _)      => findAggregate(src)
       case SemanticLimitOp(src, _)        => findAggregate(src)
+      case SemanticHintOp(src, _, _)      => findAggregate(src)
       case _                             => None
     }
     findAggregate(st.root) match {
@@ -1247,6 +1274,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         keys.foreach(k => requestedDirect.add(SortKey.nameOf(k)))
         walkDirect(src)
       case SemanticLimitOp(src, _)     => walkDirect(src)
+      case SemanticHintOp(src, _, _)   => walkDirect(src)
       case _: SemanticJoinOp           =>
       case _: SemanticTableOp          =>
     }
@@ -1469,6 +1497,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticFilterOp(src, _)       => walk(src)
       case SemanticOrderByOp(src, _)      => walk(src)
       case SemanticLimitOp(src, _)        => walk(src)
+      case SemanticHintOp(src, _, _)      => walk(src)
     }
     walk(st.root)
     acc.toSeq
