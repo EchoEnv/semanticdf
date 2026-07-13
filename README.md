@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **159/159 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **181/181 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -81,6 +81,49 @@ sum of per-group averages). That's the classic BI trap, fixed.
 > **Division by zero:** Spark's `/` returns `null` on zero/missing denominators (correct SQL
 > semantics). If you want an explicit default (e.g. `0.0` instead of `null`), use
 > `CalcHelpers.safeDivide(num, denom, defaultValue = 0.0)`.
+
+### Window functions
+
+A Measure is just `SemanticScope => Column`, so any Spark window function is legal
+inside the lambda. The window evaluates against the post-aggregation DataFrame (Pass 2
+of the calc layer), so it can reference group-by keys and base measures by name.
+
+```scala
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions.{row_number, rank, sum}
+
+val st = toSemanticTable(flightsDf, name = Some("flights"))
+  .withDimensions(
+    Dimension("carrier", t => t("carrier")),
+    Dimension("origin",  t => t("origin")),
+  )
+  .withMeasures(
+    Measure("flight_count", t => count(lit(1))),
+    // rank within each carrier by origin:
+    Measure("rank_per_carrier_origin",
+      t => row_number().over(Window.partitionBy(t("carrier")).orderBy(t("origin")))),
+    // running total of total_passengers across origins per carrier:
+    Measure("running_total",
+      t => sum(t("total_passengers")).over(
+        Window.partitionBy(t("carrier")).orderBy(t("origin")))),
+  )
+  .groupBy("carrier", "origin")
+  .aggregate("flight_count", "rank_per_carrier_origin", "running_total")
+```
+
+Window functions work in the Scala DSL. The YAML loader also accepts raw SQL
+window expressions in `measures:` (e.g. `row_number() over (partition by carrier
+order by origin)`); the parser blocklist covers `row_number`, `rank`, `dense_rank`,
+`lag`, `lead`, `ntile`, `first_value`, `last_value`, plus window-frame SQL
+keywords (`order`, `rows`, `range`, `between`, `unbounded`, `preceding`,
+`following`, `and`, `current`, `asc`, `desc`, `nulls`).
+
+> **Known limitation:** a window function that references group-by keys (e.g.
+> `Window.partitionBy(t("carrier"))`) cannot be combined with `t.all(...)` for
+> percent-of-total — the zero-grain totals table has no group-by keys, so the
+> window evaluation fails. Workaround: use a window that doesn't reference
+> group-by keys (e.g. `Window.orderBy(...)` only), or compute percent-of-total
+> as a separate measure.
 
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
@@ -253,7 +296,8 @@ Reads a data file via Spark, infers dimensions (StringType → dim, NumericType 
 
 ## Cross-version compatibility
 
-Verified green on all three lines (76 tests each, Phase D + integration + YAML loader):
+Verified green on all three lines (181 tests each — Phase D + integration + YAML loader +
+regression suites):
 
 | Spark | Scala | Status |
 |---|---|---|
