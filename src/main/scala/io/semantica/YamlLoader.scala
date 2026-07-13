@@ -431,6 +431,8 @@ object YamlLoader {
       "datediff", "date_add", "date_sub", "date_trunc", "trunc", "current_date", "current_timestamp",
       // case-when syntax
       "case", "when", "then", "else", "end",
+      // boolean literals
+      "true", "false",
       // SQL clauses / types that may appear in casts
       "as", "by", "int", "long", "double", "decimal", "string", "boolean", "date", "timestamp",
       // window frame syntax
