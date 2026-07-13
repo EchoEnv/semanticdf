@@ -1,0 +1,5 @@
+plan_id,plan_name,monthly_fee,data_quota_gb,voice_minutes,sms_count,target_segment
+P_BASIC,Basic,29.99,5,500,200,price-sensitive
+P_STANDARD,Standard,49.99,20,unlimited,unlimited,mainstream
+P_PREMIUM,Premium,79.99,unlimited,unlimited,unlimited,power-users
+P_FAMILY,Family,99.99,50,unlimited,unlimited,multi-line

@@ -1,0 +1,4 @@
+promo_code,description,discount_pct,valid_from,valid_until
+SIGNUP20,20% off first 3 months,20,2023-01-01,2024-12-31
+LOYALTY10,10% loyalty discount,10,2023-06-01,2024-12-31
+DATA10,10% off data overage,10,2024-01-01,2024-12-31

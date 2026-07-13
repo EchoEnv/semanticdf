@@ -1,0 +1,69 @@
+# semantica model: usage
+#
+# Schema:
+#   usage_id, customer_id, customer_name, plan_id, plan_name, monthly_fee,
+#   event_date, event_type, amount, is_roaming, promo_code
+#
+# This is a denormalized fact table — the join to customers and plans is
+# flattened into the CSV. We do this because semantica's current join
+# implementation only supports 2-level merges (leftRoot + rightRoot); a
+# 3-way join (usage ⨝ customers ⨝ plans) would require chaining joins
+# which isn't yet supported. For a real warehouse, you'd keep the
+# normalized star schema and let semantica chain joins — the queries
+# below would look the same.
+
+usage:
+  table: usage_csv
+  description: "Per-customer usage events (calls, data, SMS) with plan + promotion context"
+
+  dimensions:
+    usage_id:
+      expr: usage_id
+      description: "Usage event ID (primary key)"
+    customer_id:
+      expr: customer_id
+      description: "Customer who generated the event"
+    customer_name:
+      expr: customer_name
+      description: "Customer name (denormalized from customers table)"
+    plan_id:
+      expr: plan_id
+      description: "Plan the customer is on (foreign key to plans)"
+    plan_name:
+      expr: plan_name
+      description: "Plan name (denormalized from plans table)"
+    event_date:
+      expr: event_date
+      description: "Date the usage event occurred"
+      is_time_dimension: true
+      smallest_time_grain: day
+    event_type:
+      expr: event_type
+      description: "Type of usage: call, data, or SMS"
+    is_roaming:
+      expr: is_roaming
+      description: "true if event occurred outside the home network (premium rate)"
+    promo_code:
+      expr: promo_code
+      description: "Promotion code applied to this customer (nullable)"
+
+  measures:
+    event_count:
+      expr: "count(1)"
+      description: "Number of usage events in the group"
+    total_revenue:
+      expr: "sum(amount)"
+      description: "Total usage revenue in the group"
+    total_roaming_revenue:
+      expr: "sum(case when is_roaming = true then amount else 0 end)"
+      description: "Revenue from roaming events only (premium service)"
+    avg_event_amount:
+      expr: "avg(amount)"
+      description: "Average revenue per usage event"
+
+  calculated_measures:
+    # Per-event ARPU = total_revenue / event_count (a rough proxy — true ARPU
+    # uses distinct customer count, computed in Scala below).
+    revenue_per_event:
+      expr: "total_revenue / event_count"
+      description: "Total revenue divided by event count"
