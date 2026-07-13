@@ -3,14 +3,20 @@
 # Schema:
 #   encounter_id, patient_id, admission_date, discharge_date, department,
 #   primary_diagnosis, discharge_status
-#
-# Note: this is the CLEANSED version of encounters_raw.csv. The raw version
-# referenced patients that were later merged (P001 absorbed P003, P004, P011).
-# The cleansing step remapped those encounter patient_ids to the primary.
+#   + los_days (per-row, computed via the `transforms:` block below)
 
 encounters:
   table: encounters_clean_csv
   description: "Patient hospital encounters (admissions)"
+
+  # Per-row transformation: the los_days column is computed at model-load
+  # time. This replaces the previous Scala-side withColumn pre-processing
+  # in Main.scala. Transforms are semantica's equivalent of dbt staging
+  # models — per-row logic that doesn't fit the `agg()` aggregate context.
+  transforms:
+    los_days:
+      expr: "datediff(discharge_date, admission_date)"
+      description: "Length of stay in days (per-row)"
 
   dimensions:
     encounter_id:
@@ -41,11 +47,6 @@ encounters:
     encounter_count:
       expr: "count(1)"
       description: "Number of encounters in the group"
-    # los_days is pre-computed per-row in the source CSV (Main.scala
-    # produces it via datediff). The framework's Pass 1 only accepts
-    # aggregate functions in base measures — per-row functions like
-    # datediff() don't go in Pass 1's agg(). Pre-computing as a column
-    # is the standard pattern for per-row measures.
     total_los:
       expr: "sum(los_days)"
       description: "Sum of length-of-stay days across encounters in the group"
