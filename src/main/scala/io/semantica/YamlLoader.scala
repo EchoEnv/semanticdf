@@ -407,21 +407,31 @@ object YamlLoader {
   }
 
   /** Extract probable column-reference identifiers from a Spark SQL expression string,
-    * filtering out SQL keywords, aggregate function names, and numeric literals.
+    * filtering out SQL keywords, aggregate / window function names, and numeric literals.
     *
     * Used by [[buildBaseMeasure]] so the join pre-agg probe can tell whether a measure
     * resolves on a given DataFrame. This is intentionally conservative: it only needs
     * to be correct about which identifiers ARE columns, not which aren't (a false
     * positive — treating a function name as a column — would cause a spurious throw,
-    * but the blocklist covers all standard aggregates). */
+    * but the blocklist covers all standard aggregates and window functions).
+    *
+    * Tradeoff: identifiers in this set cannot be used as column names. Acceptable for
+    * window-function names (`row_number`, `rank`, ...) and SQL syntax keywords
+    * (`order`, `rows`, ...); extremely rare as actual column names. */
   private def extractColumnRefs(sql: String): Seq[String] = {
     val sqlKeywords = Set(
-      // aggregate / window functions
+      // aggregate functions
       "sum", "count", "avg", "mean", "min", "max", "stddev", "variance", "first", "last",
+      // window functions
+      "row_number", "rank", "dense_rank", "percent_rank", "cume_dist", "ntile",
+      "lag", "lead", "nth_value", "first_value", "last_value",
       // other functions commonly used in measure expressions
       "coalesce", "cast", "round", "floor", "ceil", "abs", "distinct", "over", "partition",
       // SQL clauses / types that may appear in casts
       "as", "by", "int", "long", "double", "decimal", "string", "boolean", "date", "timestamp",
+      // window frame syntax
+      "order", "rows", "range", "row", "between", "unbounded", "preceding", "following",
+      "and", "current", "asc", "desc", "nulls",
     )
     val token = "[a-zA-Z_][a-zA-Z0-9_]*".r
     token.findAllMatchIn(sql).map(_.matched).filterNot(tok =>
