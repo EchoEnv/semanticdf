@@ -871,7 +871,9 @@ final class SemanticTable private[semantica] (
     * deploying, or in interactive REPLs to check a freshly-built table.
     *
     * - **Errors** are conditions that would cause `execute()` to throw. Examples:
-    *   calc measure self-cycles, filter references an unknown field.
+    *   filter references an unknown field. (Calc-dependency cycles are detected
+    *   at execute() time by `SemanticAggregateOp.topologicalLayers` — they cannot
+    *   be caught compile-free because probing a measure expr needs a DataFrame.)
     * - **Warnings** are conditions that are legal but worth surfacing. Examples:
     *   time dimension declared without `smallestTimeGrain` would raise a clear
     *   error from `atTimeGrain()` on any request.
@@ -907,21 +909,13 @@ final class SemanticTable private[semantica] (
     val measureNames  = allMsMap.keySet
     val knownFields   = allDs.keySet ++ measureNames
 
-    // 1. Cycle detection on calc measures (ERROR — topologicalLayers throws at execute()).
-    def isCalcOf(m: Measure, target: String, depth: Int = 0): Boolean = {
-      if (depth > 32) return false
-      val exprSrc = m.expr.toString
-      allMsMap.values.filter(_ ne m).exists { other =>
-        exprSrc.contains(s""""${other.name}""") && (
-          other.name == target || isCalcOf(other, target, depth + 1)
-        )
-      }
-    }
-    allMsMap.foreach { case (n, m) =>
-      if (isCalcOf(m, n)) errors += s"measure '$n' depends on itself (cycle)"
-    }
+    // Note: calc-dependency cycles are NOT checked here. Detecting them requires
+    // probing each measure's expr through a ClassificationScope, which needs a
+    // DataFrame — and validate() is documented as compile-free. The runtime check
+    // in SemanticAggregateOp.topologicalLayers raises "Calc dependency cycle"
+    // with a clear message when execute() runs; see the Phase 2a regression test.
 
-    // 2. Filter references an unknown field (ERROR).
+    // 1. Filter references an unknown field (ERROR).
     allFilters.foreach { f =>
       f.predicate.fields.foreach { field =>
         if (!knownFields.contains(field))
