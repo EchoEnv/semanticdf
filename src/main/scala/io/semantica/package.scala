@@ -13,13 +13,18 @@ package object semantica {
   // Shared utilities
   // -------------------------------------------------------------------------
 
-  /** Closest string match to `name` among `candidates`, if within edit distance ≤ 3.
-    * Threshold of 3 covers single-char swaps, insertions, deletions.
+  /** Closest string match to `name` among `candidates`, if within a length-scaled
+    * edit-distance threshold.
+    *
+    * Threshold = `max(3, name.length / 4)`. The fixed floor of 3 covers single-char
+    * swaps, insertions, deletions. The length-proportional component scales the
+    * threshold for long namespaced measure/dimension names (e.g. a 4-edit typo in a
+    * 32-char name would silently miss the suggestion under a fixed threshold).
     * Returns None when no candidate is close enough. */
   def closestMatch(name: String, candidates: Iterable[String]): Option[String] = {
     if (name.isEmpty || candidates.isEmpty) return None
     val best = candidates.map(c => c -> editDistance(name.toLowerCase, c.toLowerCase)).minBy(_._2)
-    if (best._2 <= 3) Some(best._1) else None
+    if (best._2 <= math.max(3, name.length / 4)) Some(best._1) else None
   }
 
   /** Levenshtein edit distance between two strings. */
