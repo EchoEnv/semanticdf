@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **181/181 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **188/188 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -246,7 +246,7 @@ use `safeDivide` only when null is undesirable).
 
 ## Runnable examples
 
-Five complete, runnable examples are in `src/main/scala/io/semantica/examples/`.
+In-library examples are in `src/main/scala/io/semantica/examples/`.
 Compile once with `mvn compile`, then run any example:
 
 ```bash
@@ -264,6 +264,28 @@ Or submit as a Spark app:
 ```bash
 mvn package -q
 spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.jar
+```
+
+## Consumer-facing templates
+
+The `examples/` directory holds **consumer templates** — standalone Maven sub-projects
+that show how to *use* semantica in your own codebase. Each is a runnable, copy-pasteable
+project. They depend on semantica from your local `~/.m2` (run `mvn install` on the
+parent first).
+
+| Template | What it teaches |
+|---|---|
+| [`examples/starter`](examples/starter/README.md) | 7 queries (group-by, pct-of-total, joins, time-grain, filter, top-N window, MoM window) — the canonical "hello world" |
+| [`examples/pipeline`](examples/pipeline/README.md) | Full BI lifecycle — raw CSV → ETL → cleaned parquet → declarative YAML queries |
+| [`examples/window-analytics`](examples/window-analytics/README.md) | Window functions: top-N per group, period-over-period, running totals |
+| [`examples/customer-analytics`](examples/customer-analytics/README.md) | RFM segmentation + cohort activity (calc-of-calc composition) |
+| [`examples/operations-analytics`](examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (z-score) |
+
+Run any of them:
+
+```bash
+cd examples/window-analytics   # or any other template
+mvn scala:run -DmainClass=com.example.windowanalytics.Main
 ```
 
 ## CLI Tools
@@ -296,7 +318,7 @@ Reads a data file via Spark, infers dimensions (StringType → dim, NumericType 
 
 ## Cross-version compatibility
 
-Verified green on all three lines (181 tests each — Phase D + integration + YAML loader +
+Verified green on all three lines (188 tests each — Phase D + integration + YAML loader +
 regression suites):
 
 | Spark | Scala | Status |
