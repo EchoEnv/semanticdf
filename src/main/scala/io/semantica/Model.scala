@@ -103,6 +103,28 @@ final case class Measure(
     metadata: Map[String, String] = Map.empty,
 )
 
+/** A per-row transformation applied to the source data at model-load time.
+  *
+  * `expr` is evaluated against the [[BaseScope]] of the source DataFrame, with
+  * the resulting Column becoming a new column on the source. The output column
+  * is referenced by name in subsequent transforms, dimensions, and measures.
+  *
+  * Transforms correspond to dbt's staging models / LookML's `derived_table` —
+  * per-row logic that doesn't fit the `agg()` aggregate context lives here, not
+  * in the measure definition. Examples: `datediff(a, b)`, `case when ...`,
+  * `row_number() over (...)`.
+  *
+  * Evaluation order: topologically sorted by column references. If transform B
+  * references the column added by transform A, A runs first. The YAML loader
+  * handles the sort; the Scala DSL's `withTransforms(...)` accepts transforms
+  * in any order and sorts them on apply.
+  */
+final case class Transform(
+    name: String,
+    expr: SemanticScope => Column,
+    description: Option[String] = None,
+)
+
 /** Extension helpers so callers can write `describe(measure, "Total revenue")` and
   * `tag(measure, "finance", "USD")` without constructing Maps by hand. */
 object MeasureExtra {

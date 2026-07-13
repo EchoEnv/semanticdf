@@ -446,9 +446,22 @@ final case class SemanticAggregateOp(
     val model = resolveModel(source)
 
     // --- Resolve requested measures ---
+    // Measure lookups: declared measures first; if not declared, fall back
+    // to a source DataFrame column (typically added via withTransforms).
+    // The fall-through case wraps the column in sum() in Pass 1 (see the
+    // base.columns check below) — for per-row columns the user wants to
+    // aggregate, this is the right default.
     val allMeasures = measuresToCompute.map { n =>
-      model.measures.getOrElse(n,
-        throw new IllegalArgumentException(s"Unknown measure '$n'.${closestMatch(n, model.measures.keys).map(c => s" Did you mean: '$c'?").getOrElse("")}"))
+      model.measures.get(n) match {
+        case Some(m) => m
+        case None if base.columns.contains(n) =>
+          // Synthetic measure: identity on the column. The compile
+          // pipeline's `if (base.columns.contains(m.name))` branch then
+          // wraps this in `sum(col(m.name))`.
+          Measure(n, t => col(n))
+        case None =>
+          throw new IllegalArgumentException(s"Unknown measure '$n'.${closestMatch(n, model.measures.keys).map(c => s" Did you mean: '$c'?").getOrElse("")}")
+      }
     }
 
     if (allMeasures.isEmpty)

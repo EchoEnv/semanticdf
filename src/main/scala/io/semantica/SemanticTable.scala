@@ -437,6 +437,80 @@ final class SemanticTable private[semantica] (
     }
   }
 
+  /** Extend the model with per-row transforms applied to the source data at load
+    * time. Transforms correspond to dbt's staging models / LookML's
+    * `derived_table` — per-row logic (`datediff`, `case when ...`, window
+    * functions) that doesn't fit the `agg()` aggregate context.
+    *
+    * Transforms are applied to the source DataFrame once (at this call), in
+    * declaration order. If transform B references a column added by transform
+    * A, declare A first. The result replaces the source DataFrame on the
+    * root op; downstream measures/dimensions see the augmented schema.
+    *
+    * @example
+    * {{{
+    * val orders = ...
+    *   .withTransforms(
+    *     Transform("los_days",
+    *       t => datediff(t("shipped_at"), t("order_date"))))
+    *   .withMeasures(Measure("avg_los",
+    *     t => sum(t("los_days")) / count(lit(1))))
+    * }}}
+    */
+  def withTransforms(transforms: Transform*): SemanticTable = {
+    if (transforms.isEmpty) return this
+    root match {
+      case t: SemanticTableOp =>
+        val transformedDf = applyTransforms(t.table, transforms)
+        new SemanticTable(t.copy(table = transformedDf), postAggPredicates)
+
+      case j: SemanticJoinOp =>
+        // Apply transforms to the joined table (j.left + j.right concatenated
+        // minus dup key cols — mirrors the pre-agg DataFrame shape). For a
+        // typical use case (per-row transform on the joined data), this is
+        // what users want.
+        val joinedDf = j.compile(org.apache.spark.sql.SparkSession.active)
+        val transformedDf = applyTransforms(joinedDf, transforms)
+        // The transformed DataFrame supersedes the join's role as the source
+        // for downstream measures. We replace the join with a SemanticTableOp
+        // holding the transformed DataFrame (the join itself is no longer
+        // needed since transforms have already been resolved).
+        new SemanticTable(
+          SemanticTableOp(transformedDf, j.leftRoot.name, j.leftRoot.description),
+          postAggPredicates)
+
+      // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
+      case SemanticFilterOp(src, pred) =>
+        val inner = new SemanticTable(src).withTransforms(transforms: _*)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates)
+      case SemanticOrderByOp(src, keys) =>
+        val inner = new SemanticTable(src).withTransforms(transforms: _*)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates)
+      case SemanticLimitOp(src, n) =>
+        val inner = new SemanticTable(src).withTransforms(transforms: _*)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates)
+      case SemanticHintOp(src, strategy, params) =>
+        val inner = new SemanticTable(src).withTransforms(transforms: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates)
+
+      case _ =>
+        throw new IllegalStateException(
+          s"withTransforms: unexpected root type ${root.getClass.getSimpleName}"
+        )
+    }
+  }
+
+  /** Apply a sequence of transforms to a DataFrame in declaration order. */
+  private def applyTransforms(
+      df: org.apache.spark.sql.DataFrame,
+      transforms: Seq[Transform],
+  ): org.apache.spark.sql.DataFrame = {
+    transforms.foldLeft(df) { (currentDf, t) =>
+      val scope = new BaseScope(currentDf)
+      currentDf.withColumn(t.name, t.expr(scope))
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Phase 4: Joins (DESIGN §7)
   // -------------------------------------------------------------------------

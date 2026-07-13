@@ -336,6 +336,16 @@ object YamlLoader {
       }.toSeq: _*)
     }
 
+    // Transforms must be applied BEFORE measures/calculated_measures are
+    // added, so that the new columns are visible to the column-reference
+    // probe in buildBaseMeasure. Order is preserved from the YAML.
+    cfg.get("transforms").foreach { transformsRaw =>
+      val transforms = asStringToAnyMap(transformsRaw, s"model '$name' transforms")
+      model = model.withTransforms(transforms.map { case (tName, tCfg) =>
+        buildTransform(tName, tCfg)
+      }.toSeq: _*)
+    }
+
     cfg.get("measures").foreach { measuresRaw =>
       val measures = asStringToAnyMap(measuresRaw, s"model '$name' measures")
       model = model.withMeasures(measures.map { case (mName, mCfg) =>
@@ -386,6 +396,17 @@ object YamlLoader {
       t => t(exprStr)
     else
       _ => expr(exprStr)
+
+  /** Build a [[Transform]] from YAML config.
+    *
+    * The expr is always passed through `functions.expr()` (Spark's full SQL
+    * parser) — transforms can use per-row functions (datediff, case-when)
+    * and window functions (lag, lead, row_number) which the CalcExpr
+    * parser for `calculated_measures:` doesn't support. */
+  private def buildTransform(name: String, cfg: Any): Transform = {
+    val (exprStr, description, _) = parseMetricConfig(cfg, "transform", name)
+    Transform(name, _ => expr(exprStr), description)
+  }
 
   /** Build a base [[Measure]] from the `measures:` section.
     *
