@@ -1,0 +1,24 @@
+# semantica model: customers
+#
+# Schema:
+#   customer_id, name, email, signup_date, city
+
+customers:
+  table: customers_csv
+  description: "Customer master data with signup dates and city"
+
+  dimensions:
+    customer_id:
+      expr: customer_id
+      description: "Customer ID (primary key)"
+    name:
+      expr: name
+      description: "Customer full name"
+    city:
+      expr: city
+      description: "Customer city"
+    signup_date:
+      expr: signup_date
+      description: "Date the customer signed up"
+      is_time_dimension: true
+      smallest_time_grain: day
