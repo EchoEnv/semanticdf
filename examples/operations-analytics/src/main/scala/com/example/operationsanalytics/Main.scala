@@ -39,15 +39,15 @@ object Main {
       // ---------------------------------------------------------------------
       // The YAML's calc_measures (avg_ship_days, on_time_rate) reference
       // total_ship_days and total_on_time (sum of per-row ship_days and
-      // on_time_flag). The per-row columns must be pre-computed here because
-      // the YAML parser doesn't support function calls in calc expressions.
+      // The per-row ship_days and on_time_flag columns are computed in the
+      // YAML's `transforms:` block — they're applied to the source DataFrame
+      // at model-load time, so the Main.scala doesn't need to pre-compute
+      // them in Scala. This is the "single source of truth" property: the
+      // YAML declares the per-row logic; the Scala DSL just loads and queries.
       val ordersCsv = spark.read.option("header", "true").option("inferSchema", "true")
         .csv("data/orders.csv")
         .withColumn("order_date", col("order_date").cast("date"))
         .withColumn("shipped_at", col("shipped_at").cast("date"))
-        .withColumn("ship_days", datediff(col("shipped_at"), col("order_date")))
-        .withColumn("on_time_flag",
-          when(datediff(col("shipped_at"), col("order_date")) <= 2, lit(1)).otherwise(lit(0)))
       val tables = Map("orders_csv" -> ordersCsv)
       val orders = YamlLoader.loadDir("models/", tables)("orders")
 

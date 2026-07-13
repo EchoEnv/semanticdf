@@ -2,16 +2,25 @@
 #
 # Schema:
 #   order_id, customer_id, amount, order_date, shipped_at, status
-#   + ship_days, on_time_flag (pre-computed per-row in the loader — see Main.scala)
-#
-# The per-row columns ship_days and on_time_flag are added to the source
-# DataFrame in Main.scala (because the YAML CalcExpr parser supports only
-# arithmetic + all(), not function calls like datediff() or case-when).
-# The YAML then aggregates them with sum() to produce averages/ratios.
+#   + ship_days, on_time_flag (computed via the `transforms:` block below)
 
 orders:
   table: orders_csv
   description: "Per-order data with fulfillment timestamps and amount"
+
+  # Per-row transformations: ship_days and on_time_flag are computed at
+  # model-load time. This is semantica's equivalent of dbt's staging models
+  # / LookML's derived_table — per-row logic that doesn't fit the
+  # aggregate context. The framework's `transforms:` block is the single
+  # source of truth for these columns; the YAML and the Scala DSL produce
+  # equivalent results.
+  transforms:
+    ship_days:
+      expr: "datediff(shipped_at, order_date)"
+      description: "Days from order placement to shipment (per-row)"
+    on_time_flag:
+      expr: "case when datediff(shipped_at, order_date) <= 2 then 1 else 0 end"
+      description: "1 if shipped within 2 days, else 0 (per-row)"
 
   dimensions:
     order_id:
@@ -36,8 +45,6 @@ orders:
     order_count:
       expr: "count(1)"
       description: "Number of orders in the group"
-    # ship_days and on_time_flag are pre-computed per-row in Main.scala
-    # (via withColumn). Here we just sum them.
     total_ship_days:
       expr: "sum(ship_days)"
       description: "Sum of ship_days across orders (avg = total / order_count)"
