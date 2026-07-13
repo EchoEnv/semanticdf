@@ -77,7 +77,11 @@ Loaded 2 models: flights, carriers
 | **Q3** | Joined query — `flights ⨝ carriers` via the YAML `joins:` block |
 | **Q4** | Time-grain — `.atTimeGrain("flight_date", "month")` |
 | **Q5** | Filter + group-by — `Predicate` API (note `===` not `==`) |
+| **Q6** | Window function: `row_number() over (partition by carrier ...)` for top-N per group |
+| **Q7** | Window function: `lag(total_passengers, 1) over (... order by flight_date)` for MoM change |
 | Schema | `model.schema(spark)` — every dimension and measure as a DataFrame |
+
+See [`examples/window-analytics`](../window-analytics/README.md) for a deeper walkthrough of window functions.
 
 ---
 

@@ -2,7 +2,8 @@ package com.example.starter
 
 import io.semantica._
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.functions.{col, current_timestamp, lit}
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_number}
 
 /** Starter template for semantica — declarative semantic layer on Spark.
   *
@@ -114,6 +115,53 @@ object Main {
         .toDataFrame(spark)
         .orderBy(col("total_passengers").desc)
         .show(false)
+
+      // ---------------------------------------------------------------------
+      // 6. Window function: rank within group (added in Scala, not YAML)
+      // ---------------------------------------------------------------------
+      // Top-5 origins per carrier by total passengers. Window functions are
+      // added in Scala because the YAML CalcExpr parser supports only
+      // arithmetic + all() — no OVER (...) syntax. See examples/window-analytics
+      // for a fuller walkthrough of this pattern.
+      println("\n--- Q6: Top-5 origins per carrier (row_number window + filter) ---")
+      val flightsWithWindow = flights.withMeasures(
+        Measure("rank_within_carrier",
+          t => row_number().over(Window.partitionBy(t("carrier")).orderBy(t("total_passengers").desc))),
+      )
+      flightsWithWindow
+        .groupBy("carrier", "origin")
+        .aggregate("total_passengers", "rank_within_carrier")
+        .where(Predicate.Compare("le", "rank_within_carrier", 5))
+        .toDataFrame(spark)
+        .orderBy("carrier", "rank_within_carrier")
+        .show(20, false)
+
+      // ---------------------------------------------------------------------
+      // 7. Window function: month-over-month change (lag)
+      // ---------------------------------------------------------------------
+      // Monthly passengers with the previous month as a side-by-side column
+      // (via lag), then a calc-measure pct_change. Window functions are
+      // added in Scala; the calc measure is added at the SemanticTable
+      // level (must be defined before aggregate()).
+      println("\n--- Q7: Monthly passengers with MoM % change (lag window) ---")
+      val flightsWithLag = flights.withMeasures(
+        Measure("prev_month_passengers",
+          t => lag(t("total_passengers"), 1).over(
+            Window.partitionBy().orderBy(t("flight_date")))),
+        Measure("pct_change",
+          t => CalcHelpers.safeDivide(
+            t("total_passengers") - t("prev_month_passengers"),
+            t("prev_month_passengers"),
+            defaultValue = 0.0)),
+      )
+      flightsWithLag
+        .atTimeGrain("flight_date", "month")
+        .groupBy("flight_date")
+        .aggregate("total_passengers", "prev_month_passengers", "pct_change")
+        .toDataFrame(spark)
+        .orderBy("flight_date")
+        .show(false)
+      println("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
 
       // ---------------------------------------------------------------------
       // 8. Schema introspection — every dimension and measure as a DataFrame
