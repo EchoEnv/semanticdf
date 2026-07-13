@@ -1,0 +1,61 @@
+# semantica model: encounters (cleansed)
+#
+# Schema:
+#   encounter_id, patient_id, admission_date, discharge_date, department,
+#   primary_diagnosis, discharge_status
+#
+# Note: this is the CLEANSED version of encounters_raw.csv. The raw version
+# referenced patients that were later merged (P001 absorbed P003, P004, P011).
+# The cleansing step remapped those encounter patient_ids to the primary.
+
+encounters:
+  table: encounters_clean_csv
+  description: "Patient hospital encounters (admissions)"
+
+  dimensions:
+    encounter_id:
+      expr: encounter_id
+      description: "Encounter ID (primary key)"
+    patient_id:
+      expr: patient_id
+      description: "Foreign key to patients.patient_id"
+    admission_date:
+      expr: admission_date
+      description: "Date the patient was admitted"
+      is_time_dimension: true
+      smallest_time_grain: day
+    discharge_date:
+      expr: discharge_date
+      description: "Date the patient was discharged"
+    department:
+      expr: department
+      description: "Hospital department (e.g. Cardiology, Pediatrics)"
+    primary_diagnosis:
+      expr: primary_diagnosis
+      description: "ICD-10 code of the primary diagnosis"
+    discharge_status:
+      expr: discharge_status
+      description: "How the patient left (home, transferred, expired)"
+
+  measures:
+    encounter_count:
+      expr: "count(1)"
+      description: "Number of encounters in the group"
+    # los_days is pre-computed per-row in the source CSV (Main.scala
+    # produces it via datediff). The framework's Pass 1 only accepts
+    # aggregate functions in base measures — per-row functions like
+    # datediff() don't go in Pass 1's agg(). Pre-computing as a column
+    # is the standard pattern for per-row measures.
+    total_los:
+      expr: "sum(los_days)"
+      description: "Sum of length-of-stay days across encounters in the group"
+    expired_count:
+      expr: "sum(case when discharge_status = 'expired' then 1 else 0 end)"
+      description: "Number of encounters that ended in mortality"
+
+  calculated_measures:
+    avg_los:
+      expr: "total_los / encounter_count"
+      description: "Average length of stay in days"
+      metadata:
+        unit: days
