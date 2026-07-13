@@ -780,8 +780,7 @@ final class SemanticTable private[semantica] (
       case j: SemanticJoinOp =>
         throw new IllegalArgumentException(
           s"$label: the left side is already a joined table. " +
-            "Chain joins by calling join_one/join_many on the result: " +
-            "table.join_one(first, on).join_one(second, on2)."
+            "Multi-hop joins are not supported in this version — see docs/known-limitations.md."
         )
       case a: SemanticAggregateOp =>
         throw new IllegalArgumentException(
