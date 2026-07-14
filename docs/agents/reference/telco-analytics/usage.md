@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Usage
 description: "Per-customer usage events (calls, data, SMS) with plan + promotion context"
-resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/usage.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/telco-analytics/models/usage.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

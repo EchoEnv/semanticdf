@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Customers
 description: Customer master data with signup dates and city
-resource: file:///home/emilio/app/projects/semanticdf/examples/customer-analytics/models/customers.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/customer-analytics/models/customers.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

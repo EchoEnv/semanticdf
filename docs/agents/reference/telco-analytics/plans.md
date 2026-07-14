@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Plans
 description: "Service plans offered (Basic, Standard, Premium, Family)"
-resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/plans.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/telco-analytics/models/plans.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

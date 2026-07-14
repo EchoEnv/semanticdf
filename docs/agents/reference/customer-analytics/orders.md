@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Orders
 description: Per-order line items with amount and order date
-resource: file:///home/emilio/app/projects/semanticdf/examples/customer-analytics/models/orders.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/customer-analytics/models/orders.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

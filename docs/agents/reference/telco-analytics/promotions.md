@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Promotions
 description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
-resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/promotions.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/telco-analytics/models/promotions.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

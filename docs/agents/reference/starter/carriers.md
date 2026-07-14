@@ -3,8 +3,8 @@ type: SemanticTable
 title: Carriers
 version: 1
 description: "Airline carrier reference data (lookup)"
-resource: file:///home/emilio/app/projects/semanticdf/examples/starter/models/carriers.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/starter/models/carriers.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

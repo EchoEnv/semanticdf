@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Orders
 description: Per-order data with fulfillment timestamps and amount
-resource: file:///home/emilio/app/projects/semanticdf/examples/operations-analytics/models/orders.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/operations-analytics/models/orders.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

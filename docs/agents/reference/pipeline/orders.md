@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Orders
 description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
-resource: file:///home/emilio/app/projects/semanticdf/examples/pipeline/models/orders.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/pipeline/models/orders.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [identifier, semantic-table]
 ---
 

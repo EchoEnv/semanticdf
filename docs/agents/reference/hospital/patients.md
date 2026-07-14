@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Patients
 description: Cleansed patient master data
-resource: file:///home/emilio/app/projects/semanticdf/examples/hospital/models/patients.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/hospital/models/patients.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 

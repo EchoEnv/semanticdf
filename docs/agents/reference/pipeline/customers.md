@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Customers
 description: Cleaned customer reference data
-resource: file:///home/emilio/app/projects/semanticdf/examples/pipeline/models/customers.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/pipeline/models/customers.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [identifier, pii, semantic-table]
 ---
 

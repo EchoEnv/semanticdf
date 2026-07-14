@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Flights
 description: "Flight facts: per-flight distance and passenger counts over 3 months"
-resource: file:///home/emilio/app/projects/semanticdf/examples/window-analytics/models/flights.yml
-timestamp: "2026-07-14T19:42:54+00:00"
+resource: file://examples/window-analytics/models/flights.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 
