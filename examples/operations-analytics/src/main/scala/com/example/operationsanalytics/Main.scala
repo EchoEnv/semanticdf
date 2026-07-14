@@ -1,10 +1,10 @@
 package com.example.operationsanalytics
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
-/** Operations analytics on top of semantica.
+/** Operations analytics on top of semanticdf.
   *
   * Demonstrates two operational patterns:
   *
@@ -17,11 +17,11 @@ import org.apache.spark.sql.functions._
   *   Q2 — Anomaly detection via z-score: flag orders whose amount is more
   *        than 2 standard deviations from the mean. Implemented as a 2-step
   *        pattern (global stats → per-order filter) because per-row z-score
-  *        using a single aggregate query is awkward in semantica's
+  *        using a single aggregate query is awkward in semanticdf's
   *        Pass-1 base-measure / Pass-2 calc-measure split.
   *
   * Run:
-  *   1. mvn install the parent semantica project
+  *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.operationsanalytics.Main
   */
 object Main {
@@ -29,7 +29,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-operations-analytics")
+      .appName("semanticdf-operations-analytics")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()
@@ -70,7 +70,7 @@ object Main {
       // 3. Q2: Anomaly detection (z-score) — 2-step pattern
       // ---------------------------------------------------------------------
       // Per-row z-score against a global mean/stddev is hard to express in a
-      // single semantica query. The cleanest pattern is two queries:
+      // single semanticdf query. The cleanest pattern is two queries:
       //
       //   Step 1: aggregate the entire dataset to get global mean + variance
       //   Step 2: filter orders using the computed threshold (mean + 2*stddev)

@@ -1,4 +1,4 @@
-# semantica model: flights
+# semanticdf model: flights
 #
 # Schema:
 #   carrier, origin, dest, distance, passengers, flight_date
@@ -8,29 +8,29 @@
 # why this split exists.
 
 flights:
-  table: flights_csv
-  description: "Flight facts: per-flight distance and passenger counts over 3 months"
+    table: flights_csv
+    description: "Flight facts: per-flight distance and passenger counts over 3 months"
 
-  dimensions:
-    carrier:
-      expr: carrier
-      description: "Airline carrier code (IATA two-letter)"
-    origin:
-      expr: origin
-      description: "Origin airport (IATA three-letter)"
-    flight_date:
-      expr: flight_date
-      description: "Scheduled flight date"
-      is_time_dimension: true
-      smallest_time_grain: day
+    dimensions:
+        carrier:
+            expr: carrier
+            description: "Airline carrier code (IATA two-letter)"
+        origin:
+            expr: origin
+            description: "Origin airport (IATA three-letter)"
+        flight_date:
+            expr: flight_date
+            description: "Scheduled flight date"
+            is_time_dimension: true
+            smallest_time_grain: day
 
-  measures:
-    total_passengers:
-      expr: "sum(passengers)"
-      description: "Total passengers across all flights in the group"
-    flight_count:
-      expr: "count(1)"
-      description: "Number of flights in the group"
-    total_distance:
-      expr: "sum(distance)"
-      description: "Total flight distance in miles"
+    measures:
+        total_passengers:
+            expr: "sum(passengers)"
+            description: "Total passengers across all flights in the group"
+        flight_count:
+            expr: "count(1)"
+            description: "Number of flights in the group"
+        total_distance:
+            expr: "sum(distance)"
+            description: "Total flight distance in miles"

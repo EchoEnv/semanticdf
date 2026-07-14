@@ -2,16 +2,16 @@
 
 - **Status:** Accepted
 - **Date:** 2026-07-08
-- **Context:** `DESIGN.md` (semantica — BSL → Spark/Scala port). Two Karpathy skills are
+- **Context:** `DESIGN.md` (semanticdf — BSL → Spark/Scala port). Two Karpathy skills are
   installed: `karpathy-guidelines` (4 behavioural rules) and `karpathy-app-design`
   (Core + Extension Points + Plugin/Extension/SDK/Registry/Portal architecture). The
-  question was whether to use one of them as semantica's governing design.
+  question was whether to use one of them as semanticdf's governing design.
 
 ## Decision
 
 1. **Adopt `karpathy-guidelines`** (Think Before Coding · Simplicity First · Surgical
    Changes · Goal-Driven Execution) as the standing engineering discipline for building
-   semantica. They govern *how* we write code; they prescribe no architecture.
+   semanticdf. They govern *how* we write code; they prescribe no architecture.
 2. **Do NOT adopt `karpathy-app-design`.** `DESIGN.md` remains the architecture of record.
 
 ## Rationale — why not app-design
@@ -21,7 +21,7 @@
 > When NOT to use: no third-party extensions → skip the Portal; internal / single-team →
 > skip Extensions; unsure → don't add it yet. Karpathy: no abstractions for single-use code.
 
-Semantica fails all three toward "Portal not needed":
+SemanticDF fails all three toward "Portal not needed":
 
 - It is a **library** embedded in users' Spark jobs, not an application with a request
   lifecycle. The skill's shape (PreHook → Core → Transformer → Sink, exemplified by the
@@ -35,7 +35,7 @@ Semantica fails all three toward "Portal not needed":
 
 The one thing worth borrowing from it — *name a one-sentence Core, freeze it after v1* —
 is already captured by `DESIGN.md` §1/§2 (the two intellectual cores: calc-measure
-compilation and grain-correct joins) and needs no Portal to express. Semantica's genuine
+compilation and grain-correct joins) and needs no Portal to express. SemanticDF's genuine
 swappable points (chart backends, LLM-agent backends, profile/connection providers,
 custom filter operators) will use **idiomatic Scala `trait`s + constructor/implicit
 injection** — the JVM's native extensibility — not a Registry.
@@ -47,7 +47,7 @@ the trigger fires):
 
 | Deferred | Trigger to revive |
 |---|---|
-| Multi-package layout (`expr/ ops/ …`) | A flat `io.semantica` package grows a 3+ file cluster |
+| Multi-package layout (`expr/ ops/ …`) | A flat `io.semanticdf` package grows a 3+ file cluster |
 | Second DSL style (tuple-builder) | A user genuinely finds record-varargs insufficient |
 | `compare_periods`, `index()`, `unnest()` | A concrete model needs the feature |
 | Dependency-graph introspection | A consumer asks for field-level lineage |

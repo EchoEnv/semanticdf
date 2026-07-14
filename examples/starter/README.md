@@ -1,17 +1,17 @@
-# semantica starter template
+# semanticdf starter template
 
-A complete, working example of [semantica](https://github.com/earendil/semantica) — a declarative semantic layer on Apache Spark.
+A complete, working example of [semanticdf](https://github.com/earendil/semanticdf) — a declarative semantic layer on Apache Spark.
 
-This template shows how to define your data models in **YAML** (no Scala required) and run typed queries against them. It's the fastest way to evaluate semantica.
+This template shows how to define your data models in **YAML** (no Scala required) and run typed queries against them. It's the fastest way to evaluate semanticdf.
 
 ---
 
 ## What you get
 
 ```
-semantica-starter/
+semanticdf-starter/
 ├── README.md                 ← you are here
-├── pom.xml                   ← Maven build (depends on semantica)
+├── pom.xml                   ← Maven build (depends on semanticdf)
 ├── data/
 │   ├── flights.csv          ← sample flight data (~50 rows)
 │   └── carriers.csv         ← carrier lookup table
@@ -28,25 +28,25 @@ semantica-starter/
 
 ### Prerequisites
 
-- JDK 17 (semantica requires Java 17+)
+- JDK 17 (semanticdf requires Java 17+)
 - Maven 3.9+
 - Apache Spark 3.5.x or 4.x (pulled in automatically by Maven)
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 
-The starter depends on semantica, which (for now) isn't on Maven Central. Build and install it to your local Maven repo from the parent project:
+The starter depends on semanticdf, which (for now) isn't on Maven Central. Build and install it to your local Maven repo from the parent project:
 
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
-This puts `io.semantica:semantica_2.13:0.1.0-SNAPSHOT` in `~/.m2/repository`.
+This puts `io.semanticdf:semanticdf_2.13:0.1.0-SNAPSHOT` in `~/.m2/repository`.
 
 ### Step 2: run the starter
 
 ```bash
-cd /path/to/semantica/examples/starter
+cd /path/to/semanticdf/examples/starter
 mvn scala:run -DmainClass=com.example.starter.Main
 ```
 
@@ -176,10 +176,10 @@ This is the same shape you'd write to a Delta catalog table for a multi-team set
 
 ## Use the Scala DSL (optional)
 
-If you prefer code over YAML, semantica's Scala DSL produces the same objects:
+If you prefer code over YAML, semanticdf's Scala DSL produces the same objects:
 
 ```scala
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.functions.sum
 
 val flights = toSemanticTable(flightsCsv, name = Some("flights"))
@@ -206,35 +206,35 @@ The DSL and YAML are equivalent — choose whichever fits your team's style.
 
 For a real deployment:
 
-1. **Publish semantica to your internal artifact repo** (Nexus, Artifactory, etc.) so the starter can pull it normally instead of `mvn install`.
+1. **Publish semanticdf to your internal artifact repo** (Nexus, Artifactory, etc.) so the starter can pull it normally instead of `mvn install`.
 2. **Version your YAML** in git. Each commit = a versioned semantic layer.
 3. **Persist `schema(spark)`** to a Delta/Iceberg table for catalog queries across teams:
    ```scala
    flights.schema(spark)
      .withColumn("loaded_at", current_timestamp())
      .write.format("delta").mode("append")
-     .save("_semantica/model_schema")
+     .save("_semanticdf/model_schema")
    ```
 4. **Deploy** via spark-submit:
    ```bash
    spark-submit \
      --class com.example.starter.Main \
      --master yarn \
-     target/semantica-starter_2.13-0.1.0-SNAPSHOT-jar-with-dependencies.jar
+     target/semanticdf-starter_2.13-0.1.0-SNAPSHOT-jar-with-dependencies.jar
    ```
 
 ---
 
 ## What's next
 
-- Read [`docs/known-limitations.md`](../../docs/known-limitations.md) for what semantica does NOT support yet
+- Read [`docs/known-limitations.md`](../../docs/known-limitations.md) for what semanticdf does NOT support yet
 - Read [`DESIGN.md`](../../DESIGN.md) for the architecture and design decisions
-- Try the existing [`src/main/scala/io/semantica/examples/`](../../src/main/scala/io/semantica/examples) for more advanced patterns (joins, time series, filters)
+- Try the existing [`src/main/scala/io/semanticdf/examples/`](../../src/main/scala/io/semanticdf/examples) for more advanced patterns (joins, time series, filters)
 - When you outgrow this template: add typed measures (`Phase E` — typeclasses for compile-time safety)
 
 ---
 
 ## Get help
 
-- Issues: [github.com/earendil/semantica/issues](https://github.com/earendil/semantica/issues)
-- Discussions: [github.com/earendil/semantica/discussions](https://github.com/earendil/semantica/discussions)
+- Issues: [github.com/earendil/semanticdf/issues](https://github.com/earendil/semanticdf/issues)
+- Discussions: [github.com/earendil/semanticdf/discussions](https://github.com/earendil/semanticdf/discussions)

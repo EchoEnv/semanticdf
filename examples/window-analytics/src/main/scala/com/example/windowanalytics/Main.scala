@@ -1,11 +1,11 @@
 package com.example.windowanalytics
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
 
-/** Window-function analytics on top of semantica.
+/** Window-function analytics on top of semanticdf.
   *
   * This template demonstrates three common window-function patterns that are
   * typical in BI dashboards:
@@ -21,7 +21,7 @@ import org.apache.spark.sql.functions._
   * other measures via t(...), which the ClassificationScope records.
   *
   * Run:
-  *   1. mvn install the parent semantica project
+  *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.windowanalytics.Main
   */
 object Main {
@@ -29,7 +29,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-window-analytics")
+      .appName("semanticdf-window-analytics")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()

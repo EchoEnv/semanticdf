@@ -1,13 +1,13 @@
-# semantica customer-analytics
+# semanticdf customer-analytics
 
-Customer segmentation analytics on top of semantica — **RFM** (Recency, Frequency, Monetary) and **cohort activity**.
+Customer segmentation analytics on top of semanticdf — **RFM** (Recency, Frequency, Monetary) and **cohort activity**.
 
 This template shows two patterns that are staples in CRM and marketing analytics. It complements the [starter template](../starter/README.md) (basics) and the [pipeline template](../pipeline/README.md) (full lifecycle).
 
 ## What you get
 
 ```
-semantica-customer-analytics/
+semanticdf-customer-analytics/
 ├── README.md                   ← you are here
 ├── pom.xml
 ├── data/
@@ -25,9 +25,9 @@ semantica-customer-analytics/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 

@@ -1,10 +1,10 @@
 package com.example.customeranalytics
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
-/** Customer segmentation analytics on top of semantica.
+/** Customer segmentation analytics on top of semanticdf.
   *
   * Demonstrates two real-world segmentation patterns:
   *
@@ -19,7 +19,7 @@ import org.apache.spark.sql.functions._
   *        works as a starting point for fuller retention analysis.
   *
   * Run:
-  *   1. mvn install the parent semantica project
+  *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.customeranalytics.Main
   */
 object Main {
@@ -27,7 +27,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-customer-analytics")
+      .appName("semanticdf-customer-analytics")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()

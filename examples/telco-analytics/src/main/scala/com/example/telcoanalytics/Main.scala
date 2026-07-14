@@ -1,10 +1,10 @@
 package com.example.telcoanalytics
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
-/** Telco analytics on top of semantica.
+/** Telco analytics on top of semanticdf.
   *
   * Demonstrates three real-world telco queries:
   *
@@ -18,7 +18,7 @@ import org.apache.spark.sql.functions._
   *        % of total that's roaming. The premium-service pattern.
   *
   * Run:
-  *   1. mvn install the parent semantica project
+  *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.telcoanalytics.Main
   */
 object Main {
@@ -26,7 +26,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-telco-analytics")
+      .appName("semanticdf-telco-analytics")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()

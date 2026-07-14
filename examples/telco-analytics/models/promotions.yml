@@ -1,26 +1,26 @@
-# semantica model: promotions
+# semanticdf model: promotions
 #
 # Reference data: the active promotional offers.
 
 promotions:
-  table: promotions_csv
-  description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
+    table: promotions_csv
+    description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
 
-  dimensions:
-    promo_code:
-      expr: promo_code
-      description: "Promotion code (primary key)"
-    description:
-      expr: description
-      description: "Human-readable description of the promotion"
-    discount_pct:
-      expr: discount_pct
-      description: "Discount percentage applied by the promotion"
+    dimensions:
+        promo_code:
+            expr: promo_code
+            description: "Promotion code (primary key)"
+        description:
+            expr: description
+            description: "Human-readable description of the promotion"
+        discount_pct:
+            expr: discount_pct
+            description: "Discount percentage applied by the promotion"
 
-  measures:
-    promo_count:
-      expr: "count(1)"
-      description: "Number of active promotions"
-    avg_discount:
-      expr: "avg(discount_pct)"
-      description: "Average discount percentage across promotions"
+    measures:
+        promo_count:
+            expr: "count(1)"
+            description: "Number of active promotions"
+        avg_discount:
+            expr: "avg(discount_pct)"
+            description: "Average discount percentage across promotions"

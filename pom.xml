@@ -5,19 +5,19 @@
                              https://maven.apache.org/xsd/maven-4.0.0.xsd">
   <modelVersion>4.0.0</modelVersion>
 
-  <groupId>io.semantica</groupId>
-  <artifactId>semantica_2.13</artifactId>
+  <groupId>io.semanticdf</groupId>
+  <artifactId>semanticdf_2.13</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
-  <name>semantica</name>
+  <name>semanticdf</name>
   <description>A semantic layer for Apache Spark (JVM), adapted from Boring Semantic Layer.</description>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
 
     <!-- Scala: 2.13 only (ADR 0001). Spark 4 is 2.13-only, so 2.13 covers both Spark lines. -->
-    <scala.version>2.13.14</scala.version>
+    <scala.version>2.13.18</scala.version>
     <scala.binary.version>2.13</scala.binary.version>
 
     <!-- Spark: 3.5.8 is the default/primary target (DESIGN §7). -->
@@ -39,7 +39,7 @@
   </properties>
 
   <dependencies>
-    <!-- Spark is `provided`: semantica is a library dropped into the user's Spark job. -->
+    <!-- Spark is `provided`: semanticdf is a library dropped into the user's Spark job. -->
     <dependency>
       <groupId>org.apache.spark</groupId>
       <artifactId>spark-sql_${scala.binary.version}</artifactId>
@@ -112,7 +112,7 @@
         <artifactId>exec-maven-plugin</artifactId>
         <version>3.5.0</version>
         <configuration>
-          <mainClass>io.semantica.tools.Main</mainClass>
+          <mainClass>io.semanticdf.tools.Main</mainClass>
           <!-- Use compile classpath so target/classes (Scala-compiled output) is included. -->
           <classpathScope>compile</classpathScope>
           <environmentVariables>
@@ -144,7 +144,7 @@
           <suffixes>Spec</suffixes>
           <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
           <junitxml>.</junitxml>
-          <filereports>semantica-test-suite.txt</filereports>
+          <filereports>semanticdf-test-suite.txt</filereports>
         </configuration>
         <executions>
           <execution>

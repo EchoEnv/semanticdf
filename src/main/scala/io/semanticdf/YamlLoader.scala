@@ -1,0 +1,680 @@
+package io.semanticdf
+
+import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.sql.functions.expr
+import org.yaml.snakeyaml.Yaml
+
+import scala.jdk.CollectionConverters._
+
+/** Declarative YAML model loader — defines semantic models in a config file, for
+  * consumers who know YAML but not Scala.
+  *
+  * This is the Spark/JVM counterpart of BSL's `from_yaml`. Both coexist with the
+  * compiled Scala DSL — the YAML loader builds the exact same `Dimension` / `Measure`
+  * / `SemanticTable` objects, so every feature (joins, calcs, percent-of-total,
+  * filtering, time grains) works identically.
+  *
+  * == YAML schema ==
+  *
+  * {{{
+  * # Each top-level key (except reserved ones) is a model name.
+  * flights:
+  *   table: flights_tbl                 # required: name of the source DataFrame
+  *   description: "Flight data"
+  *
+  *   dimensions:
+  *     carrier: carrier                  # shorthand: a single column reference
+  *     origin:
+  *       expr: origin                    # full form
+  *       description: "Origin airport"
+  *     dep_time:
+  *       expr: dep_time
+  *       is_time_dimension: true
+  *       smallest_time_grain: day
+  *
+  *   measures:                           # base aggregates (Spark SQL expressions)
+  *     flight_count: "count(1)"
+  *     total_distance: "sum(distance)"
+  *     avg_distance:
+  *       expr: "avg(distance)"
+  *       description: "Average flight distance"
+  *
+  *   calculated_measures:               # calcs reference measures by name
+  *     avg_per_flight: "total_distance / flight_count"
+  *     pct_of_total: "total_distance / all(total_distance) * 100"
+  *
+  *   joins:
+  *     carriers:                         # alias
+  *       model: carriers                 # another model in this YAML
+  *       type: one                       # one | many | cross
+  *       left_on: carrier                # equi-join key on this model's side
+  *       right_on: code                  # equi-join key on the joined model's side
+  * }}}
+  *
+  * == Loading ==
+  *
+  * {{{
+  * // Option A: supply DataFrames explicitly (e.g. from spark.read.parquet)
+  * val models = YamlLoader.load("flights.yml", Map(
+  *   "flights_tbl"  -> spark.read.parquet("s3://bucket/flights"),
+  *   "carriers_tbl" -> spark.read.parquet("s3://bucket/carriers"),
+  * ))
+  *
+  * // Option B: resolve table names from the Spark metastore / catalog
+  * val models = YamlLoader.load("flights.yml", spark)
+  *
+  * val flights = models("flights")
+  * flights.groupBy("carrier").aggregate("avg_per_flight").execute(spark)
+  * }}}
+  *
+  * == Expression formats ==
+  *
+  * - **Dimensions**: a simple column name (`carrier: carrier`) or a Spark SQL
+  *   expression (`full_name: "concat(first_name, ' ', last_name")`).
+  * - **Measures** (base): a Spark SQL aggregate (`sum(distance)`, `count(1)`).
+  * - **Calculated measures**: arithmetic over measure names and `all(name)` for
+  *   percent-of-total. Parsed by [[CalcExpr]] so the framework's base-vs-calc
+  *   classification works identically to the Scala DSL.
+  */
+object YamlLoader {
+
+  /** Load semantic models from a YAML file, resolving `table:` references against a
+    * caller-supplied map of DataFrames.
+    *
+    * Use this when your source tables come from `spark.read.parquet(...)`, JDBC, or
+    * any non-metastore source.
+    *
+    * @param path   path to the YAML model definition file
+    * @param tables map of table-name → DataFrame, keyed by the `table:` field in YAML
+    * @return map of model-name → [[SemanticTable]]
+    */
+  def load(path: String, tables: Map[String, DataFrame]): Map[String, SemanticTable] =
+    buildModels(parseYaml(path), name =>
+      tables.getOrElse(name, throw tableNotFound(name, tables.keys)))
+
+  /** Load semantic models from a YAML file, resolving `table:` references against the
+    * Spark metastore / catalog via `spark.table(name)`.
+    *
+    * Use this when your source tables are registered in a Hive metastore, Glue
+    * catalog, or `spark.sql("CREATE TABLE ...")`.
+    *
+    * @param path  path to the YAML model definition file
+    * @param spark active SparkSession with access to the metastore
+    * @return map of model-name → [[SemanticTable]]
+    */
+  def load(path: String, spark: SparkSession): Map[String, SemanticTable] =
+    buildModels(parseYaml(path), name => spark.table(name))
+
+  /** Load all semantic models from every `*.yml` file in a directory.
+    *
+    * Each file is loaded independently and all models are merged into a single map.
+    * This is the natural entry point for users: put all your YAML model files in a
+    * directory and load them all at once.
+    *
+    * @param path   directory path containing YAML model files
+    * @param tables map of table-name → DataFrame, keyed by the `table:` field in YAML
+    * @return merged map of model-name → [[SemanticTable]]
+    * @throws IllegalArgumentException if two files define the same model name, or if
+    *                                  `path` is not a directory or contains no `.yml` files
+    *
+    * @example
+    * {{{
+    *   // my-semantic-models/
+    *   //   flights.yml
+    *   //   sales.yml
+    *   //   products.yml
+    *
+    *   val models = YamlLoader.loadDir("my-semantic-models/", Map(
+    *     "flights_tbl"  -> spark.read.parquet("s3://data/flights"),
+    *     "sales_tbl"    -> spark.read.parquet("s3://data/sales"),
+    *     "products_tbl" -> spark.read.parquet("s3://data/products"),
+    *   ))
+    *   models("flights").groupBy("carrier").aggregate("total_passengers").execute(spark)
+    *   models("sales").groupBy("region").aggregate("total_revenue").execute(spark)
+    *   }}}
+    */
+  def loadDir(path: String, tables: Map[String, DataFrame]): Map[String, SemanticTable] = {
+    val dir = new java.io.File(path)
+    if (!dir.exists())
+      throw new IllegalArgumentException(s"Directory not found: '$path'")
+    if (!dir.isDirectory)
+      throw new IllegalArgumentException(s"Expected a directory, got a file: '$path'")
+
+    val files = dir.listFiles { f: java.io.File =>
+      f.isFile && f.getName.endsWith(".yml")
+    }
+    if (files == null || files.isEmpty)
+      throw new IllegalArgumentException(
+        s"Directory '$path' contains no .yml files")
+
+    // Parse all YAML files into a merged config, then build all models in a single
+    // two-pass (pass 1: dims/measures for every model, pass 2: joins across all
+    // models). Calling load() per-file would fail because a join in file A may
+    // reference a model defined in file B — we need ALL models visible to joins.
+    val mergedConfig = mergeConfigs(files.toSeq)
+    val models = buildModels(mergedConfig, name =>
+      tables.getOrElse(name, throw tableNotFound(name, tables.keys)))
+    checkNoDuplicateModels(models, files.length)
+    models
+  }
+
+  /** Load all semantic models from every `*.yml` file in a directory, resolving
+    * `table:` references from the Spark metastore via `spark.table(name)`.
+    *
+    * @param path  directory path containing YAML model files
+    * @param spark active SparkSession with access to the metastore
+    * @return merged map of model-name → [[SemanticTable]]
+    * @throws IllegalArgumentException if two files define the same model name
+    */
+  def loadDir(path: String, spark: SparkSession): Map[String, SemanticTable] = {
+    val dir = new java.io.File(path)
+    if (!dir.exists())
+      throw new IllegalArgumentException(s"Directory not found: '$path'")
+    if (!dir.isDirectory)
+      throw new IllegalArgumentException(s"Expected a directory, got a file: '$path'")
+
+    val files = dir.listFiles { f: java.io.File =>
+      f.isFile && f.getName.endsWith(".yml")
+    }
+    if (files == null || files.isEmpty)
+      throw new IllegalArgumentException(
+        s"Directory '$path' contains no .yml files")
+
+    val mergedConfig = mergeConfigs(files.toSeq)
+    val models = buildModels(mergedConfig, name => spark.table(name))
+    checkNoDuplicateModels(models, files.length)
+    models
+  }
+
+  /** Parse each YAML file, merge into a single config map. Fails fast if any
+    * file fails to parse, with the offending file named in the error message. */
+  private def mergeConfigs(files: Seq[java.io.File]): Map[String, Map[String, Any]] = {
+    files.foldLeft(Map.empty[String, Map[String, Any]]) { (acc, f) =>
+      val cfg = try parseYaml(f.getAbsolutePath)
+      catch { case e: Exception =>
+        throw new IllegalArgumentException(s"Failed to parse '${f.getName}': ${e.getMessage}", e)
+      }
+      if ((acc.keySet intersect cfg.keySet).nonEmpty)
+        throw new IllegalArgumentException(
+          s"Duplicate model names across files: " +
+            (acc.keySet intersect cfg.keySet).toSeq.sorted.mkString(", "))
+      acc ++ cfg
+    }
+  }
+
+  /** Check that the number of loaded models matches what was expected from the file count. */
+  private def checkNoDuplicateModels(
+      models: Map[String, SemanticTable], fileCount: Int): Unit = {
+    // Duplicates are already caught by mergeConfigs; this is a hook in case we
+    // ever loosen that check (e.g. for overrides).
+    if (models.isEmpty && fileCount > 0)
+      throw new IllegalArgumentException("Directory contained YAML files but no models were built.")
+  }
+
+  /** Sanity check on the final map (called from buildModels). */
+
+  // -------------------------------------------------------------------------
+  // Parsing
+  // -------------------------------------------------------------------------
+
+  private def parseYaml(path: String): Map[String, Map[String, Any]] = {
+    val yaml = new Yaml()
+    // Use the loan pattern to guarantee the FileInputStream is closed even if
+    // parsing throws. SnakeYAML does NOT close the stream itself — leaving it
+    // open would leak a file descriptor per load on a long-lived Spark driver.
+    val raw = {
+      val stream = new java.io.FileInputStream(path)
+      try yaml.load[java.util.Map[String, AnyRef]](stream)
+      finally stream.close()
+    }
+    if (raw == null)
+      throw new IllegalArgumentException(s"YAML file '$path' is empty or could not be parsed.")
+    raw.asScala.view.mapValues(_.asInstanceOf[AnyRef]).toMap.map { case (k, v) =>
+      k -> toScalaMap(v)
+    }
+  }
+
+  /** Recursively convert SnakeYAML's java.util.LinkedHashMap nests to Scala Maps. */
+  private def toScalaMap(v: AnyRef): Map[String, Any] = v match {
+    case jm: java.util.Map[_, _] =>
+      jm.asScala.view.map { case (k, valv) =>
+        k.toString -> toScalaVal(valv.asInstanceOf[AnyRef])
+      }.toMap
+    case other =>
+      throw new IllegalArgumentException(
+        s"Expected a YAML mapping but got ${other.getClass.getSimpleName}: $other")
+  }
+
+  /** Safely extract metadata from a YAML `metadata:` block.
+    *
+    * YAML metadata values can be strings, lists, numbers, or nested maps. We coerce
+    * all values to strings for the in-memory `Map[String, String]` representation:
+    *   - String → as-is
+    *   - Seq/List → comma-joined
+    *   - Map/other → .toString
+    *
+    * The previous implementation did an unsafe `_.asInstanceOf[Map[String, String]]`
+    * which crashed at runtime when a value was a YAML list (e.g. `tags: [a, b]`).
+    * This helper makes that safe.
+    */
+  private def metadataFromYaml(raw: Option[Any]): Map[String, String] = raw match {
+    case None => Map.empty
+    case Some(m: Map[_, _]) =>
+      m.asInstanceOf[Map[String, Any]].map { case (k, v) =>
+        val coerced = v match {
+          case s: String      => s
+          case xs: Seq[_]     => xs.map(_.toString).mkString(",")
+          case xs: java.util.List[_] =>
+            xs.asScala.map(_.toString).mkString(",")
+          case other          => other.toString
+        }
+        k.toString -> coerced
+      }
+    case Some(other) =>
+      throw new IllegalArgumentException(
+        s"metadata: expected a YAML mapping, got ${other.getClass.getSimpleName}: $other")
+  }
+
+  /** Convert nested java.util.Map / java.util.List to Scala equivalents, leaving
+    * scalars (String, Int, Boolean, etc.) untouched. */
+  private def toScalaVal(v: AnyRef): Any = v match {
+    case jm: java.util.Map[_, _] =>
+      jm.asScala.view.map { case (k, vv) => k.toString -> toScalaVal(vv.asInstanceOf[AnyRef]) }.toMap
+    case jl: java.util.List[_] =>
+      jl.asScala.map(e => toScalaVal(e.asInstanceOf[AnyRef])).toSeq
+    case null => null
+    case other => other
+  }
+
+  // -------------------------------------------------------------------------
+  // Model building
+  // -------------------------------------------------------------------------
+
+  /** Build all models in two passes: (1) create base models with dims/measures,
+    * (2) apply joins (which reference other models by name). */
+  private def buildModels(
+      config: Map[String, Map[String, Any]],
+      resolveTable: String => DataFrame,
+  ): Map[String, SemanticTable] = {
+    // Pass 1: create all models (no joins yet).
+    var models = Map.empty[String, SemanticTable]
+    config.foreach { case (name, cfg) =>
+      models = models.updated(name, buildOneModel(name, cfg, resolveTable))
+    }
+
+    // Pass 2: apply joins in declaration order.
+    config.foreach { case (name, cfg) =>
+      cfg.get("joins").foreach { joinsRaw =>
+        val joins = asStringMap(joinsRaw, s"model '$name' joins")
+        models = models.updated(name, applyJoins(models(name), joins, models, name))
+      }
+    }
+    models
+  }
+
+  /** Build a single model (table + dimensions + base measures + calc measures).
+    * Joins are NOT applied here (they need all models to exist first). */
+  /** Render a metadata value as a String. Scalars pass through; list-like
+    * values render as YAML flow form (e.g. `[a, b]`) so consumers see list
+    * membership without external context. */
+  private def stringifyMetaValue(v: Any): String = v match {
+    case null       => ""
+    case xs: Seq[_] => xs.map(stringifyMetaValue).mkString("[", ", ", "]")
+    case xs: scala.collection.Iterable[_] =>
+      xs.map(stringifyMetaValue).mkString("[", ", ", "]")
+    case jl: java.util.List[_] =>
+      val parts = scala.collection.mutable.ListBuffer.empty[String]
+      val it = jl.iterator()
+      while (it.hasNext) parts += stringifyMetaValue(it.next())
+      parts.mkString("[", ", ", "]")
+    case other => other.toString
+  }
+
+  private def buildOneModel(
+      name: String,
+      cfg: Map[String, Any],
+      resolveTable: String => DataFrame,
+  ): SemanticTable = {
+    val tableName = cfg.get("table") match {
+      case Some(t: String) => t
+      case _ => throw new IllegalArgumentException(
+        s"Model '$name' must specify a 'table' field (the source DataFrame name).")
+    }
+    val description = cfg.get("description").collect { case s: String => s }
+    val df = resolveTable(tableName)
+
+    var model = toSemanticTable(df, name = Some(name), description = description)
+
+    // Optional `version:` field at the top of the model block. Non-negative integer;
+    // 0 (default) means "pre-versioning". See mcp-contract.md, "Result envelope".
+    val declaredVersion: Int = cfg.get("version") match {
+      case Some(n: java.lang.Number) =>
+        val intVal = n.intValue()
+        require(intVal >= 0, s"Model '$name': 'version' must be non-negative, got $intVal")
+        intVal
+      case Some(other) =>
+        throw new IllegalArgumentException(
+          s"Model '$name': 'version' must be an integer, got ${other.getClass.getSimpleName}")
+      case None => 0
+    }
+    if (declaredVersion != 0) model = model.version(declaredVersion)
+
+    cfg.get("dimensions").foreach { dimsRaw =>
+      val dims = asStringToAnyMap(dimsRaw, s"model '$name' dimensions")
+      model = model.withDimensions(dims.map { case (dName, dCfg) =>
+        buildDimension(dName, dCfg)
+      }.toSeq: _*)
+    }
+
+    // Transforms must be applied BEFORE measures/calculated_measures are
+    // added, so that the new columns are visible to the column-reference
+    // probe in buildBaseMeasure. Order is preserved from the YAML.
+    cfg.get("transforms").foreach { transformsRaw =>
+      val transforms = asStringToAnyMap(transformsRaw, s"model '$name' transforms")
+      model = model.withTransforms(transforms.map { case (tName, tCfg) =>
+        buildTransform(tName, tCfg)
+      }.toSeq: _*)
+    }
+
+    cfg.get("measures").foreach { measuresRaw =>
+      val measures = asStringToAnyMap(measuresRaw, s"model '$name' measures")
+      model = model.withMeasures(measures.map { case (mName, mCfg) =>
+        buildBaseMeasure(mName, mCfg)
+      }.toSeq: _*)
+    }
+
+    cfg.get("calculated_measures").foreach { calcsRaw =>
+      val calcs = asStringToAnyMap(calcsRaw, s"model '$name' calculated_measures")
+      model = model.withMeasures(calcs.map { case (mName, mCfg) =>
+        buildCalcMeasure(mName, mCfg)
+      }.toSeq: _*)
+    }
+
+    // Optional `filters:` block — row-level hygiene on this model's source table.
+    // Each filter's `expr:` is validated against the source DataFrame's columns
+    // (pre-join semantics; see SparkFilterValidator).
+    cfg.get("filters").foreach { filtersRaw =>
+      val filters = asStringToAnyMap(filtersRaw, s"model '$name' filters")
+      filters.foreach { case (fName, fCfgRaw) =>
+        // fCfgRaw is Any — it should be a map of the filter's own keys.
+        val fCfg = fCfgRaw match {
+          case m: Map[_, _] => m.asInstanceOf[Map[String, Any]]
+          case jm: java.util.Map[_, _] =>
+            import scala.jdk.CollectionConverters._
+            jm.asScala.toMap.map { case (k, v) => (k.toString, v.asInstanceOf[Any]) }
+          case _ => throw new IllegalArgumentException(
+            s"Filter '$fName' on model '$name': must be a mapping, got ${fCfgRaw.getClass.getSimpleName}")
+        }
+        val expr: String = fCfg.get("expr") match {
+          case Some(s: String) if s.nonEmpty => s
+          case other => throw new IllegalArgumentException(
+            s"Filter '$fName' on model '$name' must specify 'expr' " +
+            s"(a Spark SQL filter expression), got: $other")
+        }
+        val description: Option[String] = fCfg.get("description") match {
+          case Some(s: String) if s.nonEmpty => Some(s)
+          case _ => None
+        }
+        val meta: Map[String, String] = fCfg.get("metadata") match {
+          case Some(m: Map[_, _]) =>
+            m.toIterable.map { case (k, v) => (k.toString, stringifyMetaValue(v)) }.toMap
+          case Some(jm: java.util.Map[_, _]) =>
+            import scala.jdk.CollectionConverters._
+            jm.asScala.map { case (k, v) => (k.toString, stringifyMetaValue(v)) }.toMap
+          case _ => Map.empty[String, String]
+        }
+        // Pre-join column visibility check — fails fast at model-load time.
+        SparkFilterValidator.validate(expr, df.columns.toSet, name, fName)
+        model = model.withRowFilter(fName, expr, description, meta)
+      }
+    }
+
+    model
+  }
+
+  // -------------------------------------------------------------------------
+  // Dimension / measure builders
+  // -------------------------------------------------------------------------
+
+  /** Build a [[Dimension]] from YAML config.
+    *
+    * - Simple column name → scope-based resolution (`t => t("col")`) so the framework's
+    *   resolvability probing (join pre-agg) produces clean errors.
+    * - Complex SQL expression → `functions.expr(sql)` (derived dimensions).
+    */
+  private def buildDimension(name: String, cfg: Any): Dimension = {
+    val (exprStr, description, extra) = parseMetricConfig(cfg, "dimension", name)
+    val metadata = metadataFromYaml(extra.get("metadata"))
+    val isTimeDim = extra.getOrElse("is_time_dimension", false).asInstanceOf[Boolean]
+    val isEntity = extra.getOrElse("is_entity", false).asInstanceOf[Boolean]
+    val smallestGrain = extra.get("smallest_time_grain").map(_.toString)
+
+    if (isTimeDim)
+      Dimension.time(name, dimensionExpr(exprStr), smallestTimeGrain = smallestGrain,
+        description = description, metadata = metadata)
+    else if (isEntity)
+      Dimension.entity(name, dimensionExpr(exprStr), description, metadata)
+    else
+      Dimension(name, dimensionExpr(exprStr), description, metadata)
+  }
+
+  /** A dimension lambda: simple identifiers go through the scope (for clean
+    * resolvability probing); complex SQL expressions use `functions.expr`. */
+  private def dimensionExpr(exprStr: String): SemanticScope => org.apache.spark.sql.Column =
+    if (exprStr.matches("[a-zA-Z_][a-zA-Z0-9_.]*"))
+      t => t(exprStr)
+    else
+      _ => expr(exprStr)
+
+  /** Build a [[Transform]] from YAML config.
+    *
+    * The expr is always passed through `functions.expr()` (Spark's full SQL
+    * parser) — transforms can use per-row functions (datediff, case-when)
+    * and window functions (lag, lead, row_number) which the CalcExpr
+    * parser for `calculated_measures:` doesn't support. */
+  private def buildTransform(name: String, cfg: Any): Transform = {
+    val (exprStr, description, _) = parseMetricConfig(cfg, "transform", name)
+    Transform(name, _ => expr(exprStr), description)
+  }
+
+  /** Build a base [[Measure]] from the `measures:` section.
+    *
+    * Uses `functions.expr(sql)` for the actual Spark SQL aggregate (e.g. `sum(distance)`),
+    * BUT the lambda first probes each column reference through the scope. This is
+    * critical for join pre-aggregation: the framework tests whether a measure resolves
+    * on each side by calling `m.expr(scope)` and catching `UnknownFieldError`. A bare
+    * `_ => expr(sql)` would NOT throw (Spark's `expr()` is lazy), so every base measure
+    * would be considered resolvable on both sides of a join → duplicate columns.
+    * Probing column refs through the scope makes the resolvability test accurate. */
+  private def buildBaseMeasure(name: String, cfg: Any): Measure = {
+    val (exprStr, description, extra) = parseMetricConfig(cfg, "measure", name)
+    val metadata = metadataFromYaml(extra.get("metadata"))
+    val colRefs = extractColumnRefs(exprStr)
+    Measure(name, t => {
+      colRefs.foreach(c => t(c))  // throws UnknownFieldError if a column is missing
+      expr(exprStr)
+    }, description, metadata)
+  }
+
+  /** Extract probable column-reference identifiers from a Spark SQL expression string,
+    * filtering out SQL keywords, aggregate / window function names, and numeric literals.
+    *
+    * Used by [[buildBaseMeasure]] so the join pre-agg probe can tell whether a measure
+    * resolves on a given DataFrame. This is intentionally conservative: it only needs
+    * to be correct about which identifiers ARE columns, not which aren't (a false
+    * positive — treating a function name as a column — would cause a spurious throw,
+    * but the blocklist covers all standard aggregates and window functions).
+    *
+    * Tradeoff: identifiers in this set cannot be used as column names. Acceptable for
+    * window-function names (`row_number`, `rank`, ...) and SQL syntax keywords
+    * (`order`, `rows`, ...); extremely rare as actual column names. */
+  private def extractColumnRefs(sql: String): Seq[String] = {
+    val sqlKeywords = Set(
+      // aggregate functions
+      "sum", "count", "avg", "mean", "min", "max", "stddev", "variance", "first", "last",
+      // window functions
+      "row_number", "rank", "dense_rank", "percent_rank", "cume_dist", "ntile",
+      "lag", "lead", "nth_value", "first_value", "last_value",
+      // other functions commonly used in measure expressions
+      "coalesce", "cast", "round", "floor", "ceil", "abs", "distinct", "over", "partition",
+      // date / time functions
+      "datediff", "date_add", "date_sub", "date_trunc", "trunc", "current_date", "current_timestamp",
+      // case-when syntax
+      "case", "when", "then", "else", "end",
+      // boolean literals
+      "true", "false",
+      // SQL clauses / types that may appear in casts
+      "as", "by", "int", "long", "double", "decimal", "string", "boolean", "date", "timestamp",
+      // window frame syntax
+      "order", "rows", "range", "row", "between", "unbounded", "preceding", "following",
+      "and", "current", "asc", "desc", "nulls",
+    )
+    val token = "[a-zA-Z_][a-zA-Z0-9_]*".r
+    token.findAllMatchIn(sql).map(_.matched).filterNot(tok =>
+      sqlKeywords.contains(tok.toLowerCase) || tok.matches("[0-9]+"))
+      .toSeq.distinct
+  }
+
+  /** Build a calc [[Measure]] from the `calculated_measures:` section.
+    *
+    * The expression is parsed by [[CalcExpr]] so identifiers resolve through the
+    * SemanticScope — this is what makes the framework's calc classification work.
+    * `all(name)` references become `t.all(name)` for percent-of-total. */
+  private def buildCalcMeasure(name: String, cfg: Any): Measure = {
+    val (exprStr, description, extra) = parseMetricConfig(cfg, "calculated measure", name)
+    val metadata = metadataFromYaml(extra.get("metadata"))
+    Measure(name, t => CalcExpr(t, exprStr), description, metadata)
+  }
+
+  // -------------------------------------------------------------------------
+  // Join application
+  // -------------------------------------------------------------------------
+
+  /** Apply joins declared in YAML to a model. Joins are applied left-to-right
+    * (chained), matching the Scala DSL fluent join API.
+    *
+    * After each join, the joined model's dimensions are re-added with an `alias.` prefix
+    * so they are groupable by their aliased name (e.g. `carriers.name`) - mirroring what
+    * a Scala consumer writes explicitly as Dimension("carriers.name", t => t("name")).
+    *
+    * Join keys must share the same column name on both sides (left_on == right_on),
+    * matching semanticdf's equi-join engine. Asymmetric keys are a future enhancement. */
+  private def applyJoins(
+      model: SemanticTable,
+      joins: Map[String, Map[String, Any]],
+      allModels: Map[String, SemanticTable],
+      modelName: String,
+  ): SemanticTable = {
+    var result = model
+    joins.foreach { case (alias, jCfg) =>
+      val joinModelName = jCfg.get("model") match {
+        case Some(m: String) => m
+        case _ => throw new IllegalArgumentException(
+          s"Join '$alias' in model '$modelName' must specify a 'model' field.")
+      }
+      val right = allModels.getOrElse(joinModelName,
+        throw new IllegalArgumentException(
+          s"Join '$alias' references model '$joinModelName' which is not defined. " +
+            s"Available: ${allModels.keys.toSeq.sorted.mkString(", ")}"))
+
+      val joinType = jCfg.get("type").map(_.toString).getOrElse("one")
+      joinType match {
+        case "cross" =>
+          result = result.join_cross(right)
+        case "one" | "many" =>
+          val leftOn = jCfg.get("left_on").map(_.toString).getOrElse(
+            throw new IllegalArgumentException(
+              s"Join '$alias' (type $joinType) must specify 'left_on'."))
+          val rightOn = jCfg.get("right_on").map(_.toString).getOrElse(
+            throw new IllegalArgumentException(
+              s"Join '$alias' (type $joinType) must specify 'right_on'."))
+          if (leftOn != rightOn)
+            throw new IllegalArgumentException(
+              s"Join '$alias': left_on ('$leftOn') and right_on ('$rightOn') must match. " +
+                s"semanticdf's equi-join requires the same key column name on both tables. " +
+                s"Rename the column in one table so both use '$leftOn'.")
+          val on: (JoinSide, JoinSide) => org.apache.spark.sql.Column =
+            (l, r) => l(leftOn) === r(rightOn)
+          joinType match {
+            case "one"  => result = result.join_one(right, on)
+            case "many" => result = result.join_many(right, on)
+          }
+          // Re-expose the joined model's dimensions under the alias prefix so consumers
+          // can groupBy("carriers.name") etc. The expr still references the bare column
+          // (which survives the join), only the dimension NAME is prefixed.
+          val rightDims = right.dimensions.values.toSeq.collect {
+            case d if d.name != leftOn =>
+              Dimension(s"$alias.${d.name}", d.expr, d.description)
+          }
+          if (rightDims.nonEmpty) result = result.withDimensions(rightDims: _*)
+        case other =>
+          throw new IllegalArgumentException(
+            s"Join '$alias' has invalid type '$other'. Use: one, many, or cross.")
+      }
+    }
+    result
+  }
+
+  // -------------------------------------------------------------------------
+
+  /** Extract (expression, description, extras) from a metric config value.
+    *
+    * Supports two YAML formats:
+    *   - Shorthand string: `total_distance: "sum(distance)"`
+    *   - Full mapping:
+    *       total_distance:
+    *         expr: "sum(distance)"
+    *         description: "..."
+    */
+  private def parseMetricConfig(
+      cfg: Any,
+      metricType: String,
+      name: String,
+  ): (String, Option[String], Map[String, Any]) = cfg match {
+    case s: String =>
+      (s, None, Map.empty)
+    case m: Map[_, _] @unchecked =>
+      val map = m.asInstanceOf[Map[String, Any]]
+      val exprStr = map.get("expr") match {
+        case Some(e: String) => e
+        case _ => throw new IllegalArgumentException(
+          s"$metricType '$name' must specify an 'expr' field (string).")
+      }
+      val description = map.get("description").collect { case d: String => d }
+      val extras = map.filterNot { case (k, _) => k == "expr" || k == "description" }
+      (exprStr, description, extras)
+    case _ =>
+      throw new IllegalArgumentException(
+        s"$metricType '$name': expected a string or mapping, got ${cfg.getClass.getSimpleName}.")
+  }
+
+  /** Coerce a YAML value to `Map[String, Any]` where each value may be a string
+    * (shorthand) or a mapping (full form). Used for dimensions/measures/calculated_measures. */
+  private def asStringToAnyMap(v: Any, context: String): Map[String, Any] = v match {
+    case m: Map[_, _] @unchecked =>
+      m.asInstanceOf[Map[String, Any]]
+    case _ =>
+      throw new IllegalArgumentException(
+        s"$context: expected a mapping, got ${v.getClass.getSimpleName}.")
+  }
+
+  /** Coerce a YAML value to `Map[String, Map[String, Any]]` with a context label for errors. */
+  private def asStringMap(v: Any, context: String): Map[String, Map[String, Any]] = v match {
+    case m: Map[_, _] @unchecked =>
+      m.asInstanceOf[Map[String, Any]].map {
+        case (k: String, inner: Map[_, _] @unchecked) =>
+          k -> inner.asInstanceOf[Map[String, Any]]
+        case (k, inner) =>
+          throw new IllegalArgumentException(
+            s"$context: key '$k' must be a mapping, got ${inner.getClass.getSimpleName}.")
+      }
+    case _ =>
+      throw new IllegalArgumentException(
+        s"$context: expected a mapping, got ${v.getClass.getSimpleName}.")
+  }
+
+  private def tableNotFound(name: String, available: Iterable[String]): IllegalArgumentException =
+    new IllegalArgumentException(
+      s"Table '$name' not found in the provided tables map. " +
+        s"Available: ${available.toSeq.sorted.mkString(", ")}")
+}

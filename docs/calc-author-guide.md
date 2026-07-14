@@ -1,6 +1,6 @@
 # Calc Author Guide
 
-A guide for analysts and engineers who define calc measures in semantica.
+A guide for analysts and engineers who define calc measures in semanticdf.
 
 ---
 
@@ -53,7 +53,7 @@ Measure("pct_of_total", t => t("total_passengers") / t.all("total_passengers"))
 ```scala
 // Using safeDivide: returns 0.0 when denominator is 0 or null
 // Using plain /: returns null on Spark 3, throws on Spark 4 (ANSI mode)
-import io.semantica.CalcHelpers._
+import io.semanticdf.CalcHelpers._
 Measure("safe_pct", t => safeDivide(t("total"), t.all("total"), defaultValue = 0.0))
 ```
 
@@ -97,7 +97,7 @@ When a calc uses `t.all()`, the formula is **re-evaluated at zero grain**:
 Measure("avg_passengers",     t => t("total_passengers") / t("flight_count"))
 Measure("pct_of_avg_passengers", t => t("avg_passengers") / t.all("avg_passengers"))
 ```
-`avg_passengers` at zero grain = grand_total_passengers / grand_flight_count = 2375/23 = 103.3  
+`avg_passengers` at zero grain = grand_total_passengers / grand_flight_count = 2375/23 = 103.3
 **NOT** the sum of per-group averages (which would be wrong).
 
 ---

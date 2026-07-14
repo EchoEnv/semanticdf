@@ -1,4 +1,4 @@
-# semantica model: flights
+# semanticdf model: flights
 #
 # Each top-level key is a model name. The 'table:' field names a source DataFrame
 # (passed in by your app via YamlLoader.loadDir(...))
@@ -15,79 +15,91 @@
 #   - Joins to the carriers lookup table
 
 flights:
-  table: flights_csv
-  description: "Flight facts: per-flight distance and passenger counts"
+    version: 1
+    table: flights_csv
+    description: "Flight facts: per-flight distance and passenger counts"
 
-  dimensions:
-    carrier:
-      expr: carrier
-      description: "Airline carrier code (IATA two-letter identifier)"
-      metadata:
-        owner: data-platform-team
-        tags: [airline, identifier]
-    origin:
-      expr: origin
-      description: "Origin airport code (IATA three-letter)"
-      metadata:
-        owner: data-platform-team
-        tags: [airport]
+    # Pre-join row-level hygiene on the source table. Filters declare what
+    # rows ARE part of this model, before any join or aggregation runs.
+    # Column references must resolve against flights_* (not joined-side columns).
+    filters:
+        require_origin_and_carrier:
+            expr: "origin IS NOT NULL AND carrier IS NOT NULL"
+            description: "Drop rows with null origin or carrier — flagged in upstream QA rule."
+            metadata:
+                owner: data-platform-team
+                tags: [data-quality]  
 
-    flight_date:
-      expr: flight_date
-      description: "Scheduled flight date"
-      is_time_dimension: true
-      smallest_time_grain: day
+    dimensions:
+        carrier:
+            expr: carrier
+            description: "Airline carrier code (IATA two-letter identifier)"
+            metadata:
+                owner: data-platform-team
+                tags: [airline, identifier]
+        origin:
+            expr: origin
+            description: "Origin airport code (IATA three-letter)"
+            metadata:
+                owner: data-platform-team
+                tags: [airport]
 
-  measures:
-    total_passengers:
-      expr: "sum(passengers)"
-      description: "Total passengers across all flights in the group"
-      metadata:
-        owner: analytics-team
-        unit: count
-        aggregation: sum
-    flight_count:
-      expr: "count(1)"
-      description: "Number of flights (rows) in the group"
-      metadata:
-        owner: analytics-team
-        unit: count
-        aggregation: count
-    total_distance:
-      expr: "sum(distance)"
-      description: "Total distance in miles across all flights"
-      metadata:
-        owner: analytics-team
-        unit: miles
-        aggregation: sum
+        flight_date:
+            expr: flight_date
+            description: "Scheduled flight date"
+            is_time_dimension: true
+            smallest_time_grain: day
 
-  calculated_measures:
-    avg_passengers:
-      expr: "total_passengers / flight_count"
-      description: "Average passengers per flight"
-      metadata:
-        owner: analytics-team
-        unit: count
-    avg_distance:
-      expr: "total_distance / flight_count"
-      description: "Average flight distance in miles"
-      metadata:
-        owner: analytics-team
-        unit: miles
-    # Percent-of-total: all() re-evaluates total_passengers at zero grain
-    # (the grand total), NOT the sum of per-group values. This avoids the
-    # classic BI trap where pct_of_total sums to > 100%.
-    pct_of_total:
-      expr: "total_passengers / all(total_passengers)"
-      description: "Fraction of all passengers served by this group"
-      metadata:
-        owner: analytics-team
-        unit: ratio
-        format: percent
+    measures:
+        total_passengers:
+            expr: "sum(passengers)"
+            description: "Total passengers across all flights in the group"
+            metadata:
+                owner: analytics-team
+                unit: count
+                aggregation: sum
+        flight_count:
+            expr: "count(1)"
+            description: "Number of flights (rows) in the group"
+            metadata:
+                owner: analytics-team
+                unit: count
+                aggregation: count
+        total_distance:
+            expr: "sum(distance)"
+            description: "Total distance in miles across all flights"
+            metadata:
+                owner: analytics-team
+                unit: miles
+                aggregation: sum
 
-  joins:
-    carriers:
-      model: carriers
-      type: one
-      left_on: carrier
-      right_on: carrier
+    calculated_measures:
+        avg_passengers:
+            expr: "total_passengers / flight_count"
+            description: "Average passengers per flight"
+            metadata:
+                owner: analytics-team
+                unit: count
+        avg_distance:
+            expr: "total_distance / flight_count"
+            description: "Average flight distance in miles"
+            metadata:
+                owner: analytics-team
+                unit: miles
+        # Percent-of-total: all() re-evaluates total_passengers at zero grain
+        # (the grand total), NOT the sum of per-group values. This avoids the
+        # classic BI trap where pct_of_total sums to > 100%.
+        pct_of_total:
+            expr: "total_passengers / all(total_passengers)"
+            description: "Fraction of all passengers served by this group"
+            metadata:
+                owner: analytics-team
+                unit: ratio
+                format: percent
+
+    joins:
+        carriers:
+            model: carriers
+            type: one
+            left_on: carrier
+            right_on: carrier

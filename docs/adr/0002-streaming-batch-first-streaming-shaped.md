@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (streaming execution deferred; interface unification accepted now)
 - **Date:** 2026-07-08
-- **Context:** `DESIGN.md` §4.5. The question was whether semantica should support
+- **Context:** `DESIGN.md` §4.5. The question was whether semanticdf should support
   Structured Streaming for big-volume data, and if so whether batch and streaming should
   share one DSL/interface or be separate modes.
 
@@ -24,11 +24,11 @@
 ## Why streaming needs more than the batch model
 
 Structured Streaming looks API-compatible (same `DataFrame`/`Column` types) but imposes
-constraints that semantica's core operations violate. The op tree is **mostly**
+constraints that semanticdf's core operations violate. The op tree is **mostly**
 mode-agnostic; the violations are localized to a few operations and to the percent-of-total
 mechanism.
 
-| semantica feature | Streaming verdict | Reason |
+| semanticdf feature | Streaming verdict | Reason |
 |---|---|---|
 | `t.all(...)` percent-of-total | ❌ unsupported (as designed) | Zero-grain aggregation over the *entire* stream + `crossJoin`. Streaming forbids unbounded aggregation without a window (state store grows forever → the memory leak) and `crossJoin` between streams is not supported. |
 | Cross-join totals (`DESIGN.md` §6.2) | ❌ unsupported | The mechanism for percent-of-total; no streaming equivalent. |
@@ -38,7 +38,7 @@ mechanism.
 | `join_one` lookup | ✅ ports cleanly | Stream-static joins are first-class in Spark. |
 | Stateless `filter` | ✅ ports cleanly | — |
 
-Net: the parts that make semantica *semantic* (totals, unbounded group-by, multi-fact
+Net: the parts that make semanticdf *semantic* (totals, unbounded group-by, multi-fact
 grain correction) collide with streaming's bounded-state requirement. That collision is
 the reason streaming needs a distinct *execution* path — but not a distinct *construction*
 path.
@@ -82,7 +82,7 @@ Streaming amplifies the §4.4 invariants and adds one new failure mode:
 
 1. **State store growth is the real memory leak.** Any stateful aggregation (most of a
    semantic layer) without a watermark/TTL retains state across the stream's lifetime
-   and OOMs executors after hours on big volume. This is **not fixable in semantica's
+   and OOMs executors after hours on big volume. This is **not fixable in semanticdf's
    code** — it requires *enforcing windowing* in the model, which is why the streaming
    terminal rejects window-less aggregation. The §4.4 "no cached internals" invariant is
    *mandatory* here (caching a streaming intermediate pins shuffle output across

@@ -3,7 +3,7 @@
 **Status:** Draft for review
 **Last updated:** Phase E + 2 templates shipped, no consumer yet
 
-This plan lists the features and performance improvements that would benefit semantica, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
+This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
 ---
 
@@ -36,7 +36,7 @@ These solve known universal pain and don't require consumer validation.
 **Impact:** High — 30-50% faster queries on wide models (10+ measures).
 
 **Files to change:**
-- `src/main/scala/io/semantica/SemanticOp.scala` — `SemanticAggregateOp.compileWithBase` filters by `measureNames`
+- `src/main/scala/io/semanticdf/SemanticOp.scala` — `SemanticAggregateOp.compileWithBase` filters by `measureNames`
 - Add a test that confirms unrequested measures aren't in the Spark plan
 
 **Why T1:** Universal pain — every wide-model query is affected. No consumer signal needed.
@@ -52,7 +52,7 @@ These solve known universal pain and don't require consumer validation.
 
 **Problem:** A new user has a parquet table and wants a semantic model. Today they must hand-write the YAML from scratch — listing every column, writing Spark SQL expressions, picking aggregation types. This is the #1 onboarding friction.
 
-**Solution:** A CLI tool: `mvn exec:java -Dexec.mainClass=io.semantica.tools.Main -Dexec.args="introspect <path>"` reads a parquet/csv, infers:
+**Solution:** A CLI tool: `mvn exec:java -Dexec.mainClass=io.semanticdf.tools.Main -Dexec.args="introspect <path>"` reads a parquet/csv, infers:
 - Dimensions: all string/timestamp/date columns → dims, with `is_time_dimension` set on timestamp/date
 - Measures: numeric columns → base measures with `sum()`/`count()`/`avg()` suggestions
 - Metadata: column-name-based heuristics (`email` → pii, `id` → identifier, `_at`/`_date` → time dimension)
@@ -93,14 +93,14 @@ Emits a starter YAML file the user can edit.
 
 ### 1.4 Auto-generate HTML/Markdown documentation from YAML ✅ (v0.1.0)
 
-**Done.** `io.semantica.tools.DocsGen` reads YAML model files and emits a self-contained HTML page — no external CSS, no templates:
+**Done.** `io.semanticdf.tools.DocsGen` reads YAML model files and emits a self-contained HTML page — no external CSS, no templates:
 
 ```scala
 val docsGen = new DocsGen()
 docsGen.write("docs/index.html", docsGen.fromFile("models/"))
 ```
 
-Output: sidebar nav (all models), per-model cards with dimension/measure/join tables, time/entity/pii badges, embedded CSS. CLI: `mvn exec:java -Dexec.mainClass=io.semantica.tools.Main -Dexec.args="docsgen --path models/"`.
+Output: sidebar nav (all models), per-model cards with dimension/measure/join tables, time/entity/pii badges, embedded CSS. CLI: `mvn exec:java -Dexec.mainClass=io.semanticdf.tools.Main -Dexec.args="docsgen --path models/"`.
 
 ---
 
@@ -179,9 +179,9 @@ SPARK PLAN (df.explain)
   measure references without executing; replaces the previous broken string-match heuristic.
 
 **Files changed:**
-- `src/main/scala/io/semantica/SemanticTable.scala` — added `explainSemantic`, private
+- `src/main/scala/io/semanticdf/SemanticTable.scala` — added `explainSemantic`, private
   `SemanticPlanRenderer`, `MeasureProbeScope`, plus refactors to renderers (~520 LOC).
-- `src/test/scala/io/semantica/ExplainSemanticSpec.scala` — 8 regression tests.
+- `src/test/scala/io/semanticdf/ExplainSemanticSpec.scala` — 8 regression tests.
 
 **Effort:** ~1.5 person-days (rendering + polish after first user feedback).
 
@@ -206,7 +206,7 @@ ESTIMATED: scans 28 MB, no shuffle
 **Impact:** Medium — debugging slow queries becomes much easier.
 
 **Files to change:**
-- `src/main/scala/io/semantica/SemanticTable.scala` — add `explainSemantic(spark)`
+- `src/main/scala/io/semanticdf/SemanticTable.scala` — add `explainSemantic(spark)`
 - New internal: a `SemanticPlanRenderer` that walks the op tree and produces the explanation
 
 **Why T1:** Already have the building blocks (`SemanticOp` exposes routing info, `explain()` shows the op tree). Just need to render it for humans.
@@ -227,8 +227,8 @@ These are valuable but require real consumer pain to justify.
 **Impact:** High for hot dashboards — sub-second response for repeated queries.
 
 **Files to change:**
-- New: `src/main/scala/io/semantica/QueryCache.scala`
-- `src/main/scala/io/semantica/SemanticTable.scala` — wrap `.toDataFrame(spark)` in cache lookup
+- New: `src/main/scala/io/semanticdf/QueryCache.scala`
+- `src/main/scala/io/semanticdf/SemanticTable.scala` — wrap `.toDataFrame(spark)` in cache lookup
 
 **Consumer gate:** Once a consumer reports dashboard latency > 5s OR same query running > 10x/hour.
 
@@ -253,8 +253,8 @@ materializations:
 **Impact:** High for hot paths.
 
 **Files to change:**
-- `src/main/scala/io/semantica/SemanticOp.scala` — extract materialization compilation
-- `src/main/scala/io/semantica/Materializer.scala` — orchestrator
+- `src/main/scala/io/semanticdf/SemanticOp.scala` — extract materialization compilation
+- `src/main/scala/io/semanticdf/Materializer.scala` — orchestrator
 - YAML schema extension for `materializations:` block
 
 **Consumer gate:** Once a consumer identifies a query that runs 1000x/day and wants sub-second latency.
@@ -271,8 +271,8 @@ materializations:
 **Impact:** High — unlocks real-time use cases.
 
 **Files to change:**
-- `src/main/scala/io/semantica/SemanticOp.scala` — add `SemanticStreamOp`
-- New: `src/main/scala/io/semantica/StreamingTerminal.scala`
+- `src/main/scala/io/semanticdf/SemanticOp.scala` — add `SemanticStreamOp`
+- New: `src/main/scala/io/semanticdf/StreamingTerminal.scala`
 - New: `SemanticTable.toStreamingQuery(spark): StreamingQuery`
 
 **Consumer gate:** Once a consumer explicitly asks for streaming/real-time. Until then, batch is enough.
@@ -283,15 +283,15 @@ materializations:
 
 **Problem:** When a YAML model changes, downstream consumers (dashboards, APIs, other models) break silently. No way to know "who uses total_revenue?"
 
-**Solution:** Track every loaded model version (git SHA + content hash). On load, write a row to `_semantica_lineage` with the model name, version, and the fields it exposes. When a model is reloaded, diff the fields and emit a "fields added/removed" event.
+**Solution:** Track every loaded model version (git SHA + content hash). On load, write a row to `_semanticdf_lineage` with the model name, version, and the fields it exposes. When a model is reloaded, diff the fields and emit a "fields added/removed" event.
 
 **Effort:** 1 week
 **Impact:** Medium — needed for governance but not blocking for first consumer.
 
 **Files to change:**
-- New: `src/main/scala/io/semantica/ModelRegistry.scala`
-- `src/main/scala/io/semantica/YamlLoader.scala` — emit lineage events
-- New: `_semantica_lineage` parquet/Delta table
+- New: `src/main/scala/io/semanticdf/ModelRegistry.scala`
+- `src/main/scala/io/semanticdf/YamlLoader.scala` — emit lineage events
+- New: `_semanticdf_lineage` parquet/Delta table
 
 **Consumer gate:** Once a consumer reports "dashboard broke and we don't know why" or "we need to audit who uses what metric."
 
@@ -320,8 +320,8 @@ materializations:
 **Impact:** Medium-High — needed for compliance.
 
 **Files to change:**
-- New: `src/main/scala/io/semantica/AuditLogger.scala`
-- `src/main/scala/io/semantica/SemanticTable.scala` — emit events from `.toDataFrame(spark)`
+- New: `src/main/scala/io/semanticdf/AuditLogger.scala`
+- `src/main/scala/io/semanticdf/SemanticTable.scala` — emit events from `.toDataFrame(spark)`
 
 **Consumer gate:** Once a consumer asks for compliance reporting or chargeback.
 
@@ -331,7 +331,7 @@ materializations:
 
 ### 3.1 REST API / server mode
 
-Spin up semantica as an HTTP service. Accept SQL-like queries (`POST /query {model: "orders", groupBy: [...], aggregate: [...]}`), return JSON. Any BI tool can hit it.
+Spin up semanticdf as an HTTP service. Accept SQL-like queries (`POST /query {model: "orders", groupBy: [...], aggregate: [...]}`), return JSON. Any BI tool can hit it.
 
 **Effort:** 1-2 weeks
 **Impact:** Removes Spark dependency from BI consumers.
@@ -342,7 +342,7 @@ Spin up semantica as an HTTP service. Accept SQL-like queries (`POST /query {mod
 
 ### 3.2 CLI tool
 
-`semantica query models/ "SELECT carrier, total_revenue FROM orders GROUP BY carrier"`. Terminal-friendly exploration. Wraps the existing Scala API.
+`semanticdf query models/ "SELECT carrier, total_revenue FROM orders GROUP BY carrier"`. Terminal-friendly exploration. Wraps the existing Scala API.
 
 **Effort:** 3-4 person-days
 **Impact:** Devs love this for debugging.
@@ -383,7 +383,7 @@ JSON Schema for the YAML format. Autocomplete, validation, hover docs.
 
 ### 3.5 dbt integration
 
-Read dbt models as semantic tables. Build semantica on top of dbt's curated layer.
+Read dbt models as semantic tables. Build semanticdf on top of dbt's curated layer.
 
 **Effort:** 2 weeks
 **Impact:** Tap into the existing dbt ecosystem. ~30% of BI teams already use dbt.
@@ -399,7 +399,7 @@ Python (PySpark) wrapper. Java bindings. R wrapper.
 **Effort:** 2-3 weeks total
 **Impact:** Largest user base expansion.
 
-**Consumer gate:** Once multiple teams in different languages want to use semantica.
+**Consumer gate:** Once multiple teams in different languages want to use semanticdf.
 
 ---
 
@@ -440,7 +440,7 @@ These are tempting but premature without a real consumer.
 |---|---|
 | **Custom web UI** | BI tools exist. Build the API, not the UI. |
 | **GraphQL endpoint** | REST/SQL is enough. Don't invent a query language. |
-| **ML model serving** | Out of scope. semantica is about metrics, not predictions. |
+| **ML model serving** | Out of scope. semanticdf is about metrics, not predictions. |
 | **Multi-cloud deployment** | Single-cloud works fine. Add complexity when needed. |
 | **Custom UDFs in YAML** | Push back to Scala DSL. Keeps YAML simple. |
 | **Time travel queries** | Built into Delta/Iceberg — don't reinvent. |

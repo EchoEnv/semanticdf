@@ -1,6 +1,6 @@
-# Semantica — First Consumer Onboarding Plan
+# SemanticDF — First Consumer Onboarding Plan
 
-**Goal:** Surface real production gaps in semantica by running it against real data with a real workload. Bugs that only surface with messy data, real schemas, and real volumes. Not a production deployment — a structured soak test.
+**Goal:** Surface real production gaps in semanticdf by running it against real data with a real workload. Bugs that only surface with messy data, real schemas, and real volumes. Not a production deployment — a structured soak test.
 
 ---
 
@@ -37,7 +37,7 @@ Pick one team/use case. Not all consumers are equal at this stage.
 ### Starter pack
 
 ```
-/path/to/semantica/
+/path/to/semanticdf/
   README.md                   ← runnable examples, API reference
   docs/
     adr/                     ← design decisions on record
@@ -101,7 +101,7 @@ Focus on **boundary conditions** that the test fixtures don't exercise.
 
 Focus on **does it meet performance expectations**.
 
-1. **Compare to raw SQL** — run the same query in raw Spark SQL and time it. Is semantica within 2× overhead?
+1. **Compare to raw SQL** — run the same query in raw Spark SQL and time it. Is semanticdf within 2× overhead?
 2. **`explain(spark)` review** — ask them to run `explain(spark)` on 2–3 slow queries. Can they read the output? Is there an obvious plan issue?
 3. **Shuffle / partition awareness** — do they understand why the plan looks the way it does?
 4. **Large table joins** — does `join_many` at their scale (100M+ rows) stay within memory budgets?
@@ -119,7 +119,7 @@ Consumer Bug Report Template
 
 User:          [name / team]
 Date:          [when it happened]
-Query:         [the semantica code that failed]
+Query:         [the semanticdf code that failed]
 Error:         [what they saw]
 Expected:      [what they expected]
 Severity:      [blocking / workaround-exists / cosmetic]

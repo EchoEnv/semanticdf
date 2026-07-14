@@ -1,4 +1,4 @@
-# semantica model: orders
+# semanticdf model: orders
 #
 # Schema:
 #   order_id, customer_id, amount, order_date
@@ -6,33 +6,33 @@
 # The customer_id dimension joins to the customers model on customer_id.
 
 orders:
-  table: orders_csv
-  description: "Per-order line items with amount and order date"
+    table: orders_csv
+    description: "Per-order line items with amount and order date"
 
-  dimensions:
-    order_id:
-      expr: order_id
-      description: "Order ID (primary key)"
-    customer_id:
-      expr: customer_id
-      description: "Foreign key to customers.customer_id"
-    order_date:
-      expr: order_date
-      description: "Date the order was placed"
-      is_time_dimension: true
-      smallest_time_grain: day
+    dimensions:
+        order_id:
+            expr: order_id
+            description: "Order ID (primary key)"
+        customer_id:
+            expr: customer_id
+            description: "Foreign key to customers.customer_id"
+        order_date:
+            expr: order_date
+            description: "Date the order was placed"
+            is_time_dimension: true
+            smallest_time_grain: day
 
-  measures:
-    order_amount:
-      expr: "sum(amount)"
-      description: "Total order amount (sum across rows in the group)"
-    order_count:
-      expr: "count(1)"
-      description: "Number of orders in the group"
+    measures:
+        order_amount:
+            expr: "sum(amount)"
+            description: "Total order amount (sum across rows in the group)"
+        order_count:
+            expr: "count(1)"
+            description: "Number of orders in the group"
 
-  joins:
-    customers:
-      model: customers
-      type: one
-      left_on: customer_id
-      right_on: customer_id
+    joins:
+        customers:
+            model: customers
+            type: one
+            left_on: customer_id
+            right_on: customer_id

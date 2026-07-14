@@ -1,11 +1,11 @@
 package com.example.pipeline
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
 
-/** ETL pipeline + semantica verification — the "data engineering" companion to the
+/** ETL pipeline + semanticdf verification — the "data engineering" companion to the
   * starter template.
   *
   * This walks through the real BI lifecycle:
@@ -19,7 +19,7 @@ import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
   *   7. SEMANTIC — build YAML models on the parquet, run queries
   *
   * Run with:
-  *   1. mvn install the parent semantica project (so the local jar is available)
+  *   1. mvn install the parent semanticdf project (so the local jar is available)
   *   2. From this directory: mvn scala:run -DmainClass=com.example.pipeline.Main
   *
   * Output (parquet tables and temp views) goes to ./output/
@@ -29,7 +29,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-pipeline")
+      .appName("semanticdf-pipeline")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()
@@ -174,9 +174,9 @@ object Main {
       // ⚠ DEMO-ONLY CODE. For production, replace with:
       //   - Delta Lake: .format("delta").mode("append").partitionBy("snapshot_date")
       //   - Git SHA tracking: .withColumn("git_sha", lit(getCurrentSha()))
-      //   - Catalog registration: saveAsTable("main._semantica.catalog")
+      //   - Catalog registration: saveAsTable("main._semanticdf.catalog")
       // See README → "Production-grade catalog patterns" for the full pattern.
-      val catalogPath = "output/_semantica_catalog"
+      val catalogPath = "output/_semanticdf_catalog"
       schema
         .withColumn("loaded_at", current_timestamp())
         .withColumn("source_path", lit("models/orders.yml"))
@@ -185,7 +185,7 @@ object Main {
         .parquet(catalogPath)
       println(s"  wrote catalog: $catalogPath")
       println("  query example:")
-      println("    spark.read.parquet(\"output/_semantica_catalog\")")
+      println("    spark.read.parquet(\"output/_semanticdf_catalog\")")
       println("      .filter(col(\"metadata_owner\") === \"finance-team\")")
       println("      .select(\"model_name\", \"field_name\", \"metadata_values\")")
       println("      .show(false)")
@@ -201,7 +201,7 @@ object Main {
       println("Pipeline complete.")
       println("  Parquet output:   output/orders/, output/customers/")
       println("  Semantic models:  models/orders.yml, models/customers.yml")
-      println("  Schema catalog:   output/_semantica_catalog/")
+      println("  Schema catalog:   output/_semanticdf_catalog/")
       println("  Edit raw/*.csv and re-run to test the pipeline with new data.")
       println("=" * 70)
     } finally spark.stop()

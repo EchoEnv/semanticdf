@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>semantica-starter_2.13</artifactId>
+    <artifactId>semanticdf-starter_2.13</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>semantica-starter</name>
-    <description>Starter template for semantica — declarative semantic layer on Spark.</description>
+    <name>semanticdf-starter</name>
+    <description>Starter template for semanticdf — declarative semantic layer on Spark.</description>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -19,20 +19,25 @@
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semantica.version>0.1.0-SNAPSHOT</semantica.version>
+        <semanticdf.version>0.1.0-SNAPSHOT</semanticdf.version>
+
+        <!-- JVM flags for the forked Scala app JVM (same as the library uses for tests).
+             Required for Spark 3.x on JDK 17 — without them, Spark's StorageUtils chokes on
+             sun.nio.ch.DirectBuffer reflective access. -->
+        <spark.run.jvmArgs>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</spark.run.jvmArgs>
     </properties>
 
     <dependencies>
-        <!-- semantica: the semantic layer library -->
-        <!-- After running `mvn install` on the parent semantica project,
+        <!-- semanticdf: the semantic layer library -->
+        <!-- After running `mvn install` on the parent semanticdf project,
              this dependency resolves from your local Maven repo. -->
         <dependency>
-            <groupId>io.semantica</groupId>
-            <artifactId>semantica_2.13</artifactId>
-            <version>${semantica.version}</version>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf_2.13</artifactId>
+            <version>${semanticdf.version}</version>
         </dependency>
 
-        <!-- Spark SQL — required by semantica's runtime -->
+        <!-- Spark SQL — required by semanticdf's runtime -->
         <dependency>
             <groupId>org.apache.spark</groupId>
             <artifactId>spark-sql_${scala.binary.version}</artifactId>
@@ -70,6 +75,21 @@
                     <args>
                         <arg>-deprecation</arg>
                     </args>
+                    <jvmArgs>
+                        <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.lang.invoke=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.lang.reflect=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.io=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.net=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.nio=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util.concurrent=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.nio.cs=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.security.action=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</arg>
+                    </jvmArgs>
                 </configuration>
             </plugin>
 

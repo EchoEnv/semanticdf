@@ -5,12 +5,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.example</groupId>
-    <artifactId>semantica-pipeline_2.13</artifactId>
+    <artifactId>semanticdf-pipeline_2.13</artifactId>
     <version>0.1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
 
-    <name>semantica-pipeline</name>
-    <description>ETL pipeline + semantica models — from raw CSV to parquet to semantic queries.</description>
+    <name>semanticdf-pipeline</name>
+    <description>ETL pipeline + semanticdf models — from raw CSV to parquet to semantic queries.</description>
 
     <properties>
         <maven.compiler.source>17</maven.compiler.source>
@@ -19,14 +19,14 @@
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semantica.version>0.1.0-SNAPSHOT</semantica.version>
+        <semanticdf.version>0.1.0-SNAPSHOT</semanticdf.version>
     </properties>
 
     <dependencies>
         <dependency>
-            <groupId>io.semantica</groupId>
-            <artifactId>semantica_2.13</artifactId>
-            <version>${semantica.version}</version>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf_2.13</artifactId>
+            <version>${semanticdf.version}</version>
         </dependency>
 
         <dependency>

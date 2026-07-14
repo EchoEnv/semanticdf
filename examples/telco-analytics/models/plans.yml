@@ -1,4 +1,4 @@
-# semantica model: plans
+# semanticdf model: plans
 #
 # Reference data: the service plans offered by the telco.
 # Used for documentation / schema introspection; the usage model embeds
@@ -6,24 +6,24 @@
 # stays at 2 levels (usage-only).
 
 plans:
-  table: plans_csv
-  description: "Service plans offered (Basic, Standard, Premium, Family)"
+    table: plans_csv
+    description: "Service plans offered (Basic, Standard, Premium, Family)"
 
-  dimensions:
-    plan_id:
-      expr: plan_id
-      description: "Plan ID (primary key)"
-    plan_name:
-      expr: plan_name
-      description: "Plan name (human-readable)"
-    target_segment:
-      expr: target_segment
-      description: "Marketing target segment for the plan"
+    dimensions:
+        plan_id:
+            expr: plan_id
+            description: "Plan ID (primary key)"
+        plan_name:
+            expr: plan_name
+            description: "Plan name (human-readable)"
+        target_segment:
+            expr: target_segment
+            description: "Marketing target segment for the plan"
 
-  measures:
-    plan_count:
-      expr: "count(1)"
-      description: "Number of plans"
-    avg_monthly_fee:
-      expr: "avg(monthly_fee)"
-      description: "Average monthly subscription fee across plans"
+    measures:
+        plan_count:
+            expr: "count(1)"
+            description: "Number of plans"
+        avg_monthly_fee:
+            expr: "avg(monthly_fee)"
+            description: "Average monthly subscription fee across plans"

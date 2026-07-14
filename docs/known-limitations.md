@@ -120,7 +120,7 @@ joined
 
 - **Wide joins (many columns):** Each side is pre-aggregated at the join key grain. This is correct but not free — pre-aggregation has a cost. For very large fact tables, benchmark before assuming it's fast enough.
 - **Percent-of-total with many `t.all()` calls:** Each `t.all()` builds a separate 1-row totals table and cross-joins it. Many `t.all()` calls in one query = many cross-joins. Keep `t.all()` usage moderate.
-- **explain() does not run the query.** `explain(spark)` compiles and explains the plan. `explain()` shows the semantica op tree without compiling.
+- **explain() does not run the query.** `explain(spark)` compiles and explains the plan. `explain()` shows the semanticdf op tree without compiling.
 
 ---
 
@@ -128,7 +128,7 @@ joined
 
 ### Join keys must be symmetric (same column name on both sides)
 
-The YAML loader requires `left_on == right_on` — the join key must have the same column name on both tables. This matches semantica's equi-join engine.
+The YAML loader requires `left_on == right_on` — the join key must have the same column name on both tables. This matches semanticdf's equi-join engine.
 
 **Don't do this:**
 ```yaml
@@ -165,7 +165,7 @@ function calls (e.g. `abs(x)`, `round(x, n)`). For those, use the Scala DSL.
 ### Dimension name collision across joined tables
 
 If two joined tables both declare a dimension with the same non-key name
-(e.g. both have `shared`), semantica detects this at join time and throws
+(e.g. both have `shared`), semanticdf detects this at join time and throws
 a clear error:
 
 ```

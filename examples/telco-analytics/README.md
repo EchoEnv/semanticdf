@@ -1,13 +1,13 @@
-# semantica telco-analytics
+# semanticdf telco-analytics
 
-Telco analytics on top of semantica — **mobile services, charges, packages, promotions**. The canonical use case: a mobile carrier running analytics over customer usage, plan tiers, and active promotional offers.
+Telco analytics on top of semanticdf — **mobile services, charges, packages, promotions**. The canonical use case: a mobile carrier running analytics over customer usage, plan tiers, and active promotional offers.
 
 This template complements the other consumer templates ([starter](../starter/README.md), [pipeline](../pipeline/README.md), [window-analytics](../window-analytics/README.md), [customer-analytics](../customer-analytics/README.md), [operations-analytics](../operations-analytics/README.md)) by showing the telco-specific patterns.
 
 ## What you get
 
 ```
-semantica-telco-analytics/
+semanticdf-telco-analytics/
 ├── README.md                   ← you are here
 ├── pom.xml
 ├── data/
@@ -27,9 +27,9 @@ semantica-telco-analytics/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
@@ -60,14 +60,14 @@ You'll see:
 ## Why a denormalized model
 
 The ideal data model for this is a normalized star schema (usage ⨝ customers ⨝ plans).
-But semantica's current join implementation only supports 2-level merges
+But semanticdf's current join implementation only supports 2-level merges
 (leftRoot + rightRoot), so a 3-way join would require chaining — which isn't
 yet supported. We work around this by denormalizing: the `usage` CSV
 includes `plan_name` and `monthly_fee` as extra columns, so a single
 `usage` model carries enough context for all 3 queries.
 
 For a production warehouse, you'd keep the normalized star schema and
-chain joins in semantica. The query patterns shown here work the same way.
+chain joins in semanticdf. The query patterns shown here work the same way.
 
 ## Related templates
 

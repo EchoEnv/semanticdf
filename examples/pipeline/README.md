@@ -1,4 +1,4 @@
-# semantica pipeline template
+# semanticdf pipeline template
 
 The ETL + semantic-layer workflow — from raw CSV to parquet to declarative queries.
 
@@ -23,7 +23,7 @@ It's the data-engineering companion to the [starter template](../starter/README.
 ## What you get
 
 ```
-semantica-pipeline/
+semanticdf-pipeline/
 ├── README.md                 ← you are here
 ├── pom.xml
 ├── raw/                      ← BRONZE: messy source data
@@ -46,9 +46,9 @@ semantica-pipeline/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
@@ -69,7 +69,7 @@ You'll see the 7 steps run in sequence:
 
 > **Tip:** generate browsable HTML docs from the YAML models:
 > ```bash
-> cd /path/to/semantica
+> cd /path/to/semanticdf
 > mvn exec:java -Dexec.args="docsgen --path examples/pipeline/models/ --out docs/pipeline.html"
 > open docs/pipeline.html   # macOS; for Linux: xdg-open
 > ```
@@ -140,7 +140,7 @@ orders
 ## What this teaches
 
 - **Bronze/silver/gold layering** — each layer has a clear contract and audience
-- **Gold has two parts** — the YAML model is the *definition*; the catalog table (`_semantica_catalog/`) is the *queryable metadata*. Both live alongside the data.
+- **Gold has two parts** — the YAML model is the *definition*; the catalog table (`_semanticdf_catalog/`) is the *queryable metadata*. Both live alongside the data.
 - **Gold data vs gold metadata** — see the next section for the distinction
 - **Idempotent ETL** — re-running produces the same output (parquet overwrite)
 - **Schema validation** — drop nulls, dedupe, cast types — the basics of any pipeline
@@ -155,7 +155,7 @@ This template produces **silver data + gold metadata**, not **gold data**. That 
 | Layer | What | Example |
 |---|---|---|
 | **Silver** | Cleaned, validated, normalized fact data | `orders_clean.parquet` (33 rows, deduped, typed) |
-| **Gold metadata** | Catalog of what models exist | `_semantica_catalog.parquet` (15 rows: every field, owner, description) |
+| **Gold metadata** | Catalog of what models exist | `_semanticdf_catalog.parquet` (15 rows: every field, owner, description) |
 | **Gold data** | Pre-aggregated tables for hot queries | `daily_revenue_by_country.parquet` (small, dashboard-ready) |
 
 **This template has silver + gold metadata, but NOT gold data.** For most analytical workloads, the semantic layer compiles silver into the right shape on-the-fly — no materialization needed. But for production hot paths:
@@ -234,23 +234,23 @@ This is a future enhancement, gated on real consumer demand. See `docs/first-con
 
 ## Querying the gold catalog (demo mode)
 
-After the pipeline runs, `output/_semantica_catalog/` contains every field of every model as a row. Anyone in the org can query it like any other table:
+After the pipeline runs, `output/_semanticdf_catalog/` contains every field of every model as a row. Anyone in the org can query it like any other table:
 
 ```scala
 // Find all fields owned by a specific team
-spark.read.parquet("output/_semantica_catalog")
+spark.read.parquet("output/_semanticdf_catalog")
   .filter(col("metadata_values").contains("finance-team"))
   .select("model_name", "field_name", "description")
   .show(false)
 
 // Find all PII fields across all models
-spark.read.parquet("output/_semantica_catalog")
+spark.read.parquet("output/_semanticdf_catalog")
   .filter(col("metadata_keys").contains("pii"))
   .select("model_name", "field_name")
   .show(false)
 
 // Audit: which dimensions are time dimensions?
-spark.read.parquet("output/_semantica_catalog")
+spark.read.parquet("output/_semanticdf_catalog")
   .filter(col("is_time_dimension") && col("field_type") === "dimension")
   .select("model_name", "field_name", "smallest_grain")
   .show(false)
@@ -289,7 +289,7 @@ newSnapshot
   .format("delta")
   .mode("append")
   .partitionBy("snapshot_date")
-  .saveAsTable("main._semantica.catalog")
+  .saveAsTable("main._semanticdf.catalog")
 
 // Register in Unity Catalog for IAM, audit, and discovery
 ```
@@ -298,20 +298,20 @@ Now your org can do:
 
 ```sql
 -- Latest snapshot
-SELECT * FROM main._semantica.catalog
-WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM main._semantica.catalog)
+SELECT * FROM main._semanticdf.catalog
+WHERE snapshot_date = (SELECT MAX(snapshot_date) FROM main._semanticdf.catalog)
 
 -- What changed since yesterday?
-SELECT * FROM main._semantica.catalog WHERE snapshot_date = current_date()
+SELECT * FROM main._semanticdf.catalog WHERE snapshot_date = current_date()
 EXCEPT
-SELECT * FROM main._semantica.catalog WHERE snapshot_date = current_date() - INTERVAL 1 DAY
+SELECT * FROM main._semanticdf.catalog WHERE snapshot_date = current_date() - INTERVAL 1 DAY
 
 -- Time travel to last week's schema
-SELECT * FROM main._semantica.catalog TIMESTAMP AS OF '2024-03-15'
+SELECT * FROM main._semanticdf.catalog TIMESTAMP AS OF '2024-03-15'
 
 -- Audit: who loaded which model when
 SELECT model_name, git_sha, loaded_at, source_path
-FROM main._semantica.catalog
+FROM main._semanticdf.catalog
 ORDER BY loaded_at DESC
 ```
 
@@ -327,7 +327,7 @@ Unity Catalog adds column-level lineage automatically (you can see which pipelin
 | **Amundsen** (Lyft) | Push via metadata service API |
 | **Apache Atlas** | Push via Kafka notification |
 
-All of these work with semantica's `model.schema(spark)` output — it's just a DataFrame. The integration pattern is the same: write the DataFrame to your catalog backend, register it, and let your BI tools discover it.
+All of these work with semanticdf's `model.schema(spark)` output — it's just a DataFrame. The integration pattern is the same: write the DataFrame to your catalog backend, register it, and let your BI tools discover it.
 
 ---
 
@@ -349,7 +349,7 @@ For a real deployment:
 ## Related
 
 - [starter template](../starter/README.md) — for the semantic-layer-only path (no ETL)
-- [README](../../README.md) — main semantica documentation
+- [README](../../README.md) — main semanticdf documentation
 - [DESIGN](../../DESIGN.md) — architecture and design decisions
 - [runtime-quickstart](../../docs/runtime-quickstart.md) — JDK/Scala/Spark matrix, build & run commands, the four runtime traps
-- [known-limitations](../../docs/known-limitations.md) — what semantica does NOT support yet
+- [known-limitations](../../docs/known-limitations.md) — what semanticdf does NOT support yet

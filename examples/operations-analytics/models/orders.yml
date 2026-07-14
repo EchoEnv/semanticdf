@@ -1,67 +1,67 @@
-# semantica model: orders
+# semanticdf model: orders
 #
 # Schema:
 #   order_id, customer_id, amount, order_date, shipped_at, status
 #   + ship_days, on_time_flag (computed via the `transforms:` block below)
 
 orders:
-  table: orders_csv
-  description: "Per-order data with fulfillment timestamps and amount"
+    table: orders_csv
+    description: "Per-order data with fulfillment timestamps and amount"
 
-  # Per-row transformations: ship_days and on_time_flag are computed at
-  # model-load time. This is semantica's equivalent of dbt's staging models
-  # / LookML's derived_table — per-row logic that doesn't fit the
-  # aggregate context. The framework's `transforms:` block is the single
-  # source of truth for these columns; the YAML and the Scala DSL produce
-  # equivalent results.
-  transforms:
-    ship_days:
-      expr: "datediff(shipped_at, order_date)"
-      description: "Days from order placement to shipment (per-row)"
-    on_time_flag:
-      expr: "case when datediff(shipped_at, order_date) <= 2 then 1 else 0 end"
-      description: "1 if shipped within 2 days, else 0 (per-row)"
+    # Per-row transformations: ship_days and on_time_flag are computed at
+    # model-load time. This is semanticdf's equivalent of dbt's staging models
+    # / LookML's derived_table — per-row logic that doesn't fit the
+    # aggregate context. The framework's `transforms:` block is the single
+    # source of truth for these columns; the YAML and the Scala DSL produce
+    # equivalent results.
+    transforms:
+        ship_days:
+            expr: "datediff(shipped_at, order_date)"
+            description: "Days from order placement to shipment (per-row)"
+        on_time_flag:
+            expr: "case when datediff(shipped_at, order_date) <= 2 then 1 else 0 end"
+            description: "1 if shipped within 2 days, else 0 (per-row)"
 
-  dimensions:
-    order_id:
-      expr: order_id
-      description: "Order ID (primary key)"
-    customer_id:
-      expr: customer_id
-      description: "Foreign key to customers"
-    order_date:
-      expr: order_date
-      description: "Date the order was placed"
-      is_time_dimension: true
-      smallest_time_grain: day
-    status:
-      expr: status
-      description: "Order status (e.g. shipped, processing)"
+    dimensions:
+        order_id:
+            expr: order_id
+            description: "Order ID (primary key)"
+        customer_id:
+            expr: customer_id
+            description: "Foreign key to customers"
+        order_date:
+            expr: order_date
+            description: "Date the order was placed"
+            is_time_dimension: true
+            smallest_time_grain: day
+        status:
+            expr: status
+            description: "Order status (e.g. shipped, processing)"
 
-  measures:
-    order_amount:
-      expr: "sum(amount)"
-      description: "Total order amount in the group"
-    order_count:
-      expr: "count(1)"
-      description: "Number of orders in the group"
-    total_ship_days:
-      expr: "sum(ship_days)"
-      description: "Sum of ship_days across orders (avg = total / order_count)"
-    total_on_time:
-      expr: "sum(on_time_flag)"
-      description: "Sum of on_time_flag across orders (rate = total / order_count)"
+    measures:
+        order_amount:
+            expr: "sum(amount)"
+            description: "Total order amount in the group"
+        order_count:
+            expr: "count(1)"
+            description: "Number of orders in the group"
+        total_ship_days:
+            expr: "sum(ship_days)"
+            description: "Sum of ship_days across orders (avg = total / order_count)"
+        total_on_time:
+            expr: "sum(on_time_flag)"
+            description: "Sum of on_time_flag across orders (rate = total / order_count)"
 
-  calculated_measures:
-    avg_ship_days:
-      expr: "total_ship_days / order_count"
-      description: "Average days from order to shipment"
-      metadata:
-        owner: ops-team
-        unit: days
-    on_time_rate:
-      expr: "total_on_time / order_count"
-      description: "Fraction of orders shipped within 2 days (0.0–1.0)"
-      metadata:
-        owner: ops-team
-        unit: ratio
+    calculated_measures:
+        avg_ship_days:
+            expr: "total_ship_days / order_count"
+            description: "Average days from order to shipment"
+            metadata:
+                owner: ops-team
+                unit: days
+        on_time_rate:
+            expr: "total_on_time / order_count"
+            description: "Fraction of orders shipped within 2 days (0.0–1.0)"
+            metadata:
+                owner: ops-team
+                unit: ratio

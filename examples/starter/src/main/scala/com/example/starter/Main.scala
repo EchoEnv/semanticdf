@@ -1,11 +1,11 @@
 package com.example.starter
 
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_number}
 
-/** Starter template for semantica — declarative semantic layer on Spark.
+/** Starter template for semanticdf — declarative semantic layer on Spark.
   *
   * This is the entire "main" file: load YAML models from a directory, run a few
   * example queries, then show the model schema as a DataFrame.
@@ -20,7 +20,7 @@ import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_num
   *   7. Schema export for catalog persistence (e.g. Delta table)
   *
   * To run:
-  *   1. `mvn install` the parent semantica project (so the local jar is available)
+  *   1. `mvn install` the parent semanticdf project (so the local jar is available)
   *   2. From this directory: `mvn scala:run -DmainClass=com.example.starter.Main`
   */
 object Main {
@@ -28,7 +28,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semantica-starter")
+      .appName("semanticdf-starter")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()
@@ -181,7 +181,7 @@ object Main {
       //     .withColumn("loaded_at", current_timestamp())
       //     .write.mode("append").parquet("catalog/model_schema.parquet")
       //
-      // Then: SELECT * FROM <lake>._semantica.model_schema WHERE model_name = 'flights'
+      // Then: SELECT * FROM <lake>._semanticdf.model_schema WHERE model_name = 'flights'
       println("\n--- Schema exported (commented out — see source) ---")
 
       println("\n" + "=" * 70)

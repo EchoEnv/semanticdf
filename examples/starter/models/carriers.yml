@@ -1,25 +1,36 @@
-# semantica model: carriers
+# semanticdf model: carriers
 #
 # Simple lookup table — joined to flights via the 'carriers' alias.
 # Schema: carrier, name, hub, year_founded
 
 carriers:
-  table: carriers_csv
-  description: "Airline carrier reference data (lookup)"
+    version: 1
+    table: carriers_csv
+    description: "Airline carrier reference data (lookup)"
 
-  dimensions:
-    carrier:
-      expr: carrier
-      description: "Airline carrier code (IATA)"
-      metadata:
-        owner: data-platform-team
-    name:
-      expr: name
-      description: "Full airline name"
-      metadata:
-        owner: data-platform-team
-    hub:
-      expr: hub
-      description: "Primary hub airport"
-      metadata:
-        owner: data-platform-team
+    # Pre-join row-level hygiene on carriers source. Ensures every join with
+    # `flights` finds a named carrier, surfacing dead-airline data early.
+    filters:
+        require_name_not_null:
+            expr: "name IS NOT NULL"
+            description: "Carriers without a name are not part of the semantic layer."
+            metadata:
+                owner: data-platform-team
+                tags: [data-quality]  
+
+    dimensions:
+        carrier:
+            expr: carrier
+            description: "Airline carrier code (IATA)"
+            metadata:
+                owner: data-platform-team
+        name:
+            expr: name
+            description: "Full airline name"
+            metadata:
+                owner: data-platform-team
+        hub:
+            expr: hub
+            description: "Primary hub airport"
+            metadata:
+                owner: data-platform-team

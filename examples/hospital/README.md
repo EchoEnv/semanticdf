@@ -1,13 +1,13 @@
-# semantica hospital
+# semanticdf hospital
 
-Hospital data management + cleansing on top of semantica — the **full data-quality workflow** (ingest → profile → cleanse → load → query). Patient demographics, ALOS, 30-day readmission rate.
+Hospital data management + cleansing on top of semanticdf — the **full data-quality workflow** (ingest → profile → cleanse → load → query). Patient demographics, ALOS, 30-day readmission rate.
 
-This template complements the other consumer templates ([starter](../starter/README.md), [pipeline](../pipeline/README.md), [window-analytics](../window-analytics/README.md), [customer-analytics](../customer-analytics/README.md), [operations-analytics](../operations-analytics/README.md), [telco-analytics](../telco-analytics/README.md)) by showing the **cleansing step** — most templates load clean data; this one starts with messy data and cleanses it in Scala before loading into semantica.
+This template complements the other consumer templates ([starter](../starter/README.md), [pipeline](../pipeline/README.md), [window-analytics](../window-analytics/README.md), [customer-analytics](../customer-analytics/README.md), [operations-analytics](../operations-analytics/README.md), [telco-analytics](../telco-analytics/README.md)) by showing the **cleansing step** — most templates load clean data; this one starts with messy data and cleanses it in Scala before loading into semanticdf.
 
 ## What you get
 
 ```
-semantica-hospital/
+semanticdf-hospital/
 ├── README.md                          ← you are here
 ├── pom.xml
 ├── data/
@@ -28,9 +28,9 @@ semantica-hospital/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
@@ -64,12 +64,12 @@ After cleansing: 11 patients → 8 unique patients; all MRNs filled; all names i
 |---|---|
 | Data quality profiling (group counts, null detection) | STEP 2 |
 | In-place Spark cleansing: `initcap`, `dropDuplicates`, `coalesce`, `monotonically_increasing_id` | STEP 3 |
-| Loading cleansed in-memory DataFrames into semantica via `YamlLoader.loadDir(tables)` | STEP 4 |
+| Loading cleansed in-memory DataFrames into semanticdf via `YamlLoader.loadDir(tables)` | STEP 4 |
 | `groupBy(dim).aggregate(measure)` per group | All queries |
 | Time-grain + `datediff` calc | Q2 — `avg_los` |
 | `lag()` window per patient for readmission detection | Q3 |
 | `countDistinct` (added in Scala for cross-group aggregation) | implicit throughout |
-| Hybrid pattern: per-patient measures via semantica, final rate in Scala | Q3 — when the final aggregation crosses group boundaries |
+| Hybrid pattern: per-patient measures via semanticdf, final rate in Scala | Q3 — when the final aggregation crosses group boundaries |
 
 ## Related templates
 

@@ -1,6 +1,6 @@
-# Semantica — Design & Porting Plan
+# SemanticDF — Design & Porting Plan
 
-**Goal:** Adapt the [Boring Semantic Layer (BSL)](https://github.com/boringdata/boring-semantic-layer) — a Python/Ibis semantic layer — into **semantica**, a semantic layer framework for **Apache Spark (JVM)** written in **Scala**.
+**Goal:** Adapt the [Boring Semantic Layer (BSL)](https://github.com/boringdata/boring-semantic-layer) — a Python/Ibis semantic layer — into **semanticdf**, a semantic layer framework for **Apache Spark (JVM)** written in **Scala**.
 
 This document records: what BSL is, the architectural mapping to Spark/Scala, the hard problems and how we solve them on the JVM, the proposed DSL, module layout, build strategy, and a phased delivery plan.
 
@@ -46,7 +46,7 @@ Everything else is composition, ergonomics, and integration surface.
 
 ## 2. Architectural mapping: Python/Ibis → Scala/Spark
 
-| BSL (Python/Ibis) | Semantica (Scala/Spark) | Notes |
+| BSL (Python/Ibis) | SemanticDF (Scala/Spark) | Notes |
 |---|---|---|
 | `ibis.Table` | `org.apache.spark.sql.DataFrame` | The runtime relation. |
 | `ibis.Column` / `Deferred` (`_.col`) | `org.apache.spark.sql.Column` | Spark Columns are **already lazy and table-free**, so we *don't need* a `Deferred` concept — a measure is just `Scope => Column`. This **simplifies** BSL. |
@@ -97,7 +97,7 @@ Nothing here is scheduled. Each item lists the concrete signal that pulls it in.
 | `t.all(expr: => Column)` inline-reduction totals | A real measure needs totals of an inline reduction |
 | Sum-special-case windowed totals fast path | A benchmark shows cross-join totals is too slow |
 | YAML config loader + expr mini-DSL (§6.4) | A user wants declarative config over the Scala API |
-| Multi-package layout (`expr/ ops/ …`) | A flat `io.semantica` package grows a 3+ file cluster |
+| Multi-package layout (`expr/ ops/ …`) | A flat `io.semanticdf` package grows a 3+ file cluster |
 | Second DSL style (tuple-builder) / macro DSL | Record-varargs proves insufficient in practice |
 | Cross-build Scala 2.12 | A consumer is pinned to Spark < 4 (Spark 4 is 2.13-only) |
 | MiMa binary compatibility | There is a downstream user to not break |
@@ -107,7 +107,7 @@ Nothing here is scheduled. Each item lists the concrete signal that pulls it in.
 
 ---
 
-## 4. Architecture of semantica
+## 4. Architecture of semanticdf
 
 ### 4.1 Key decision: own op tree, sized to its requirement
 
@@ -137,19 +137,19 @@ Two concrete scopes:
 
 ### 4.3 Package layout — start flat
 
-Per ADR 0001: begin in a single `io.semantica` package. Do **not** pre-partition into `expr/ ops/ model/ scope/ calc/ query/ config/ graph/ util/` — that was speculative for zero code. Split into a sub-package only when a cluster of 3+ cohesive files justifies one.
+Per ADR 0001: begin in a single `io.semanticdf` package. Do **not** pre-partition into `expr/ ops/ model/ scope/ calc/ query/ config/ graph/ util/` — that was speculative for zero code. Split into a sub-package only when a cluster of 3+ cohesive files justifies one.
 
 Expected first files (flat, v0.1):
 
 ```
-io.semantica/
+io.semanticdf/
 ├── SemanticTable.scala        // immutable facade over the op-tree root + delegated methods
 ├── SemanticOp.scala           // sealed trait + case-class nodes (table, join, filter, groupBy, aggregate, orderBy, limit)
 ├── Model.scala                // Dimension / Measure / CalcMeasure records
 ├── Scope.scala                // SemanticScope trait + BaseScope + MeasureScope (incl. all())
 ├── Calc.scala                 // analyzer (CalcExprAnalysis) + compiler (classify, applyCalcMeasures, totals)
 ├── Query.scala                // query() + Filter + Predicate AST + WHERE/HAVING split + time grains
-└── Semantica.scala            // entry: toSemanticTable, entityDimension, timeDimension
+└── SemanticDF.scala            // entry: toSemanticTable, entityDimension, timeDimension
 ```
 
 ### 4.4 Non-functional invariants (memory & perf)
@@ -174,7 +174,7 @@ n   Catalyst structures + shuffle output across the model's lifetime — a genui
 
 ### 4.5 Execution terminals — the unification portal (batch / streaming)
 
-**One model, two terminals.** This is how semantica keeps a single DSL for batch and
+**One model, two terminals.** This is how semanticdf keeps a single DSL for batch and
 streaming without paying streaming machinery into the v0.1 batch model:
 
 - `.toDataFrame(spark): DataFrame` — **batch terminal** (v0.1). Requires a
@@ -211,7 +211,7 @@ Python relies on `**kwargs` for `with_dimensions(origin=…)`. Scala has no kwar
 ### 5.1 Building a model
 
 ```scala
-import io.semantica._
+import io.semanticdf._
 import org.apache.spark.sql.functions._
 
 val flights = toSemanticTable(flightsDf, name = "flights")
@@ -233,7 +233,7 @@ val flights = toSemanticTable(flightsDf, name = "flights")
   )
 ```
 
-One DSL style only for v0.1 (records + varargs). `Dimension`/`Measure` live directly under `io.semantica` (flat layout, §4.3), so there is no separate `io.semantica.model._` import.
+One DSL style only for v0.1 (records + varargs). `Dimension`/`Measure` live directly under `io.semanticdf` (flat layout, §4.3), so there is no separate `io.semanticdf.model._` import.
 
 ### 5.2 Querying
 
@@ -286,7 +286,7 @@ flightsA.join_cross(flightsB)                            // cartesian
 
 **BSL approach:** evaluate the calc lambda against a `MeasureScope` whose measure lookups return columns of a *synthetic virtual table*; then substitute the virtual table with the real aggregated table via op-graph rewriting.
 
-**Semantica approach — name-based (simpler & robust):**
+**SemanticDF approach — name-based (simpler & robust):**
 1. **Auto-pull** the transitive closure of requested measures over the calc dependency graph (probe each lambda against a classification scope; a referenced measure name is added and re-probed, recursively). A user can request a leaf calc alone; its base/calc deps are pulled automatically.
 2. **Classify** each measure: probe its lambda against the base DataFrame with all model measures as `known`. Any lambda referencing a known-measure name (rather than only base columns) is a **calc**; the rest are **base** measures. Cycles raise a clear error before any Spark work.
 3. Compile the **base measures** into an aggregated DataFrame: `df.groupBy(keys).agg(baseExprs: _*)`, each aliased to its measure name.
@@ -301,7 +301,7 @@ We avoid op-graph substitution entirely: Spark `Column` expressions are **re-run
 
 `t.all("measure")` must resolve to the measure computed over the **whole filtered base** (no group-by), so non-sum measures (mean/median) are correct.
 
-**Semantica approach** — cross-join totals (the only v0.1 path; a windowed-sum fast-path is deferred behind a benchmark trigger — see §3):
+**SemanticDF approach** — cross-join totals (the only v0.1 path; a windowed-sum fast-path is deferred behind a benchmark trigger — see §3):
 
 - The analyzer flags `references_AllOf`.
 - The compiler builds a **totals DataFrame** = same measures aggregated with `groupBy()` (no keys) → 1 row.
@@ -344,7 +344,7 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
 - **Scala:** **2.13** only. No 2.12 cross-build (ADR 0001) — Spark 4 is 2.13-only, so 2.13 covers both target Spark lines; reintroduce 2.12 only if a consumer is pinned to Spark < 4.
 - **Spark:** **3.5.8** is the default/primary target. **Room for Spark 4.x** via a Maven profile (`-Pspark4`) that overrides `spark.version` (and the Scala patch version if Spark 4 pins a newer 2.13.x). One POM; CI builds both legs.
 - **Java:** 17 (the intersection that satisfies both Spark 3.5.x — which supports 8/11/17 — and Spark 4, which requires 17+).
-- **Spark scope:** `provided` — semantica is a library dropped into the user's Spark job; the runtime Spark comes from the user's cluster/distro.
+- **Spark scope:** `provided` — semanticdf is a library dropped into the user's Spark job; the runtime Spark comes from the user's cluster/distro.
 - **No Python, no xorq, no Ibis, no YAML libs.** Pure JVM, Scala-only config for v0.1.
 - **Testing:** `scalatest` 3.2.x; an in-memory local `SparkSession` fixture; a `flights` test fixture mirroring BSL's so behavior parity is checkable.
 - **Publishing / binary compat:** deferred (ADR 0001) — no Maven Central deploy and no `mima-maven-plugin` until there is a downstream consumer to keep stable.
@@ -354,8 +354,8 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
 ```xml
 <project>
   <modelVersion>4.0.0</modelVersion>
-  <groupId>io.semantica</groupId>
-  <artifactId>semantica_2.13</artifactId>
+  <groupId>io.semanticdf</groupId>
+  <artifactId>semanticdf_2.13</artifactId>
   <version>0.1.0-SNAPSHOT</version>
   <packaging>jar</packaging>
 
@@ -420,7 +420,7 @@ Each phase ends green (`mvn test`) and cites the concrete BSL test file whose ou
 
 | Phase | Scope | Exit criteria (verifiable) |
 |---|---|---|
-| **0 — Skeleton** ✅ | Maven project, `io.semantica` package (flat), in-memory `SparkSession` fixture, `flights` fixture | `mvn test` green; `toSemanticTable(df).toDataFrame()` returns the df. **DONE** |
+| **0 — Skeleton** ✅ | Maven project, `io.semanticdf` package (flat), in-memory `SparkSession` fixture, `flights` fixture | `mvn test` green; `toSemanticTable(df).toDataFrame()` returns the df. **DONE** |
 | **1a — Core model + golden group-by** ✅ | `Dimension`, `Measure`, `SemanticScope`/`BaseScope`, op nodes (`table` + `aggregate`), `withDimensions`/`withMeasures`/`groupBy`/`aggregate`/`execute` | **Golden test:** with BSL `test_query.py`'s exact fixture data, `groupBy("carrier").aggregate("total_passengers")` → `{AA→550, UA→775, DL→1050}` (3 rows, 2 cols). **DONE** |
 | **1b — Calc-measure proof slice** ✅ | `MeasureScope` (by-name resolution), trivial base/calc classification, single-`select` calc compilation (DESIGN §6.1) | one calc measure `avg_distance_per_flight = total_distance / flight_count` resolves **by name** against the aggregated df → `{AA→125, UA→225, DL→325}`. Proves the name-based-compilation bet. **DONE** |
 | **2a — Calc-of-calc + dependency auto-pull** ✅ | transitive dep auto-pull, topological-layered calc application (invariant A1 revised), cycle detection | 2-level calc chain resolves; leaf-only request auto-pulls deps; cycle raises 'cycle'. **DONE** |
@@ -453,6 +453,6 @@ Each phase ends green (`mvn test`) and cites the concrete BSL test file whose ou
 
 ## 10. Faithfulness summary
 
-Semantica will be a **behavioral port** of BSL: same conceptual model (semantic table, dimensions/measures/calc-measures, op tree, join cardinality, percent-of-total), same correctness guarantees (grain-correct joins, non-sum totals, WHERE/HAVING split), same user mental model (`to_semantic_table → with_dimensions/with_measures → group_by/aggregate/query`). It is **not** a line-by-line translation: we exploit Scala's strengths (case classes, pattern matching, first-class functions, `Try`/`Option`) and Spark's strengths (Catalyst column pruning, native window functions, broadcast joins) to make the code simpler where BSL fights Python/ibis limitations (Deferred, op-graph substitution, xorq bridging, ambiguous-column renaming dances).
+SemanticDF will be a **behavioral port** of BSL: same conceptual model (semantic table, dimensions/measures/calc-measures, op tree, join cardinality, percent-of-total), same correctness guarantees (grain-correct joins, non-sum totals, WHERE/HAVING split), same user mental model (`to_semantic_table → with_dimensions/with_measures → group_by/aggregate/query`). It is **not** a line-by-line translation: we exploit Scala's strengths (case classes, pattern matching, first-class functions, `Try`/`Option`) and Spark's strengths (Catalyst column pruning, native window functions, broadcast joins) to make the code simpler where BSL fights Python/ibis limitations (Deferred, op-graph substitution, xorq bridging, ambiguous-column renaming dances).
 
 The result: a semantic layer that feels native to Spark developers while preserving the design discipline that makes BSL correct.

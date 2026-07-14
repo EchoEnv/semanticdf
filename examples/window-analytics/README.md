@@ -1,13 +1,13 @@
-# semantica window-analytics
+# semanticdf window-analytics
 
-Window-function analytics on top of semantica — **top-N per group**, **period-over-period**, **running total**.
+Window-function analytics on top of semanticdf — **top-N per group**, **period-over-period**, **running total**.
 
 This template shows three common window-function patterns that are typical in BI dashboards. It complements the [starter template](../starter/README.md) (which covers the basics) and the [pipeline template](../pipeline/README.md) (which shows the full ETL + semantic lifecycle).
 
 ## What you get
 
 ```
-semantica-window-analytics/
+semanticdf-window-analytics/
 ├── README.md                   ← you are here
 ├── pom.xml
 ├── data/
@@ -23,9 +23,9 @@ semantica-window-analytics/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 

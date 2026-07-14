@@ -1,13 +1,13 @@
-# semantica operations-analytics
+# semanticdf operations-analytics
 
-Operations analytics on top of semantica — **order fulfillment time**, **on-time rate**, **anomaly detection** (z-score).
+Operations analytics on top of semanticdf — **order fulfillment time**, **on-time rate**, **anomaly detection** (z-score).
 
 This template shows two patterns that ops and supply-chain teams ask constantly. It complements the [starter template](../starter/README.md) (basics) and the [pipeline template](../pipeline/README.md) (full lifecycle).
 
 ## What you get
 
 ```
-semantica-operations-analytics/
+semanticdf-operations-analytics/
 ├── README.md                   ← you are here
 ├── pom.xml
 ├── data/
@@ -23,9 +23,9 @@ semantica-operations-analytics/
 ### Prerequisites
 - JDK 17, Maven 3.9+, Spark 3.5.x or 4.x
 
-### Step 1: install semantica locally
+### Step 1: install semanticdf locally
 ```bash
-cd /path/to/semantica
+cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 

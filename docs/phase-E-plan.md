@@ -8,7 +8,7 @@
 
 ## Why typeclasses
 
-Semantica's current API is stringly-typed at the edges:
+SemanticDF's current API is stringly-typed at the edges:
 
 ```scala
 // All of these are runtime errors:

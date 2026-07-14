@@ -1,4 +1,4 @@
-# semantica
+# semanticdf
 
 A **semantic layer for Apache Spark** (JVM/Scala), adapted from the
 [Boring Semantic Layer](https://github.com/boringdata/boring-semantic-layer) (Python/Ibis).
@@ -26,8 +26,8 @@ mvn -Pspark4 test             # Spark 4.1.1 (latest stable)
 ## Quick start
 
 ```scala
-import io.semantica._
-import io.semantica.Predicate._    // "field" === value, "field" > value, SortKey.desc, ...
+import io.semanticdf._
+import io.semanticdf.Predicate._    // "field" === value, "field" > value, SortKey.desc, ...
 import org.apache.spark.sql.functions.{count, lit, sum}
 
 val flights = toSemanticTable(flightsDf, name = Some("flights"))
@@ -280,7 +280,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
 | `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
-| `.explain()` | Print the semantica op-tree summary (no Spark compile). |
+| `.explain()` | Print the semanticdf op-tree summary (no Spark compile). |
 | `.explain(spark)` | Run the full query and print Spark's **simple** physical plan. |
 | `.explainExtended(spark)` | Run the full query and print Spark's **extended/cost** plan (incl. logical-plan sections). |
 | `.explainSemantic(spark?)` / `.explainSemantic(spark?, Scope)` | Multi-section human-readable plan: filter routing, transitive deps, join strategies, warnings. | |
@@ -293,31 +293,31 @@ use `safeDivide` only when null is undesirable).
 
 ## Runnable examples
 
-In-library examples are in `src/main/scala/io/semantica/examples/`.
+In-library examples are in `src/main/scala/io/semanticdf/examples/`.
 Compile once with `mvn compile`, then run any example:
 
 ```bash
 mvn compile -q
 
-mvn scala:run -DmainClass=io.semantica.examples.FlightsBasic
-mvn scala:run -DmainClass=io.semantica.examples.FlightsPctTotals
-mvn scala:run -DmainClass=io.semantica.examples.OrdersJoinMany
-mvn scala:run -DmainClass=io.semantica.examples.FiltersRouting
-mvn scala:run -DmainClass=io.semantica.examples.TimeSeries
-mvn scala:run -DmainClass=io.semantica.examples.Benchmark
+mvn scala:run -DmainClass=io.semanticdf.examples.FlightsBasic
+mvn scala:run -DmainClass=io.semanticdf.examples.FlightsPctTotals
+mvn scala:run -DmainClass=io.semanticdf.examples.OrdersJoinMany
+mvn scala:run -DmainClass=io.semanticdf.examples.FiltersRouting
+mvn scala:run -DmainClass=io.semanticdf.examples.TimeSeries
+mvn scala:run -DmainClass=io.semanticdf.examples.Benchmark
 ```
 
 Or submit as a Spark app:
 ```bash
 mvn package -q
-spark-submit --class io.semantica.examples.FlightsBasic target/semantica_2.13-*.jar
+spark-submit --class io.semanticdf.examples.FlightsBasic target/semanticdf_2.13-*.jar
 ```
 
 ## Consumer-facing templates
 
 The `examples/` directory holds **consumer templates** — standalone Maven sub-projects
-that show how to *use* semantica in your own codebase. Each is a runnable, copy-pasteable
-project. They depend on semantica from your local `~/.m2` (run `mvn install` on the
+that show how to *use* semanticdf in your own codebase. Each is a runnable, copy-pasteable
+project. They depend on semanticdf from your local `~/.m2` (run `mvn install` on the
 parent first).
 
 | Template | What it teaches |
@@ -339,13 +339,13 @@ mvn scala:run -DmainClass=com.example.windowanalytics.Main
 
 ## CLI Tools
 
-Two tools live in `src/main/scala/io/semantica/tools/`, both runnable via `mvn exec:java`:
+Two tools live in `src/main/scala/io/semanticdf/tools/`, both runnable via `mvn exec:java`:
 
 ### docsgen — YAML model → browsable HTML
 
 ```bash
 mvn exec:java \
-  -Dexec.mainClass=io.semantica.tools.Main \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
   -Dexec.args="docsgen --path examples/starter/models/ --out docs/index.html"
 # Open docs/index.html in a browser
 ```
@@ -356,7 +356,7 @@ Reads one YAML file or a directory of `.yml` files and emits a self-contained HT
 
 ```bash
 mvn exec:java \
-  -Dexec.mainClass=io.semantica.tools.Main \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
   -Dexec.args="introspect --path examples/starter/data/flights.csv --format csv --model flights"
 # Writes a starter YAML to stdout (or --out models/flights.yml to write to a file).
 ```

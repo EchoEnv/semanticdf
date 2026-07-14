@@ -1,6 +1,6 @@
 # Runtime Quickstart
 
-How to build, test, run, and avoid the traps in semantica's toolchain.
+How to build, test, run, and avoid the traps in semanticdf's toolchain.
 
 This page is the single source of truth for **what runs on what**. It's intentionally
 short and opinionated. If something here doesn't match what you see, file an issue.
@@ -44,14 +44,14 @@ mvn test && mvn -Pspark4 test
 ```
 
 If one fails and the other doesn't, you've hit an API that drifted between
-Spark 3.x and 4.x. `DESIGN.md §7` lists which Spark APIs semantica touches;
+Spark 3.x and 4.x. `DESIGN.md §7` lists which Spark APIs semanticdf touches;
 all are stable across the matrix.
 
 ---
 
 ## Run the CLI tools
 
-The CLI lives in `io.semantica.tools.Main` (classpath: target/classes).
+The CLI lives in `io.semanticdf.tools.Main` (classpath: target/classes).
 It uses `exec:java` — **do not use `scala:run`** (see [Traps](#traps) below).
 
 From the repo root:
@@ -69,14 +69,14 @@ mvn exec:java \
 Run with no args to see usage:
 
 ```bash
-mvn exec:java -Dexec.mainClass=io.semantica.tools.Main
+mvn exec:java -Dexec.mainClass=io.semanticdf.tools.Main
 ```
 
 ---
 
 ## Run the example projects
 
-semantica ships two reference projects. Both are self-contained.
+semanticdf ships two reference projects. Both are self-contained.
 
 ### `examples/starter/` — gold-layer-only demo
 
@@ -141,7 +141,7 @@ There are three valid ways to set them:
 | `MAVEN_OPTS` env var | shell export | local debugging |
 | Surefire/scalatest `argLine` | test runner config | when running the test suite |
 
-The `examples/pipeline/` template uses `.mvn/jvm.config`. The semantica main
+The `examples/pipeline/` template uses `.mvn/jvm.config`. The semanticdf main
 project uses `argLine` for tests (already wired). For ad-hoc tools, use
 `MAVEN_OPTS=...--add-opens=...`.
 
