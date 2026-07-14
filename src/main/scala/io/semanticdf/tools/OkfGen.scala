@@ -493,15 +493,26 @@ class OkfGen {
   }
 
   /** Try to get the last-modified ISO timestamp for a file from git.
-    * Returns None if git is unavailable, the file isn't tracked, or there's any error. */
+    *
+    * Uses `git log --format=%ct` (epoch seconds) and converts to a canonical
+    * ISO 8601 UTC string via `Instant.toString`. The naive `%aI` format depends
+    * on the user's git `date.format-local` config and produces `…+00:00` or
+    * `…Z` inconsistently — so byte-stable output across machines requires
+    * canonicalizing. Returns None if git is unavailable, the file isn't tracked,
+    * or there's any error.
+    */
   private def gitTimestamp(f: File): Option[String] = try {
-    val pb = new ProcessBuilder("git", "log", "-1", "--format=%aI", "--", f.getPath)
+    val pb = new ProcessBuilder("git", "log", "-1", "--format=%ct", "--", f.getPath)
     pb.directory(new File("."))
     pb.redirectErrorStream(true)
     val proc = pb.start()
     val out = scala.io.Source.fromInputStream(proc.getInputStream).mkString.trim
     proc.waitFor()
-    if (proc.exitValue() == 0 && out.nonEmpty) Some(out) else None
+    if (proc.exitValue() == 0 && out.nonEmpty) {
+      // Convert epoch seconds to ISO 8601 UTC, second precision.
+      // Instant.toString at second precision always emits the `Z` suffix.
+      Some(java.time.Instant.ofEpochSecond(out.toLong).toString)
+    } else None
   } catch { case _: Exception => None }
 
   // -------------------------------------------------------------------------
@@ -544,10 +555,17 @@ class OkfGen {
     s.replace("|", "\\|").replace("\n", " ").replace("[", "\\[").replace("]", "\\]")
 
   /** Compute the path to write in `resource:` — absolute under project cwd,
-    * with single `file://` prefix. */
+    * Earlier versions emitted an absolute path, but the absolute path depends on
+    * the runner's cwd (e.g. `/home/runner/work/...` on GitHub Actions vs
+    * `/home/emilio/...` locally) — so the byte-stable bundle check fails whenever
+    * the cwd differs. A repo-relative path avoids that drift.
+    */
   private def absOrRel(p: String): String = {
-    val absolute = new File(p).getAbsolutePath
-    "file://" + absolute
+    val abs = new File(p).getAbsoluteFile.toPath.normalize
+    val cwd = new File(".").getAbsoluteFile.toPath.normalize
+    val rel = if (abs.startsWith(cwd)) cwd.relativize(abs).toString
+              else abs.toString  // fallback: outside cwd, use absolute
+    "file://" + rel
   }
 
   /** Compute the subdirectory of the bundle root that contains this model's concept doc,
