@@ -1,11 +1,11 @@
 name: CI
 
-# Run on every push to master and on all pull requests.
+# Run on every push to main and on all pull requests targeting main.
 on:
   push:
-    branches: [master]
+    branches: [main]
   pull_request:
-    branches: [master]
+    branches: [main]
 
 jobs:
   test:
@@ -52,3 +52,20 @@ jobs:
           name: test-results-spark-${{ matrix.spark }}
           path: target/surefire-reports/TEST-*.xml
           retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # OKF drift check — see Makefile and docs/agents/maintenance.md.
+  # Fails the PR if docs/agents/reference/ is stale relative to examples/*/models.
+  # ---------------------------------------------------------------------------
+  okfgen-drift-check:
+    name: OKF drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+      - name: Verify OKF bundle is in sync with YAMLs
+        run: make okfgen-check
