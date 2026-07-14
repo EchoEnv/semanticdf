@@ -62,6 +62,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # OkfGen's gitTimestamp runs `git log -1 --format=%ct -- <file>` against
+          # each YAML. Default `fetch-depth: 1` is a shallow clone that only
+          # contains the HEAD commit, so git returns HEAD's commit time for every
+          # file rather than that file's actual last-touching ancestor — producing
+          # a timestamp that drifts from what `make okfgen` produces locally
+          # against full history. `fetch-depth: 0` fetches all branches/tags
+          # so the same commit-history traversal runs in CI as locally.
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           java-version: "17"
