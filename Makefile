@@ -8,13 +8,25 @@
 EXAMPLES := $(wildcard examples/*/models)
 
 # ---------------------------------------------------------------------------
+# okfgen-build — compile main sources so `mvn exec:java` can find classes.
+#
+# `mvn exec:java` does NOT auto-compile; if target/classes/ is empty (clean
+# checkout, fresh CI runner), the goal fails with an opaque "An exception
+# occurred while executing the Java class" message. Both okfgen and
+# okfgen-check depend on this so they work from a clean checkout.
+# ---------------------------------------------------------------------------
+.PHONY: okfgen-build
+okfgen-build:
+	@mvn -q compile
+
+# ---------------------------------------------------------------------------
 # okfgen — regenerate the OKF reference bundle into docs/agents/reference/.
 #
 # This rewrites the checked-in bundle to match the current state of the YAMLs.
 # Pair it with `git add docs/agents/reference && git commit` to fix a drift PR.
 # ---------------------------------------------------------------------------
 .PHONY: okfgen
-okfgen:
+okfgen: okfgen-build
 	@set -e; \
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
@@ -31,7 +43,7 @@ okfgen:
 # Exits 0 if in sync, 1 if drift. Used by CI; safe to run locally.
 # ---------------------------------------------------------------------------
 .PHONY: okfgen-check
-okfgen-check:
+okfgen-check: okfgen-build
 	@TMP=$$(mktemp -d) && DIFF=$$(mktemp) && trap "rm -rf $$TMP $$DIFF" EXIT && set -e; \
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
