@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **196/196 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **203/203 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -124,6 +124,53 @@ keywords (`order`, `rows`, `range`, `between`, `unbounded`, `preceding`,
 > window evaluation fails. Workaround: use a window that doesn't reference
 > group-by keys (e.g. `Window.orderBy(...)` only), or compute percent-of-total
 > as a separate measure.
+
+### Transforms (per-row computations, applied at model-load)
+
+Per-row logic — `datediff(...)`, `case when ...`, window functions —
+doesn't fit the measure's aggregate context. Use the new `transforms:`
+block (YAML) or `withTransforms(...)` (Scala DSL) to apply such logic
+to the source data at model-load time. Transforms correspond to
+[dbt staging models](https://docs.getdbt.com/docs/build/staging-models)
+and [LookML `derived_table`](https://cloud.google.com/looker/docs/derived-tables)
+— the canonical place for per-row data prep.
+
+```yaml
+# YAML
+orders:
+  table: orders_csv
+  transforms:
+    ship_days:
+      expr: "datediff(shipped_at, order_date)"
+      description: "Days from order placement to shipment (per-row)"
+    on_time_flag:
+      expr: "case when datediff(shipped_at, order_date) <= 2 then 1 else 0 end"
+      description: "1 if shipped within 2 days, else 0 (per-row)"
+  measures:
+    total_ship_days: "sum(ship_days)"
+  calculated_measures:
+    avg_ship_days: "total_ship_days / count(1)"
+```
+
+```scala
+// Scala DSL — equivalent
+val orders = toSemanticTable(ordersCsv, name = Some("orders"))
+  .withTransforms(
+    Transform("ship_days",      t => datediff(t("shipped_at"), t("order_date"))),
+    Transform("on_time_flag",   t => when(datediff(t("shipped_at"), t("order_date")) <= 2, lit(1)).otherwise(lit(0))),
+  )
+  .withMeasures(Measure("total_ship_days", t => sum(t("ship_days"))))
+```
+
+**Single source of truth:** YAML `transforms:` and Scala `withTransforms(...)`
+produce equivalent results — the same per-row logic, expressed in either.
+Transformed columns become part of the source DataFrame; downstream
+measures see them as regular columns and aggregate them freely.
+
+**Order matters:** transforms apply in declaration order. If transform B
+references a column added by transform A, declare A first. There is
+no automatic topological sort (the user is responsible for ordering
+the dependencies correctly).
 
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
@@ -320,7 +367,7 @@ Reads a data file via Spark, infers dimensions (StringType → dim, NumericType 
 
 ## Cross-version compatibility
 
-Verified green on all three lines (196 tests each — Phase D + integration + YAML loader +
+Verified green on all three lines (203 tests each — Phase D + integration + YAML loader +
 regression suites):
 
 | Spark | Scala | Status |
