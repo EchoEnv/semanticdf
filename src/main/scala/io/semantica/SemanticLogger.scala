@@ -34,11 +34,11 @@ private[semantica] object SemanticLogger extends Logging {
     * If a future test environment runs without a session, restore the fallback
     * here, but it'd be cosmetic: Spark's `Logging` trait handles level routing
     * for us. */
-  private def logAtLevel(level: String, msg: String): Unit = level match {
-    case "DEBUG" => logDebug(msg)
-    case "INFO"  => logInfo(msg)
-    case "WARN"  => logWarning(msg)
-    case "ERROR" => logError(msg)
+  private def logAtLevel(level: String, msg: => String): Unit = level match {
+    case "DEBUG" => if (log.isDebugEnabled) logDebug(msg)
+    case "INFO"  => if (log.isInfoEnabled)  logInfo(msg)
+    case "WARN"  => if (log.isWarnEnabled)  logWarning(msg)
+    case "ERROR" => if (log.isErrorEnabled) logError(msg)
   }
 
   def debug(msg: => String): Unit  = logAtLevel("DEBUG", msg)
