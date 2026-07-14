@@ -73,10 +73,10 @@ class IntegrationSpec extends AnyFunSuite with SparkSessionFixture {
   }
 
   // -------------------------------------------------------------------------
-  // previewSchema — real file, no rows executed
+  // compiledSchema — real file, no rows executed
   // -------------------------------------------------------------------------
 
-  test("previewSchema on CSV — no rows materialized") {
+  test("compiledSchema on CSV — no rows materialized") {
     val csvPath = getClass.getResource("/flights.csv").getPath
     val df = spark.read.option("header", "true").option("inferSchema", "true").csv(csvPath)
 
@@ -86,8 +86,8 @@ class IntegrationSpec extends AnyFunSuite with SparkSessionFixture {
       .groupBy("carrier")
       .aggregate("total_passengers")
 
-    // previewSchema should NOT trigger any row reads
-    val schema = model.previewSchema(spark)
+    // compiledSchema should NOT trigger any row reads
+    val schema = model.compiledSchema(spark)
     schema.fieldNames should contain theSameElementsAs Seq("carrier", "total_passengers")
 
     // Verify: the compiled plan should reference the CSV path (not cached rows)

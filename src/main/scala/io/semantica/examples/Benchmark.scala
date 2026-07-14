@@ -89,9 +89,9 @@ object Benchmark {
         model.groupBy("carrier").aggregate("avg_passengers").explain()
       }
 
-      // --- previewSchema (compile, no rows) ---
-      benchmark("previewSchema() — compile only, no row execution", 3) {
-        model.groupBy("carrier").aggregate("avg_passengers").previewSchema(spark)
+      // --- compiledSchema (compile, no rows) ---
+      benchmark("compiledSchema() — compile only, no row execution", 3) {
+        model.groupBy("carrier").aggregate("avg_passengers").compiledSchema(spark)
       }
 
       println("\n" + "=" * 60)

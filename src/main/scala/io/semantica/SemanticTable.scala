@@ -925,16 +925,23 @@ final class SemanticTable private[semantica] (
   // Typed result schema (unblocks first-consumer: preview output before run)
   // -------------------------------------------------------------------------
 
-  /** Compile this semantic table and return the output schema as a StructType.
+  /** Compile this semantic table and return the COMPILED output schema.
     *
-    * No rows are executed — only the plan is built and resolved to a schema.
-    * Use this to discover what columns `.execute(spark)` will produce before
-    * running it, or to drive code generation, validation, or documentation.
+    * **Not compile-free.** This calls `toDataFrame(spark).schema`, which compiles
+    * the entire pipeline (pass 1 + pass 2 + Spark's optimizer pass). For a hot
+    * path (UI render, IDE preview, BI tool schema sync), use [[schema(spark)]]
+    * instead — that one walks the model's declared dimensions and measures
+    * without compiling and returns them as a one-row-per-field DataFrame.
+    *
+    * `compiledSchema` is the right call when you genuinely need the post-
+    * aggregation output schema (group keys + measure columns after all
+    * Spark type promotion rules have been applied). The name makes the
+    * cost explicit so callers don't reach for it expecting a cheap lookup.
     *
     * @param spark the active SparkSession
-    * @return the output schema (dimension columns + measure columns)
+    * @return the post-aggregation output schema (StructType)
     */
-  def previewSchema(spark: SparkSession): StructType =
+  def compiledSchema(spark: SparkSession): StructType =
     toDataFrame(spark).schema
 
   /** Validate the op tree without compiling.

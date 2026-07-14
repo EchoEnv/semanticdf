@@ -897,7 +897,7 @@ class SemanticaSpec
     rows.map(_.getString(0)).sorted shouldEqual Seq("AA", "DL", "UA")
   }
 
-  test("previewSchema — returns correct types without executing rows") {
+  test("compiledSchema — returns correct types without executing rows") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -908,7 +908,7 @@ class SemanticaSpec
       .groupBy("carrier")
       .aggregate("total_passengers", "avg_passengers")
 
-    val schema = st.previewSchema(spark)
+    val schema = st.compiledSchema(spark)
     // allMeasuresClosed pulls in flight_count transitively (referenced by avg_passengers),
     // so the output includes it even though only total_passengers and avg_passengers
     // were explicitly requested.
