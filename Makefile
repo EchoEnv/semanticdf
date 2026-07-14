@@ -19,7 +19,7 @@ okfgen:
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
 	  echo "  okfgen: $$name"; \
-	  mvn -o -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	  mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
 	    -Dexec.args="okfgen --path $$d --out docs/agents/reference/$$name"; \
 	done
 	@echo "Bundle regenerated. Verify with: make okfgen-check"
@@ -35,7 +35,7 @@ okfgen-check:
 	@TMP=$$(mktemp -d) && DIFF=$$(mktemp) && trap "rm -rf $$TMP $$DIFF" EXIT && set -e; \
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
-	  mvn -o -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	  mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
 	    -Dexec.args="okfgen --path $$d --out $$TMP/$$name"; \
 	done; \
 	if diff -ru "$$TMP" docs/agents/reference/ > "$$DIFF" 2>&1; then \
