@@ -48,7 +48,12 @@ private[semanticdf] object SparkFilterValidator {
       // Predicate has no column reference (e.g., `1 = 1`). Permit but note.
       return
     }
-    val missing = cols.filterNot(sourceColumns.contains)
+    // Both sides of the comparison must use the same case convention.
+    // `collectColumns` lowercases parsed refs (Spark's column resolution is
+    // case-insensitive by default), so `sourceColumns` must be lowercased
+    // here too — otherwise a filter `Origin IS NOT NULL` against a column
+    // named `Origin` would be falsely rejected.
+    val missing = cols.filterNot(sourceColumns.map(_.toLowerCase).contains)
     if (missing.nonEmpty) {
       throw new IllegalArgumentException(
         s"Filter '$filterName' on model '$modelName' references column(s) " +
