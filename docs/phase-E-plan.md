@@ -134,7 +134,43 @@ The `divide[N: Numeric, D: Numeric, R]` function checks types at compile time. T
 
 ---
 
-## Implementation order
+## Implementation status (what's actually shipped)
+
+The original three-target plan above is **partial**: E2/E3-style phantom typing shipped as
+the `SemanticField[T]` typeclass instead of `Dimension[T]` / `Measure[T]`, because field
+references (not field declarations) were the actual pain point — typos happen at the call
+site (`st.groupBy("carierr")`), not at the declaration.
+
+### Done — typed field references (PR #7)
+
+- `SemanticField[T]` phantom-typed typeclass with `SemanticDimension[T]` / `SemanticMeasure[T]` subtypes.
+- `groupByDimensions[D1..D4]` / `aggregateMeasures[M1..M4]` typed overloads; `…All(refs)` for arity 5+.
+- Typed `Predicate.Eq/Ne/Gt/Ge/Lt/Le/in/notIn/isNull/isNotNull[F](ref, v)` factories.
+- `FieldRef[T]` carrier is a value-class wrapper — zero runtime overhead on the hot path.
+- 9 regression tests in `SemanticFieldSpec.scala` verifying typed output === string output.
+
+### Done — sealed `Predicate.Compare` ADT (PR #8)
+
+- `sealed trait Compare` with sealed `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge` case classes; operator
+  choice encoded in the type, not a runtime string.
+- Backward-compatible `Compare.apply(op, field, value)` factory preserved.
+- Each case has its own `compile()` / `describe()` — no string dispatch per compile.
+- 8 regression tests in `PredicateSpec.scala` verifying identical output to the legacy form.
+
+### What's NOT done from the original plan
+
+- **`E1 — ResultDecoder[T]`:** still deferred. The typed field refs already give the highest-
+  value safety (typo prevention at the call site). Case-class decoding adds a second layer
+  (typo prevention in the *result* type) which hasn't been requested yet.
+- **E3 — typed arithmetic DSL** (`divide[N, D, R]` etc.): replaced by `ResultDecoder`-style
+  result-typed calcs. Still deferred.
+
+### What's explicitly still out of scope (unchanged from the table below)
+
+- Type-safe Spark schema reading
+- Generic `NumericExpr` with full arithmetic
+- Implicit `Column → NumericExpr` conversions
+- Breaking changes to existing APIs
 
 ```
 Week 1, Day 1-2:  E1  ResultDecoder[T] + query[T]

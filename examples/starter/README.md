@@ -230,7 +230,7 @@ For a real deployment:
 - Read [`docs/known-limitations.md`](../../docs/known-limitations.md) for what semanticdf does NOT support yet
 - Read [`DESIGN.md`](../../DESIGN.md) for the architecture and design decisions
 - Try the existing [`src/main/scala/io/semanticdf/examples/`](../../src/main/scala/io/semanticdf/examples) for more advanced patterns (joins, time series, filters)
-- When you outgrow this template: add typed measures (`Phase E` — typeclasses for compile-time safety)
+- For compile-time safety on field references, see [the typed-queries section](../../README.md#typed-queries-compile-time-safety) in the main README and [Phase E](../../docs/phase-E-plan.md) for the rationale.
 
 ---
 
