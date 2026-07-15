@@ -62,7 +62,7 @@ object Main {
       val okf = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
 
       val mapper = McpJsonDefaults.getMapper()
-      val server = Server.build(models, okf, mapper)
+      val server = Server.build(models, okf, spark, mapper)
 
       // Block until stdio closes (parent process exits / sends EOF) or
       // SIGINT/SIGTERM. McpSyncServer's `close()` is idempotent.
