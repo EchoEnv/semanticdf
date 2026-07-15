@@ -17,12 +17,17 @@ sealed trait SemanticOp extends Serializable with Product {
 
 object SemanticOp {
 
-  /** Walk to the leaf `SemanticTableOp` (single-table models only). */
+  /** Walk to the leaf `SemanticTableOp` (single-table models only).
+    *
+    * Pre-join row filters ([[SemanticRowFilterOp]]) are transparent wrappers —
+    * they apply a row predicate to the source DataFrame but do not change the
+    * declared model. Walk through them to reach the underlying leaf. */
   private[semanticdf] def rootModel(op: SemanticOp): Option[SemanticTableOp] = op match {
     case t: SemanticTableOp             => Some(t)
     case j: SemanticJoinOp              => None  // joined — use SemanticJoinOp.mergedModel
     case SemanticAggregateOp(src, _, _) => rootModel(src)
     case SemanticFilterOp(src, _)       => rootModel(src)
+    case SemanticRowFilterOp(src, _, _, _, _) => rootModel(src)  // pre-join filter is transparent
     case SemanticOrderByOp(src, _)      => rootModel(src)
     case SemanticLimitOp(src, _)        => rootModel(src)
     case SemanticHintOp(src, _, _)      => rootModel(src)
@@ -637,14 +642,17 @@ final case class SemanticAggregateOp(
     * Joined: uses the SemanticJoinOp's pre-built merged model, which raises an error
     * on bare-name collisions (callers use explicit table-prefixed names). */
   private def resolveModel(src: SemanticOp): MergedSemanticModel = {
-    // Walk through transparent wrappers (filter/orderBy/limit) before checking
-    // for join or single-table roots. Without this, `where(...).groupBy().aggregate()`
-    // on a joined model throws "no root SemanticTableOp or SemanticJoinOp".
+    // Walk through transparent wrappers (filter/orderBy/limit/row-filter) before
+    // checking for join or single-table roots. Without this, `where(...).groupBy().aggregate()`
+    // on a filtered or joined model throws "no root SemanticTableOp or SemanticJoinOp".
+    // Pre-join row filters are transparent — they apply a row predicate but do not
+    // change the declared model, so the underlying SemanticTableOp is the right root.
     def unwrap(op: SemanticOp): SemanticOp = op match {
-      case SemanticFilterOp(s, _)    => unwrap(s)
-      case SemanticOrderByOp(s, _)   => unwrap(s)
-      case SemanticLimitOp(s, _)     => unwrap(s)
-      case other                     => other
+      case SemanticFilterOp(s, _)          => unwrap(s)
+      case SemanticRowFilterOp(s, _, _, _, _) => unwrap(s)
+      case SemanticOrderByOp(s, _)         => unwrap(s)
+      case SemanticLimitOp(s, _)           => unwrap(s)
+      case other                           => other
     }
     unwrap(src) match {
       case join: SemanticJoinOp =>

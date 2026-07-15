@@ -142,6 +142,13 @@ final class SemanticTable private[semanticdf] (
       sb.append(s"${indent}  source:\n")
       explainNode(src, sb, indent + "    ")
 
+    // Pre-join row filter: applied to the source DataFrame before any join,
+    // so it is part of the execution plan (visible in explain output).
+    case SemanticRowFilterOp(src, name, _, expr, _) =>
+      sb.append(s"${indent}row-filter($name): $expr\n")
+      sb.append(s"${indent}  source:\n")
+      explainNode(src, sb, indent + "    ")
+
     case SemanticOrderByOp(src, keys) =>
       sb.append(s"${indent}orderBy(${keys.map(_.toString).mkString(", ")})\n")
       sb.append(s"${indent}  source:\n")
@@ -387,6 +394,8 @@ final class SemanticTable private[semanticdf] (
       leftFields ::: rightFields
 
     case f: SemanticFilterOp  => collectSchemaFields(f.source, joinSource, joinCardinality)
+    // Pre-join row filters do not change declared fields — pass through.
+    case rf: SemanticRowFilterOp => collectSchemaFields(rf.source, joinSource, joinCardinality)
     case o: SemanticOrderByOp => collectSchemaFields(o.source, joinSource, joinCardinality)
     case l: SemanticLimitOp   => collectSchemaFields(l.source, joinSource, joinCardinality)
     case a: SemanticAggregateOp => collectSchemaFields(a.source, joinSource, joinCardinality)
@@ -920,6 +929,9 @@ final class SemanticTable private[semanticdf] (
         throw new IllegalArgumentException(
           s"$label: cannot join after aggregate(). Join tables first, then call groupBy()."
         )
+      // Pre-join row filters are transparent — unwrap to find the underlying table.
+      case SemanticRowFilterOp(src, _, _, _, _) =>
+        new SemanticTable(src).requireRoot(label)
     }
 
   // -----------------------------------------------------------------------
@@ -1040,6 +1052,9 @@ final class SemanticTable private[semanticdf] (
       case f @ SemanticFilterOp(src, _) =>
         allFilters += f
         walk(src)
+      // Pre-join row filters are validated at load time by SparkFilterValidator;
+      // here they are transparent — they don't change declared dims/measures.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
@@ -1095,12 +1110,17 @@ final class SemanticTable private[semanticdf] (
   // Internals (reordered for readability)
   // -------------------------------------------------------------------------
 
+  /** Resolve the leaf [[SemanticTableOp]] from the root, unwrapping transparent
+    * wrappers (where/orderBy/limit/row-filter). Used by the catalog accessors
+    * (`dimensions`, `measures`, `findDimension`, `findMeasure`). */
   private def resolveRootModel: MergedSemanticModel = root match {
     case t: SemanticTableOp => MergedSemanticModel(t.dimensions, t.measures)
     case j: SemanticJoinOp  => j.mergedModel
     case SemanticAggregateOp(src, _, _) =>
       new SemanticTable(src).resolveRootModel
     case SemanticFilterOp(src, _)  => new SemanticTable(src).resolveRootModel
+    // Pre-join row filters do not change the declared model — unwrap transparently.
+    case SemanticRowFilterOp(src, _, _, _, _) => new SemanticTable(src).resolveRootModel
     case SemanticOrderByOp(src, _) => new SemanticTable(src).resolveRootModel
     case SemanticLimitOp(src, _)   => new SemanticTable(src).resolveRootModel
     case SemanticHintOp(src, _, _) => new SemanticTable(src).resolveRootModel
@@ -1237,6 +1257,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticFilterOp(src, pred) =>
         pred.fields.foreach(acc.add)
         walk(src)
+      // Pre-join row filters don't reference declared fields in the aggregate sense.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, keys) =>
         keys.foreach(k => acc.add(SortKey.nameOf(k)))
         walk(src)
@@ -1277,6 +1299,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         walk(j.left); walk(j.right)
       case a: SemanticAggregateOp     => walk(a.source)
       case SemanticFilterOp(src, _)   => walk(src)
+      // Pre-join row filters do not change declared measures — pass through.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
@@ -1297,6 +1321,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         walk(j.left); walk(j.right)
       case a: SemanticAggregateOp     => walk(a.source)
       case SemanticFilterOp(src, _)   => walk(src)
+      // Pre-join row filters do not change declared dimensions — pass through.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
@@ -1313,6 +1339,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         acc += j; walk(j.left); walk(j.right)
       case a: SemanticAggregateOp     => walk(a.source)
       case SemanticFilterOp(src, _)   => walk(src)
+      // Pre-join row filters don't add joins — pass through.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case _: SemanticTableOp         => // leaf
@@ -1338,10 +1366,34 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case j: SemanticJoinOp =>
         walk(j.left); walk(j.right)
       case a: SemanticAggregateOp    => walk(a.source)
+      // Pre-join row filters are not query-time filters — skip here; rendered
+      // separately as "ROW-FILTER" entries via allRowFilters().
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _) => walk(src)
       case SemanticLimitOp(src, _)   => walk(src)
       case _: SemanticTableOp        => // leaf
       case SemanticHintOp(src, _, _) => walk(src)
+    }
+    walk(st.root)
+    acc.toSeq
+  }
+
+  /** All pre-join row filters (declared via YAML `filters:` block) reachable
+    * from the root, in op-tree declaration order (innermost first, outermost
+    * last). Distinct from [[allFilters]] which returns query-time filters. */
+  private[semanticdf] def allRowFilters(): Seq[SemanticRowFilterOp] = {
+    val acc = scala.collection.mutable.ListBuffer.empty[SemanticRowFilterOp]
+    def walk(op: SemanticOp): Unit = op match {
+      case rf: SemanticRowFilterOp =>
+        walk(rf.source); acc += rf
+      case j: SemanticJoinOp =>
+        walk(j.left); walk(j.right)
+      case SemanticAggregateOp(src, _, _) => walk(src)
+      case SemanticFilterOp(src, _)       => walk(src)
+      case SemanticOrderByOp(src, _)      => walk(src)
+      case SemanticLimitOp(src, _)        => walk(src)
+      case _: SemanticTableOp             => // leaf
+      case SemanticHintOp(src, _, _)      => walk(src)
     }
     walk(st.root)
     acc.toSeq
@@ -1393,12 +1445,21 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
   private def renderRouting(): String = {
     val measureNames = allMeasures().map(_._1).toSet
     val filters = allFilters()
+    val rowFilters = allRowFilters()
     val sb = new StringBuilder
     sb.append(heading("SEMANTIC ROUTING")).append("\n")
 
-    if (filters.isEmpty) {
+    if (filters.isEmpty && rowFilters.isEmpty) {
       sb.append("  (no filters applied)\n")
       return sb.toString
+    }
+
+    // Pre-join row filters are listed first (they apply before WHERE), with a
+    // distinct "ROW-FILTER" label so the reader can tell them apart from WHERE.
+    rowFilters.foreach { rf =>
+      val desc = rf.description.fold("")(d => s" \u2014 $d")
+      sb.append(s"  ROW-FILTER \u2192 ${rf.name}: ${rf.expr}$desc\n")
+      sb.append(s"      \u2514\u2500 runs against source table pre-join (hygiene, not a row selection)\n")
     }
 
     filters.foreach { case (SemanticFilterOp(_, pred), isHaving) =>
@@ -1429,6 +1490,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     def walkDirect(op: SemanticOp): Unit = op match {
       case a: SemanticAggregateOp => a.measureNames.foreach(requestedDirect.add)
       case SemanticFilterOp(src, _)    => walkDirect(src)
+      // Pre-join row filters do not contribute directly to the transitive deps walk.
+      case SemanticRowFilterOp(src, _, _, _, _) => walkDirect(src)
       case SemanticOrderByOp(src, keys) =>
         keys.foreach(k => requestedDirect.add(SortKey.nameOf(k)))
         walkDirect(src)
@@ -1654,6 +1717,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case j: SemanticJoinOp  => walk(j.left); walk(j.right)
       case SemanticAggregateOp(src, _, _) => walk(src)
       case SemanticFilterOp(src, _)       => walk(src)
+      // Pre-join row filters don't change the model identity — pass through.
+      case SemanticRowFilterOp(src, _, _, _, _) => walk(src)
       case SemanticOrderByOp(src, _)      => walk(src)
       case SemanticLimitOp(src, _)        => walk(src)
       case SemanticHintOp(src, _, _)      => walk(src)
