@@ -1,4 +1,4 @@
-# semanticdf
+# SemanticDF
 
 A **semantic layer for Apache Spark** (JVM/Scala), adapted from the
 [Boring Semantic Layer](https://github.com/boringdata/boring-semantic-layer) (Python/Ibis).
@@ -390,7 +390,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.filters: Seq[SemanticFilter]` | The model's pre-join row filters in declaration order (`name`, `expr`, `description`, `metadata`). |
 | `.dimensions: Map[String, Dimension]` / `.measures: Map[String, Measure]` / `.findDimension(name)` / `.findMeasure(name)` | Catalog accessors. |
 | `.createOrReplaceTempView(name)` / `.createTempView(name)` / `.createOrReplaceGlobalTempView(name)` | Compile to `DataFrame` and register as a Spark temp view (session or global). All three take `(implicit spark: SparkSession)` — call from inside a `SparkSession.builder()` block. |
-| `.explain()` | Print the semanticdf op-tree summary (no Spark compile). |
+| `.explain()` | Print the SemanticDF op-tree summary (no Spark compile). |
 | `.explain(spark)` | Run the full query and print Spark's **simple** physical plan. |
 | `.explainExtended(spark)` | Run the full query and print Spark's **extended/cost** plan (incl. logical-plan sections). |
 | `.explainSemantic(spark?)` / `.explainSemantic(spark?, Scope)` | Multi-section human-readable plan: filter routing, transitive deps, join strategies, warnings. | |
@@ -426,8 +426,8 @@ spark-submit --class io.semanticdf.examples.FlightsBasic target/semanticdf_2.13-
 ## Consumer-facing templates
 
 The `examples/` directory holds **consumer templates** — standalone Maven sub-projects
-that show how to *use* semanticdf in your own codebase. Each is a runnable, copy-pasteable
-project. They depend on semanticdf from your local `~/.m2` (run `mvn install` on the
+that show how to *use* SemanticDF in your own codebase. Each is a runnable, copy-pasteable
+project. They depend on SemanticDF from your local `~/.m2` (run `mvn install` on the
 parent first).
 
 | Template | What it teaches |
