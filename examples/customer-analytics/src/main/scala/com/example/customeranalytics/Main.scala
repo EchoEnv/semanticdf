@@ -93,12 +93,19 @@ object Main {
       // atTimeGrain on a joined dim isn't supported. For month-truncation
       // in production, add a Scala-side Dimension.time("customers.signup_month",
       // t => date_trunc("month", t("signup_date"))).
+      //
+      // Note: the resulting DataFrame has a column literally named
+      // `customers.signup_date`. Spark's DataFrame.orderBy(String) interprets a
+      // name containing a `.` as a qualified `table.column` reference (which
+      // fails because there's no `customers` table — it's just a single joined
+      // DataFrame). Backtick-escaping the name makes Spark treat it as one
+      // identifier that matches the column name verbatim.
       println("\n--- Q2: Customer activity by signup-day cohort ---")
       orders
         .groupBy("customers.signup_date")
         .aggregate("order_count", "order_amount")
         .toDataFrame(spark)
-        .orderBy("customers.signup_date")
+        .orderBy("`customers.signup_date`")
         .show(20, false)
     } finally spark.stop()
   }
