@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
-**Status:** Draft for review
-**Last updated:** Phase E + 2 templates shipped, no consumer yet
+**Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
+**Last updated:** Phase E (PARTIAL) shipped, 7 templates shipping, no consumer yet
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -202,15 +202,6 @@ SPARK PLAN:
 ESTIMATED: scans 28 MB, no shuffle
 ```
 
-**Effort:** 3-4 person-days
-**Impact:** Medium — debugging slow queries becomes much easier.
-
-**Files to change:**
-- `src/main/scala/io/semanticdf/SemanticTable.scala` — add `explainSemantic(spark)`
-- New internal: a `SemanticPlanRenderer` that walks the op tree and produces the explanation
-
-**Why T1:** Already have the building blocks (`SemanticOp` exposes routing info, `explain()` shows the op tree). Just need to render it for humans.
-
 ---
 
 ## Tier 2: Ship when consumer needs it
@@ -281,14 +272,23 @@ materializations:
 
 ### 2.4 Model versioning + lineage
 
-**Problem:** When a YAML model changes, downstream consumers (dashboards, APIs, other models) break silently. No way to know "who uses total_revenue?"
+**Status:** 🟡 **PARTIAL** — model-level versioning shipped; lineage track deferred.
 
-**Solution:** Track every loaded model version (git SHA + content hash). On load, write a row to `_semanticdf_lineage` with the model name, version, and the fields it exposes. When a model is reloaded, diff the fields and emit a "fields added/removed" event.
+**Shipped (Phase E partial):**
+- `SemanticTable.version: Int` field (defaults to `0` = unversioned) and `.version(v: Int)` setter.
+- `version:` block in YAML models (e.g. `flights: { version: 1 }`).
+- Version propagates through `where` / `having` / `groupBy().aggregate()` / `withTransforms`-on-join.
+- `YamlLoader` parses and propagates the YAML version.
+- The library is permissive — it never fails on a version mismatch; consumers (MCP server, OKF generator, agent framework) read `version` and apply their own policy.
 
-**Effort:** 1 week
+**Problem (the still-open part):** when a YAML model changes, downstream consumers (dashboards, APIs, other models) break silently. No way to know "who uses total_revenue?"
+
+**Solution (lineage track):** Track every loaded model version (git SHA + content hash). On load, write a row to `_semanticdf_lineage` with the model name, version, and the fields it exposes. When a model is reloaded, diff the fields and emit a "fields added/removed" event.
+
+**Effort:** ~1 week for lineage track (versioning itself is done)
 **Impact:** Medium — needed for governance but not blocking for first consumer.
 
-**Files to change:**
+**Files to change (lineage only):**
 - New: `src/main/scala/io/semanticdf/ModelRegistry.scala`
 - `src/main/scala/io/semanticdf/YamlLoader.scala` — emit lineage events
 - New: `_semanticdf_lineage` parquet/Delta table
@@ -340,14 +340,16 @@ Spin up semanticdf as an HTTP service. Accept SQL-like queries (`POST /query {mo
 
 ---
 
-### 3.2 CLI tool
+### 3.2 CLI tools ✅ (v0.1.0)
 
-`semanticdf query models/ "SELECT carrier, total_revenue FROM orders GROUP BY carrier"`. Terminal-friendly exploration. Wraps the existing Scala API.
+**Shipped:** `docsgen`, `introspect`, `okfgen` — all under `io.semanticdf.tools.Main`, all invokable via `mvn exec:java -Dexec.args="<tool> --path <dir> --out <dest>"`. See the README's CLI Tools section for runnable examples.
+
+**What's gated now** (the actual open piece): a SQL-like terminal query — e.g. `semanticdf query models/ "SELECT carrier, total_revenue FROM orders GROUP BY carrier"` — wrapping the Scala DSL for ad-hoc exploration. Different from the current CLIs (which work on YAML files) because it would compile and execute an arbitrary semantic-table query against the live catalog.
 
 **Effort:** 3-4 person-days
 **Impact:** Devs love this for debugging.
 
-**Consumer gate:** Once we have ≥3 devs asking "how do I run this from the terminal?"
+**Consumer gate:** Once we have ≥3 devs asking "how do I run this from the terminal?" (the gate is now narrower — the CLIs themselves already ship.)
 
 ---
 

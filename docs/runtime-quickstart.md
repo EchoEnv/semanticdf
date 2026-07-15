@@ -76,9 +76,18 @@ mvn exec:java -Dexec.mainClass=io.semanticdf.tools.Main
 
 ## Run the example projects
 
-semanticdf ships two reference projects. Both are self-contained.
+semanticdf ships seven reference projects. Each is self-contained — `mvn install`
+the parent, `cd` into the directory, and run. Each demonstrates a different pattern.
 
-### `examples/starter/` — gold-layer-only demo
+### The two foundational examples
+
+#### `examples/starter/` — gold-layer-only demo
+
+The canonical "hello world". Loads YAML models, runs **seven queries** including
+basic group-by, percent-of-total, joins, time-grain aggregation, filter + aggregate,
+top-N via window functions, and month-over-month change via `lag`. PR #10 added a
+typed-queries showcase (the `groupByDimensions` / `aggregateMeasures` / sealed
+`Compare.Gt` patterns).
 
 ```bash
 cd examples/starter
@@ -88,7 +97,10 @@ mvn scala:run -DmainClass=com.example.starter.Main
 Note: starter uses `scala:run` deliberately — it doesn't start Spark and doesn't
 care about the arg-leak. **Do not copy this command if you're starting Spark.**
 
-### `examples/pipeline/` — full bronze→silver→gold pipeline
+#### `examples/pipeline/` — full bronze→silver→gold pipeline
+
+The full BI lifecycle in one repo: messy CSV → ETL cleanup → silver parquet →
+declarative YAML queries → gold-layer output.
 
 ```bash
 cd examples/pipeline
@@ -100,6 +112,23 @@ gold-layer queries through YAML models. Output goes to `output/`.
 
 This project ships `.mvn/jvm.config` to handle Java 17 module-system flags
 (see [Traps](#traps) §1). You don't need to set any env vars.
+
+### Five domain-specific examples
+
+Each is `mvn scala:run -DmainClass=com.example.<package>.Main` (same invocation
+pattern as starter — none of these start Spark in a way that would conflict with
+the arg-leak; they all use Scala-managed `local[*]`).
+
+| Template | What it teaches |
+|---|---|
+| [`examples/hospital/`](examples/hospital/README.md) | Data **cleansing** (dedup, normalize, fill) before loading into semanticdf; ALOS, 30-day readmission rate |
+| [`examples/customer-analytics/`](examples/customer-analytics/README.md) | RFM segmentation + cohort activity — multi-step calc-of-calc composition |
+| [`examples/operations-analytics/`](examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (2σ z-score) |
+| [`examples/telco-analytics/`](examples/telco-analytics/README.md) | Telco: monthly ARPU per plan, promotion effectiveness, roaming revenue split |
+| [`examples/window-analytics/`](examples/window-analytics/README.md) | Window functions: top-N per group, period-over-period (MoM), running totals |
+
+Each example has its own `README.md` with the exact run command for its package
+name.
 
 ---
 
@@ -200,6 +229,7 @@ them out of order breaks the auto-bump machinery.
 | Generate docs for a model | `mvn exec:java -Dexec.args="docsgen --path <dir> --out out.html"` |
 | Try the gold-layer example | `cd examples/starter && mvn scala:run -DmainClass=com.example.starter.Main` |
 | Try the silver-layer pipeline | `cd examples/pipeline && mvn exec:java -Dexec.mainClass=com.example.pipeline.Main` |
+| Browse the 5 domain examples | see [Run the example projects](#run-the-example-projects) above |
 | Debug a classpath issue | `mvn dependency:build-classpath` |
 | See a stack trace with deps | `mvn -X test -Dtest=DocsGenSpec 2>&1 \| grep -A50 "Build CL"` |
 
