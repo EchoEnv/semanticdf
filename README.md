@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **203/203 tests green** under Spark
+**Status:** v0.1 — core capabilities complete. **278/278 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -317,6 +317,9 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 |---|---|
 | `toSemanticTable(df, name?)` | Construct a semantic model from a base `DataFrame`. |
 | `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. |
+| `.withTransforms(transforms*)` | Per-row logic (e.g. `datediff`, `case when`) applied to source data at model-load. Mirrors the YAML `transforms:` block. |
+| `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces the source-only / pre-join semantic at load time. |
+| `.version(v: Int)` | Set the model's version (forward-compat hint for consumers). `table.version` reads the current value (0 = unversioned). |
 | `.join_one(other, on)` / `.join_many(other, on)` / `.join_cross(other)` | Joins. |
 | `.where(pred)` / `.having(pred)` | Filters (auto-routed WHERE/HAVING). |
 | `.groupBy(keys...).aggregate(measures...)` | Group-by + aggregate. |
@@ -331,6 +334,11 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
 | `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
+| `.joins: Seq[JoinInfo]` | All join edges in the model (left/right keys, cardinality: one/one_to_many/many_to_many/cross). Captures join keys at construction time (no compile required). |
+| `.measureKind(name): MeasureKind` | Classify a measure as `Base` / `Calc` / `Window` — useful for tooling that needs to know which measures have a known-name calc dependency chain. |
+| `.sourceTable: Option[String]` | Back-reference to the originating table name (when loaded from a registered/catalog source via `YamlLoader`). |
+| `.filters: Seq[SemanticFilter]` | The model's pre-join row filters in declaration order (`name`, `expr`, `description`, `metadata`). |
+| `.dimensions: Map[String, Dimension]` / `.measures: Map[String, Measure]` / `.findDimension(name)` / `.findMeasure(name)` | Catalog accessors. |
 | `.explain()` | Print the semanticdf op-tree summary (no Spark compile). |
 | `.explain(spark)` | Run the full query and print Spark's **simple** physical plan. |
 | `.explainExtended(spark)` | Run the full query and print Spark's **extended/cost** plan (incl. logical-plan sections). |
@@ -416,9 +424,26 @@ Reads a data file via Spark, infers dimensions (StringType → dim, NumericType 
 
 **Note — JDK 17 + Spark needs `--add-opens` flags** for any command that touches Spark (which includes `introspect`). Without them, the JVM crashes with `sun.nio.ch.DirectBuffer` access errors. Either set `MAVEN_OPTS` to the full flag set (see [`docs/runtime-quickstart.md`](docs/runtime-quickstart.md#traps) trap #1) or, for project-local reproducibility, drop a `.mvn/jvm.config` with one flag per line. `docsgen` does not need Spark, so it works without the flags.
 
+### okfgen — YAML models → agent knowledge catalog (sidecar markdown)
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
+  -Dexec.args="okfgen --path examples/starter/models/ --out docs/agents/reference/starter/"
+# Writes one Markdown concept doc per model under the --out directory.
+```
+
+Generates per-model **sidecar Markdown** (OKF — the agent knowledge format) for an
+external agent catalog. Each `models/foo.yml` becomes `agents/reference/<project>/foo.md`,
+with one-line dimensions/measures/joins/filters plus a row-by-row examples reference.
+The YAML stays the engine source of truth — OKF is a publishing layer, not a schema
+replacement. See [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md) for the
+mapping rules and output format. `make okfgen-check` is the CI drift check — it re-runs
+okfgen to a tempdir and `diff -ru`'s the result against the committed bundle.
+
 ## Cross-version compatibility
 
-Verified green on all three lines (203 tests each — Phase D + integration + YAML loader +
+Verified green on all three lines (278 tests each — Phase D + integration + YAML loader +
 regression suites):
 
 | Spark | Scala | Status |
