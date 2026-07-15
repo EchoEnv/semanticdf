@@ -858,6 +858,51 @@ final class SemanticTable private[semanticdf] (
     new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable)
 
   // -------------------------------------------------------------------------
+  // Typed field references (SemanticField typeclass)
+  // -------------------------------------------------------------------------
+  // Each typed overload enforces the right kind at compile time. Mixed
+  // dimension-vs-measure calls (e.g. a Measure ref into groupByDimensions)
+  // are rejected by the implicit-not-found error. Pure adapters: they read
+  // the registered ref's `.name` and delegate to the existing string-based
+  // method. Identical runtime cost; identical output.
+
+  /** Group-by with one typed dimension ref. Same runtime as `groupBy(ref.name)`. */
+  def groupByDimensions[D1](d1: FieldRef[D1])(implicit ev: SemanticDimension[D1]): SemanticGroupBy =
+    groupBy(ev.name)
+
+  /** Group-by with two typed dimension refs (each separately type-checked). */
+  def groupByDimensions[D1, D2](d1: FieldRef[D1], d2: FieldRef[D2])(
+      implicit ev1: SemanticDimension[D1], ev2: SemanticDimension[D2],
+  ): SemanticGroupBy = groupBy(ev1.name, ev2.name)
+
+  /** Group-by with three typed dimension refs. */
+  def groupByDimensions[D1, D2, D3](d1: FieldRef[D1], d2: FieldRef[D2], d3: FieldRef[D3])(
+      implicit ev1: SemanticDimension[D1], ev2: SemanticDimension[D2], ev3: SemanticDimension[D3],
+  ): SemanticGroupBy = groupBy(ev1.name, ev2.name, ev3.name)
+
+  /** Group-by with four typed dimension refs. */
+  def groupByDimensions[D1, D2, D3, D4](d1: FieldRef[D1], d2: FieldRef[D2], d3: FieldRef[D3], d4: FieldRef[D4])(
+      implicit ev1: SemanticDimension[D1], ev2: SemanticDimension[D2],
+               ev3: SemanticDimension[D3], ev4: SemanticDimension[D4],
+  ): SemanticGroupBy = groupBy(ev1.name, ev2.name, ev3.name, ev4.name)
+
+  /** Group-by with 5+ typed field refs. Kind-checked at runtime: every ref's
+    * `.kind` must equal `Dimension`. Arity > 4 drops compile-time kind
+    * enforcement (Scala 2.13 varargs can't carry per-element phantom-kind
+    * evidence). The first 4 elements get compile-time enforcement via the
+    * arity-specific overloads above. */
+  def groupByDimensionsAll(refs: Seq[FieldRef[_]]): SemanticGroupBy = {
+    refs.foreach { r =>
+      if (r.underlying.kind != FieldKind.Dimension)
+        throw new IllegalArgumentException(
+          s"${r.underlying.name} is not a dimension — groupBy requires dimensions, " +
+            s"got a ${r.underlying.kind} ref"
+        )
+    }
+    groupBy(refs.map(_.underlying.name): _*)
+  }
+
+  // -------------------------------------------------------------------------
   // Internals
   // -------------------------------------------------------------------------
 
@@ -1255,6 +1300,40 @@ final class SemanticGroupBy private[semanticdf] (
       * query table to still report the source DataFrame name. */
     sourceTable: Option[String] = None,
 ) {
+  /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
+  def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
+    aggregate(ev.name)
+
+  /** Aggregate with two typed measure refs (each separately type-checked). */
+  def aggregateMeasures[M1, M2](m1: FieldRef[M1], m2: FieldRef[M2])(
+      implicit ev1: SemanticMeasure[M1], ev2: SemanticMeasure[M2],
+  ): SemanticTable = aggregate(ev1.name, ev2.name)
+
+  /** Aggregate with three typed measure refs. */
+  def aggregateMeasures[M1, M2, M3](m1: FieldRef[M1], m2: FieldRef[M2], m3: FieldRef[M3])(
+      implicit ev1: SemanticMeasure[M1], ev2: SemanticMeasure[M2], ev3: SemanticMeasure[M3],
+  ): SemanticTable = aggregate(ev1.name, ev2.name, ev3.name)
+
+  /** Aggregate with four typed measure refs. */
+  def aggregateMeasures[M1, M2, M3, M4](m1: FieldRef[M1], m2: FieldRef[M2], m3: FieldRef[M3], m4: FieldRef[M4])(
+      implicit ev1: SemanticMeasure[M1], ev2: SemanticMeasure[M2],
+               ev3: SemanticMeasure[M3], ev4: SemanticMeasure[M4],
+  ): SemanticTable = aggregate(ev1.name, ev2.name, ev3.name, ev4.name)
+
+  /** Aggregate with 5+ typed field refs. Kind-checked at runtime: every ref's
+    * `.kind` must equal `Measure`. See [[groupByDimensionsAll]] for why
+    * arities beyond 4 use Seq. */
+  def aggregateMeasuresAll(refs: Seq[FieldRef[_]]): SemanticTable = {
+    refs.foreach { r =>
+      if (r.underlying.kind != FieldKind.Measure)
+        throw new IllegalArgumentException(
+          s"${r.underlying.name} is not a measure — aggregate requires measures, " +
+            s"got a ${r.underlying.kind} ref"
+        )
+    }
+    aggregate(refs.map(_.underlying.name): _*)
+  }
+
   def aggregate(measures: String*): SemanticTable = {
     var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
     // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.

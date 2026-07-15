@@ -199,6 +199,56 @@ object Predicate {
   /** Negation function: `not("carrier" === "AA")`. */
   def not(pred: Predicate): Predicate = Not(pred)
 
+  // -------------------------------------------------------------------------
+  // Typed factories (SemanticField typeclass)
+  // -------------------------------------------------------------------------
+  // Each factory takes a typed `FieldRef` instead of a string name. The
+  // `SemanticField[T]` context bound is satisfied by the underlying typeclass
+  // witness — which is found via the user-declared `implicit val` for the
+  // field. Pure adapters over the existing `Compare`/`In`/`IsNull`
+  // constructors; identical runtime cost; identical output.
+
+  /** `field === value` with a typed ref. The ref may be a dimension or a measure;
+    * downstream WHERE/HAVING routing decides which gets pushed where. */
+  def Eq[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("eq", ev.name, v)
+
+  /** `field != value` with a typed ref. */
+  def Ne[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("ne", ev.name, v)
+
+  /** `field > value` with a typed ref. */
+  def Gt[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("gt", ev.name, v)
+
+  /** `field >= value` with a typed ref. */
+  def Ge[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("ge", ev.name, v)
+
+  /** `field < value` with a typed ref. */
+  def Lt[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("lt", ev.name, v)
+
+  /** `field <= value` with a typed ref. */
+  def Le[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
+    Compare("le", ev.name, v)
+
+  /** `field in (v1, v2, ...)` with a typed ref. */
+  def in[F](f: FieldRef[F], values: Any*)(implicit ev: SemanticField[F]): Predicate =
+    In(ev.name, values.toSeq, negate = false)
+
+  /** `field not in (v1, v2, ...)` with a typed ref. */
+  def notIn[F](f: FieldRef[F], values: Any*)(implicit ev: SemanticField[F]): Predicate =
+    In(ev.name, values.toSeq, negate = true)
+
+  /** `field.isNull` with a typed ref. */
+  def isNull[F](f: FieldRef[F])(implicit ev: SemanticField[F]): Predicate =
+    IsNull(ev.name, negate = false)
+
+  /** `field.isNotNull` with a typed ref. */
+  def isNotNull[F](f: FieldRef[F])(implicit ev: SemanticField[F]): Predicate =
+    IsNull(ev.name, negate = true)
+
   implicit def strToField(field: String): PredicateField = new PredicateField(field)
 
   /** Builder returned by the `strToField` implicit conversion. */
