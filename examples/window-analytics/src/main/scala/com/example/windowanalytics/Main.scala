@@ -1,6 +1,7 @@
 package com.example.windowanalytics
 
 import io.semanticdf._
+import io.semanticdf.Predicate.Compare
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -75,7 +76,7 @@ object Main {
       flightsWithWindows
         .groupBy("carrier", "origin")
         .aggregate("total_passengers", "flight_count", "rank_within_carrier")
-        .where(Predicate.Compare("le", "rank_within_carrier", 5))
+        .where(Compare.Le("rank_within_carrier", 5))
         .toDataFrame(spark)
         .orderBy("carrier", "rank_within_carrier")
         .show(20, false)

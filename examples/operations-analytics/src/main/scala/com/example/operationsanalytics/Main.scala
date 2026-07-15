@@ -1,6 +1,7 @@
 package com.example.operationsanalytics
 
 import io.semanticdf._
+import io.semanticdf.Predicate.Compare
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
@@ -96,7 +97,7 @@ object Main {
       // where() is on SemanticTable (pre-aggregate), so the chain is
       // where().groupBy().aggregate() — not groupBy().aggregate().where().
       orders
-        .where(Predicate.Compare("gt", "amount", threshold))
+        .where(Compare.Gt("amount", threshold))
         .groupBy("order_id")
         .aggregate("order_amount")
         .toDataFrame(spark)
