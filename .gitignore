@@ -21,3 +21,10 @@ build/
 
 # OS noise
 .DS_Store
+
+# Per-developer AI / agent configuration (Claude Code skills, agent
+# workflow settings, etc.) — local to each developer. The symlink
+# `.claude/skills/karpathy-guidelines` resolves into `.agents/`; ignore both
+# so neither is ever re-committed by accident.
+.agents/
+.claude/
