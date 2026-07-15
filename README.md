@@ -492,6 +492,66 @@ replacement. See [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md) for 
 mapping rules and output format. `make okfgen-check` is the CI drift check — it re-runs
 okfgen to a tempdir and `diff -ru`'s the result against the committed bundle.
 
+## MCP server (`semanticdf-mcp`)
+
+The `semanticdf-mcp/` sibling module is a Model Context Protocol server that
+exposes semanticdf to any MCP-compatible client (Claude Desktop, Cursor, Continue)
+over **stdio**. All five tools from [`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md)
+ship in v0.1:
+
+| Tool | Purpose |
+|---|---|
+| `list_models`    | Reports loaded models (name + description) |
+| `describe_model` | Full schema (dimensions, measures, joins, filters, version) + optional OKF sidecar |
+| `query`          | Runs a query, returns rows + columns |
+| `explain`        | Same request shape, no execution — emits the semantic plan |
+| `introspect`     | Auto-generate starter YAML from a DataFrame |
+
+### Run the server
+
+```bash
+mvn install -DskipTests                                # install parent library to local ~/.m2
+cd semanticdf-mcp && mvn package
+mvn exec:java -Dexec.mainClass=io.semanticdf.mcp.Main \
+  -Dexec.args="--models ../examples/starter/models/ \
+               --data ../examples/starter/data-config.yaml \
+               --okf-bundle /tmp/okf/"
+```
+
+All three flags are required:
+
+| Flag | What |
+|---|---|
+| `--models <dir>`     | directory of `*.yml` model files |
+| `--data <file>`      | data-config YAML (`data:` block per the contract) |
+| `--okf-bundle <dir>` | where OkfGen writes the OKF markdown; server reads it into memory at startup |
+
+### Wire up a client (Claude Desktop example)
+
+```json
+{
+  "mcpServers": {
+    "semanticdf": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.0-SNAPSHOT.jar",
+        "--models",
+        "/path/to/your/models",
+        "--data",
+        "/path/to/your/data-config.yaml",
+        "--okf-bundle",
+        "/tmp/okf/"
+      ]
+    }
+  }
+}
+```
+
+The server source lives in [`semanticdf-mcp/`](semanticdf-mcp/README.md). See
+[`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md) v2 for the
+request/response schema of every tool.
+
 ## Cross-version compatibility
 
 Verified green on all three lines (278 tests each — Phase D + integration + YAML loader +
