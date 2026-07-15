@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** Draft v0.1 — pin the surface before any code lands.
+**Status:** v2 — pre-implementation contract; surface locked. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -24,6 +24,8 @@ missing here, that's a gap to close.
 | Data binding | Server reads a YAML config file mapping table names → source paths | The agent doesn't have a way to push DataFrames to the server. Config-file-as-input mirrors how library examples wire `loadDir`. |
 | Multi-tenant / RLS | None in v1 | Defer until a second real user. |
 | Prompts / Resources in v1 | **Defer** | Both are easy server-side, but they bloat the contract. Add as v2 once we know what agents need. |
+| `okf_markdown` in `describe_model` | **Inline string**, generated at server startup via `OkfGen` | One tool call, no separate file lookup. `include_okf: false` lets compact-mode clients omit it. |
+| Join one-liner format | `<left>.<key> → <right>.<key> (<cardinality>)` (one key) or `<left>(<k1, k2>) → <right>(<k1, k2>) (<cardinality>)` (composite) | Single sentence per join. Agents don't need to recompose `left_on`/`right_on`/`type` mentally. |
 
 ---
 
@@ -154,6 +156,68 @@ Semantics:
   what "different" means. See `SemanticTable.version` docstring for the library-side contract.
 - `0` means "no version committed"; treat as "I don't know what version this is".
 
+### Per-model `okf_markdown` field
+
+`describe_model` carries a top-level `okf_markdown` string on every model. It is
+the **OKF (Open Knowledge Format)** sidecar doc for that model — the same Markdown
+that `okfgen` writes to disk under `agents/reference/<project>/<model>.md`. The
+agent gets it inline; no separate file lookup needed.
+
+```json
+// describe_model response
+{
+  "model": "flights",
+  "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n..."
+}
+```
+
+**Contract:**
+
+- **Source-of-truth:** `OkfGen.generate(modelDir, bundleDir)` — the same tool the
+  CLI exposes. The server runs it once at startup, then caches each model's
+  Markdown string in memory keyed by model name. Live regeneration per request
+  is not required (YAML changes are a server restart).
+- **Bundle layout:** server config accepts `--models <dir>` (the YAML source
+  directory) and `--okf-bundle <dir>` (where the server can write/check the
+  bundle). At startup: `OkfGen.generate(<models-dir>, <bundle-dir>)` to ensure
+  fresh content; then `Files.readString(<bundle-dir>/<model>.md)` into the cache.
+  See [`docs/agents/okf-mapping.md`](okf-mapping.md) for the mapping rules.
+- **Opt-out:** the request accepts `{"model": "flights", "include_okf": false}`
+  for compact-mode callers. Default is `true` (most agents want it).
+- **What's in it:** dimensions table, measures table, joins table, filter list,
+  grain, version, and a one-paragraph textual summary — everything an agent
+  needs to author a follow-up query without calling `list_models` +
+  `describe_model` separately.
+- **What it does NOT replace:** `describe_model`'s structured JSON fields
+  (`dimensions`, `measures`, `joins`, `filters`). The Markdown is the **human-
+  readable** mirror; the JSON is the **machine-typed** mirror. Agents building
+  predicates or query parameters must read the JSON, not the Markdown.
+
+### Join one-liner rule
+
+Each `joins` entry in `describe_model`'s response carries a `summary` string — a
+single sentence that an LLM can read without recomposing the structured fields
+mentally. The format is:
+
+```
+<leftPrefix>.<leftOn> → <rightPrefix>.<rightOn> (<cardinality>)
+```
+
+- Single-key join: `flights.carrier → carriers.carrier (one)`
+- Composite-key join: `orders.(order_id, line_id) → line_items.(order_id, line_id) (many)`
+  — when two or more equi-join keys, wrap each side in parens and comma-separate
+- Cross join: `a. → b. (cross)` — both key lists empty; omit the leading `.`
+- Anonymous side (no `name: Some(...)` on `SemanticTable`): use the literal
+  `left` / `right` — e.g. `left.customer_id → customers.customer_id (one)`
+
+**Source-of-truth:** constructed by the MCP adapter from `JoinInfo` fields
+(`cardinality`, `leftName`, `rightName`, `keys`) — the server does not compute it
+in the library; the library exposes the structured fields and the adapter formats.
+
+**Multi-pass:** the rule is computed per-join in the order declared in the YAML
+`joins:` block. A model with three joins renders three summary lines, one per
+join. The agent doesn't need to walk the op tree.
+
 For failures:
 
 ```json
@@ -217,8 +281,11 @@ dimension/measure typo recovery. Do not invent suggestions in the MCP layer.
 
 **Request:**
 ```json
-{"model": "flights"}
+{"model": "flights", "include_okf": true}
 ```
+
+`include_okf` is optional (default `true`). Set to `false` for compact responses
+that omit the (potentially large) `okf_markdown` field.
 
 **Response `data`:**
 ```json
@@ -274,17 +341,30 @@ dimension/measure typo recovery. Do not invent suggestions in the MCP layer.
     }
   ],
   "joins": [
-    {"name": "carriers", "model": "carriers", "type": "one",
-     "left_on": "carrier", "right_on": "carrier"}
-  ]
+    {
+      "name": "carriers",
+      "cardinality": "one",
+      "left": "flights",
+      "right": "carriers",
+      "keys": ["carrier"],
+      "summary": "flights.carrier → carriers.carrier (one)",
+      "extra_dimensions": [],
+      "extra_measures": []
+    }
+  ],
+  "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n…"
 }
 ```
 
-**Library call:**
-- `models(model).description`
+**Library call (v2):**
+- `models(model).description` and `models(model).sourceTable` (set by `YamlLoader`, see PR #6)
+- `models(model).version` — `Int`, `0` = unversioned
+- `models(model).filters` → walk `SemanticFilter.name` / `description` / `expr` / `metadata`
 - `models(model).dimensions` → walk `Dimension.name`, `Dimension.expr.toString` (synthetic — `expr` is a `SemanticScope => Column`), `Dimension.isEntity`, `Dimension.isTimeDimension`, `Dimension.smallestTimeGrain`, `Dimension.description`, `Dimension.metadata`
-- `models(model).measures` → same walk on `Measure`; `kind` is reported as `"calc"` or `"base"` (distinguish via NameClassifier in the library, or via a future `kind` flag — see [open questions](#open-questions)).
-- `models(model).root` join info — read off the op tree, or added to `SemanticTable` API as `joins: Seq[JoinMeta]`. See [open questions](#open-questions).
+- `models(model).measures` → same walk on `Measure`; **`kind` is read off `models(model).measureKind(name)` which returns `MeasureKind.Base | .Calc`** (PR #6, no need to re-implement the classifier in the adapter)
+- `models(model).joins` → `Seq[JoinInfo]`, walked for `name`, `cardinality`, `leftName`, `rightName`, `keys`, `extraDimensions`, `extraMeasures` (PR #6, `JoinKeyProbe` captures join keys at construction time so the adapter doesn't need to compile)
+- `models(model).joins.map(buildJoinSummary)` for the one-liner — see [Join one-liner rule](#join-one-liner-rule) for the format
+- For `okf_markdown`: read from a server-local cache populated at startup by `OkfGen.generate(<models-dir>, <bundle-dir>)`
 
 > **Note on `expr`:** library stores `SemanticScope => Column` which serializes poorly.
 > The MCP layer emits `expr.toString` for the simple cases (string-literal YAML
@@ -503,22 +583,31 @@ list of strings the Introspector emits when it can't classify a field.
 
 ---
 
-## Open questions (need an answer before code lands)
+## Resolved questions (v1 → v2)
 
-1. **`measure.kind` ("base" vs "calc")** — does the library have a flag on
-   `Measure` we can read, or is it derived from `NameClassifier`? The MCP
-   `describe_model` output needs to label each measure; if there's no
-   `kind` field, we either add one (1-line PR) or compute it via the
-   classifier.
-2. **`joins` access on `SemanticTable`** — to populate `describe_model.joins`,
-   we need a public method like `def joins: Seq[JoinMeta]`. Today the join
-   metadata is reachable via `root` walking, but not as a first-class
-   collection. Either add a method (small, contained) or have the adapter
-   walk the op tree.
-3. **Source-table lookup** — the `describe_model.source_table` field comes
-   from `YamlLoader`'s mapping. Today the YAML carries the table name
-   (e.g. `flights_csv`); we need a way to surface that back. Most likely
-   `SemanticTable.fromTable` accessor — small addition.
+All three v1 open questions are now answered by library accessors that shipped
+between v1 and v2:
+
+1. **`measure.kind` — RESOLVED.** PR #6 added `SemanticTable.measureKind(name): MeasureKind`
+   returning `Base` / `Calc`. The MCP adapter reads this directly;
+   no need to re-implement a classifier. Shape unchanged from v1.
+2. **`joins` access — RESOLVED.** PR #6 added `SemanticTable.joins: Seq[JoinInfo]`
+   (with eager `JoinKeyProbe` capture so join keys are available at construction
+   time without compiling). `JoinInfo` carries `cardinality`, `leftName`,
+   `rightName`, `keys`, `extraDimensions`, `extraMeasures`. The adapter maps
+   directly; `summary` is derived in the adapter per the [one-liner rule](#join-one-liner-rule).
+3. **Source-table lookup — RESOLVED.** PR #6 added `SemanticTable.sourceTable: Option[String]`,
+   propagated by `YamlLoader` (it passes `sourceTable = Some(<table-name>)` to
+   `toSemanticTable`). The MCP adapter maps it directly to `source_table`.
+
+---
+
+## What's still open (v2 → server implementation)
+
+None blocking. Two minor follow-ups tracked separately:
+
+- **Arrow result format** — JSON is fine under 10k rows; promote to Arrow if benchmarks demand.
+- **MCP prompts / resources** — both are easy server-side, bloat the contract. Add once we know what agents need.
 
 ---
 
@@ -529,6 +618,41 @@ list of strings the Introspector emits when it can't classify a field.
 - **After code lands:** any change to a tool is a breaking change for every
   agent already pointing at it. Document breaking changes in
   `docs/agents/CHANGELOG.md` and bump the contract version.
-- **Schema versioning:** when the JSON shape changes incompatibly, append
-  `v2` to file name (`mcp-contract-v2.md`) and start the version negotiation
-  server-side.
+- **Schema versioning:** when the JSON shape changes incompatibly, copy to
+  `mcp-contract-v3.md` (etc.) and start version negotiation server-side. The
+  same library jar must remain source-compatible with both versions during the
+  deprecation window.
+
+---
+
+## v1 → v2 changelog
+
+What changed between the v1 "open questions" draft and this version. Read this
+before reviewing the rest of the doc.
+
+**Added:**
+- **Per-model `okf_markdown` field** on `describe_model`'s response. Source =
+  `OkfGen` output, generated at server startup and cached in memory. New
+  `include_okf` request field (default `true`) for compact-mode clients.
+- **Per-join `summary` field** rendered by the [one-liner rule](#join-one-liner-rule).
+  Agents can read the join graph in sentences without recomposing the
+  structured fields.
+- **Two new decision rows** in §"Decisions baked in" for OKF inclusion and
+  join one-liner format.
+- **`Resolved questions` section** replacing `Open questions` — all three
+  v1 questions now have library accessors (PR #6 in all three cases).
+
+**Changed:**
+- **`describe_model.joins` shape.** v1 had `name/model/type/left_on/right_on`
+  (a single-key join). v2 has `name/cardinality/left/right/keys[]/summary/
+  extra_dimensions[]/extra_measures[]` — `keys` is a list (handles composite
+  joins), `summary` is the one-liner, `extra_*` are names added post-join.
+- **`describe_model` request accepts `include_okf`** (optional, default true).
+- **`describe_model` measure.kind** comes from `SemanticTable.measureKind(name)`
+  (returns `Base`/`Calc`), not a hand-rolled classifier in the
+  adapter. Same shape as v1 — no change in resolution, just a stable
+  library accessor instead of a self-rolled classifier.
+
+**Removed:**
+- The `model/explain()` `(spark)` fabrication note for joins — no longer
+  needed now that the library exposes `.joins` directly.
