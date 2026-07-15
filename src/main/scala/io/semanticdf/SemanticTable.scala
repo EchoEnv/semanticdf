@@ -1012,6 +1012,15 @@ final class SemanticTable private[semanticdf] (
   /** All measures declared on this semantic table (base and calc). */
   def measures: Map[String, Measure] = resolveRootModel.measures
 
+  /** Name declared on this semantic table, if any. Set by `toSemanticTable(name=)`,
+    * the YAML `flights:` top-level key (via `YamlLoader`), or `withTransforms`/joins.
+    * Returns None for anonymous models (no name was ever assigned). */
+  def name: Option[String] = resolveRootModel.name
+
+  /** Human-readable description declared on this semantic table, if any. Set by
+    * `toSemanticTable(description=)` or the YAML `description:` field. */
+  def description: Option[String] = resolveRootModel.description
+
   /** Look up a dimension by name. */
   def findDimension(name: String): Option[Dimension] = dimensions.get(name)
 
@@ -1239,7 +1248,7 @@ final class SemanticTable private[semanticdf] (
     * wrappers (where/orderBy/limit/row-filter). Used by the catalog accessors
     * (`dimensions`, `measures`, `findDimension`, `findMeasure`). */
   private def resolveRootModel: MergedSemanticModel = root match {
-    case t: SemanticTableOp => MergedSemanticModel(t.dimensions, t.measures)
+    case t: SemanticTableOp => MergedSemanticModel(t.dimensions, t.measures, t.name, t.description)
     case j: SemanticJoinOp  => j.mergedModel
     case SemanticAggregateOp(src, _, _) =>
       new SemanticTable(src).resolveRootModel

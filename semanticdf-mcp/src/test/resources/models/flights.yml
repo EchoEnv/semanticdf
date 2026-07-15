@@ -1,0 +1,14 @@
+flights:
+  version: 1
+  table: flights_csv
+  description: "Flight facts (test fixture for the MCP server list_models test)"
+
+  dimensions:
+    carrier:
+      expr: carrier
+      description: "Airline carrier code (IATA two-letter)"
+
+  measures:
+    flight_count:
+      expr: "count(1)"
+      description: "Number of flights"

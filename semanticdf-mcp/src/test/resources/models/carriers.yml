@@ -1,0 +1,14 @@
+carriers:
+  version: 1
+  table: carriers_csv
+  description: "Airline carrier reference (test fixture for the MCP server list_models test)"
+
+  dimensions:
+    carrier:
+      expr: carrier
+      description: "Airline carrier code (IATA two-letter)"
+
+  measures:
+    carrier_count:
+      expr: "count(1)"
+      description: "Number of carriers"

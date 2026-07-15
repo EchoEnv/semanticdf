@@ -1,0 +1,113 @@
+package io.semanticdf.mcp
+
+import io.modelcontextprotocol.json.McpJsonDefaults
+import org.apache.spark.sql.SparkSession
+import org.slf4j.LoggerFactory
+
+/** CLI entry point — `mvn scala:run -DmainClass=io.semanticdf.mcp.Main` or
+  * `mvn exec:java -Dexec.mainClass=io.semanticdf.mcp.Main` (preferred —
+  * `scala:run` leaks compiler args; see `docs/runtime-quickstart.md` Trap #2).
+  *
+  * Arguments (per `mcp-contract.md` v2 §"Server lifecycle"):
+  *
+  *   --models <dir>     directory of `*.yml` model files
+  *   --data <file>      data-config YAML (see `DataConfig.fromFile`)
+  *
+  * Stdout is reserved for JSON-RPC (MCP hard requirement). All logs go to
+  * stderr. Spark's own logging is configured to be silent on stdout for the
+  * same reason — the agent sees nothing but JSON-RPC frames.
+  *
+  * Exit codes:
+  *   0  clean shutdown (SIGINT / SIGTERM)
+  *   1  invalid arguments
+  *   2  data-config parse error or model-load error
+  *   3  server runtime exception
+  */
+object Main {
+
+  private val log = LoggerFactory.getLogger(getClass)
+
+  def main(args: Array[String]): Unit = {
+    val parsed = parseArgs(args) match {
+      case Right(c) => c
+      case Left(err) =>
+        System.err.println(s"semanticdf-mcp: $err")
+        System.err.println(usage)
+        sys.exit(1)
+    }
+
+    // Mute Spark on stdout — its launcher banner + executor logs would
+    // corrupt the JSON-RPC stream. Stderr-only.
+    System.setProperty("spark.driver.log.level", "WARN")
+    System.setProperty("spark.executor.log.level", "WARN")
+    System.setProperty("log4j2.rootLogger.level", "WARN")
+
+    val spark = SparkSession.builder()
+      .master("local[*]")
+      .appName("semanticdf-mcp")
+      .config("spark.ui.enabled", "false")
+      .config("spark.sql.shuffle.partitions", "2")
+      .config("spark.sql.ansi.enabled", "false")  // match library test baseline
+      .getOrCreate()
+
+    try {
+      val dataConfig = DataConfig.fromFile(parsed.dataConfig)
+      val models     = Models.load(parsed.modelsDir, dataConfig, spark)
+      val mapper     = McpJsonDefaults.getMapper()
+
+      val server = Server.build(models, mapper)
+
+      // Block until stdio closes (parent process exits / sends EOF) or
+      // SIGINT/SIGTERM. McpSyncServer's `close()` is idempotent.
+      log.info("semanticdf-mcp listening on stdio. Press Ctrl-D to stop.")
+      Runtime.getRuntime.addShutdownHook(new Thread(() => {
+        try { server.close() } finally { spark.stop() }
+      }))
+
+      // Park the main thread — the SDK runs on a daemon thread pool and
+      // close() is invoked from the shutdown hook above.
+      Thread.currentThread().join()
+    } catch {
+      case e: IllegalArgumentException =>
+        System.err.println(s"semanticdf-mcp: configuration error: ${e.getMessage}")
+        sys.exit(2)
+      case e: Throwable =>
+        System.err.println(s"semanticdf-mcp: server error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+        e.printStackTrace(System.err)
+        sys.exit(3)
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CLI parsing — minimal hand-rolled, no library. We need `--models` and
+  // `--data`; everything else is a usage error. Adding a flag parser would
+  // grow the dependency surface for two flags.
+  // ---------------------------------------------------------------------------
+
+  private case class Config(modelsDir: String, dataConfig: String)
+
+  private def parseArgs(args: Seq[String]): Either[String, Config] = {
+    @scala.annotation.tailrec
+    def loop(it: List[String], acc: Config): Either[String, Config] = it match {
+      case Nil => Right(acc)
+      case "--models" :: v :: rest if v.nonEmpty => loop(rest, acc.copy(modelsDir = v))
+      case "--data"   :: v :: rest if v.nonEmpty => loop(rest, acc.copy(dataConfig = v))
+      case "--models" :: Nil => Left("--models requires a value")
+      case "--data"   :: Nil => Left("--data requires a value")
+      case other :: _ => Left(s"unknown argument: $other")
+    }
+    val init = Config(modelsDir = "", dataConfig = "")
+    loop(args.toList, init).flatMap { c =>
+      if (c.modelsDir.isEmpty) Left("--models <dir> is required")
+      else if (c.dataConfig.isEmpty) Left("--data <file> is required")
+      else Right(c)
+    }
+  }
+
+  private val usage =
+    """usage: semanticdf-mcp --models <dir> --data <file>
+      |
+      |  --models <dir>   directory of *.yml model files
+      |  --data <file>    data-config YAML (see docs/agents/mcp-contract.md §"Server lifecycle")
+      |""".stripMargin
+}
