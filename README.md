@@ -224,6 +224,53 @@ flights.query(
 ).execute(spark)
 ```
 
+### Typed queries (compile-time safety)
+
+The string-based API above is convenient but typo-prone — a wrong field name is a runtime
+error. An **additive** typed API catches those mistakes at compile time.
+
+```scala
+// Declare phantom types + implicit typeclass witnesses (one-time, per field):
+object Flights {
+  sealed trait Carrier
+  sealed trait Origin
+  sealed trait TotalPassengers
+  sealed trait FlightCount
+
+  implicit val carrier: SemanticDimension[Carrier]           = SemanticDimension.of[Carrier]("carrier")
+  implicit val origin:  SemanticDimension[Origin]            = SemanticDimension.of[Origin]("origin")
+  implicit val pax:     SemanticMeasure[TotalPassengers]     = SemanticMeasure.of[TotalPassengers]("total_passengers")
+  implicit val count:   SemanticMeasure[FlightCount]         = SemanticMeasure.of[FlightCount]("flight_count")
+}
+import Flights._
+
+// Typed query — wrong ref types are caught at compile time:
+val st = toSemanticTable(flightsDf, name = Some("flights"))
+val rows = st.groupByDimensions(carrier)
+              .aggregateMeasures(pax, count)
+              .orderBy(SortKey.desc(pax))
+              .limit(10)
+              .execute(spark)
+
+// Typed predicate (sealed ADT — operator kind is in the type, not a string):
+val highPax = st.where(Compare.Gt(pax, 600)).execute(spark)
+
+// Compile-time guarantees:
+//   groupByDimensions(pax)          // COMPILE ERROR — pax is a Measure, not a Dimension
+//   aggregateMeasures(carrier)      // COMPILE ERROR — carrier is a Dimension, not a Measure
+//   Compare.Greater(pax, 600)       // COMPILE ERROR — typo; only Eq/Ne/Lt/Le/Gt/Ge compile
+//   Compare.Gt(pax, "six hundred")  // legal — predicate.value is Any at this stage
+```
+
+- Pure additions to the library: the string API is unchanged. Zero runtime overhead —
+  `groupByDimensions`/`aggregateMeasures` and `Compare.Gt` compile to the same Spark
+  `Column` expressions as the string forms.
+- Arities 1–4 are fully type-checked at compile time; the `…All(refs)` overloads do a
+  single runtime check for arity 5+ (rare in practice).
+- The `FieldRef[T]` carrier is a value class — no allocation on the hot path.
+- See [Phase E — type safety via typeclasses](docs/phase-E-plan.md) for the design rationale
+  and what's still deferred (notably `ResultDecoder[T]` / typed query results).
+
 ### Time semantics
 
 ```scala
@@ -273,6 +320,10 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.join_one(other, on)` / `.join_many(other, on)` / `.join_cross(other)` | Joins. |
 | `.where(pred)` / `.having(pred)` | Filters (auto-routed WHERE/HAVING). |
 | `.groupBy(keys...).aggregate(measures...)` | Group-by + aggregate. |
+| `.groupByDimensions[D1..D4](refs...)` / `.groupByDimensionsAll(refs)` | Typed group-by — ref kind (dimension) is checked at compile time (arity 5+ at runtime). |
+| `.aggregateMeasures[M1..M4](refs...)` / `.aggregateMeasuresAll(refs)` | Typed aggregate — ref kind (measure) is checked at compile time (arity 5+ at runtime). |
+| `Predicate.Eq/Ne/Gt/Ge/Lt/Le/in/notIn/isNull/isNotNull[F](ref, v)` | Typed predicate factories — `ref: FieldRef[F]` with `SemanticField[F]` witness. |
+| `Compare.Gt(field, value)` / `Compare.Eq(field, value)` / etc. | Sealed comparison ADT — operator kind (Eq/Ne/Lt/Le/Gt/Ge) is in the type, not a string. `Compare.apply("gt", ...)` legacy factory is preserved. |
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
