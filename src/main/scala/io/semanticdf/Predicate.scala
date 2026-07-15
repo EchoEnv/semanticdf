@@ -53,35 +53,70 @@ object Predicate {
   // Leaf predicates
   // -------------------------------------------------------------------------
 
-  private val opSymbol: String => String = {
-    case "eq" => "="
-    case "ne" => "!="
-    case "lt" => "<"
-    case "le" => "<="
-    case "gt" => ">"
-    case "ge" => ">="
-    case o    => o
+  /** Two-arg comparison predicate — the base trait for `field op value`.
+    *
+    * The operator (`eq`/`ne`/`lt`/`le`/`gt`/`ge`) is encoded in the concrete
+    * subtype ([[Compare.Eq]], [[Compare.Ne]], [[Compare.Lt]], [[Compare.Le]],
+    * [[Compare.Gt]], [[Compare.Ge]]), not in a string field. This pushes operator
+    * choice to the type system — `Compare.Gt` is the only `>` constructor;
+    * `Compare.Greater(...)` doesn't compile.
+    *
+    * `Compare.apply(op, field, value)` (the [[Compare]] companion's `apply`)
+    * preserves the previous stringly-typed call site for backward compatibility.
+    * It dispatches on the operator string and throws `IllegalArgumentException`
+    * for unknown values, matching the prior behavior exactly.
+    *
+    * Compile and describe move into each case — faster (no string match on
+    * every compile) and identical output (verified by tests). */
+  sealed trait Compare extends Predicate {
+    def field: String
+    def value: Any
+
+    override def fields: Set[String] = Set(field)
   }
 
-  /** Two-arg comparison: `field op value`. */
-  final case class Compare(op: String, field: String, value: Any) extends Predicate {
-    override def fields: Set[String] = Set(field)
+  object Compare {
 
-    override def compile(scope: SemanticScope): Column = {
-      val col = scope(field)
-      val v   = lit(value)
-      op match {
-        case "eq"       => col === v
-        case "ne"       => col =!= v
-        case "lt"       => col < v
-        case "le"       => col <= v
-        case "gt"       => col > v
-        case "ge"       => col >= v
-        case other      => throw new IllegalArgumentException(s"Unknown compare op: $other")
-      }
+    /** Build a Compare by operator string. Prefer the typed sealed cases.
+      *
+      * Backward-compatible factory for the prior `Predicate.Compare(op, field, value)`
+      * call site. Dispatches based on `op` and constructs the matching sealed
+      * case class. Unknown operators throw with the same message as the prior
+      * stringly-typed path. */
+    def apply(op: String, field: String, value: Any): Compare = op match {
+      case "eq" => Eq(field, value)
+      case "ne" => Ne(field, value)
+      case "lt" => Lt(field, value)
+      case "le" => Le(field, value)
+      case "gt" => Gt(field, value)
+      case "ge" => Ge(field, value)
+      case other => throw new IllegalArgumentException(s"Unknown compare op: $other")
     }
 
-    override def describe: String = s"$field ${opSymbol(op)} $value"
+    final case class Eq(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) === lit(value)
+      override def describe: String = s"$field = $value"
+    }
+    final case class Ne(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) =!= lit(value)
+      override def describe: String = s"$field != $value"
+    }
+    final case class Lt(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) < lit(value)
+      override def describe: String = s"$field < $value"
+    }
+    final case class Le(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) <= lit(value)
+      override def describe: String = s"$field <= $value"
+    }
+    final case class Gt(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) > lit(value)
+      override def describe: String = s"$field > $value"
+    }
+    final case class Ge(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field) >= lit(value)
+      override def describe: String = s"$field >= $value"
+    }
   }
 
   /** Membership test: `field in values` (or `not in` when negated). */
@@ -211,27 +246,27 @@ object Predicate {
   /** `field === value` with a typed ref. The ref may be a dimension or a measure;
     * downstream WHERE/HAVING routing decides which gets pushed where. */
   def Eq[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("eq", ev.name, v)
+    Compare.Eq(ev.name, v)
 
   /** `field != value` with a typed ref. */
   def Ne[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("ne", ev.name, v)
+    Compare.Ne(ev.name, v)
 
   /** `field > value` with a typed ref. */
   def Gt[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("gt", ev.name, v)
+    Compare.Gt(ev.name, v)
 
   /** `field >= value` with a typed ref. */
   def Ge[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("ge", ev.name, v)
+    Compare.Ge(ev.name, v)
 
   /** `field < value` with a typed ref. */
   def Lt[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("lt", ev.name, v)
+    Compare.Lt(ev.name, v)
 
   /** `field <= value` with a typed ref. */
   def Le[F](f: FieldRef[F], v: Any)(implicit ev: SemanticField[F]): Predicate =
-    Compare("le", ev.name, v)
+    Compare.Le(ev.name, v)
 
   /** `field in (v1, v2, ...)` with a typed ref. */
   def in[F](f: FieldRef[F], values: Any*)(implicit ev: SemanticField[F]): Predicate =
@@ -255,22 +290,22 @@ object Predicate {
   final class PredicateField(private val field: String) extends AnyVal {
 
     /** `field === value` → equality. */
-    def ===(v: Any): Predicate = Compare("eq", field, v)
+    def ===(v: Any): Predicate = Compare.Eq(field, v)
 
     /** `field =!= value` → inequality. */
-    def =!=(v: Any): Predicate = Compare("ne", field, v)
+    def =!=(v: Any): Predicate = Compare.Ne(field, v)
 
     /** `field > value`. */
-    def >(v: Any): Predicate = Compare("gt", field, v)
+    def >(v: Any): Predicate = Compare.Gt(field, v)
 
     /** `field >= value`. */
-    def >=(v: Any): Predicate = Compare("ge", field, v)
+    def >=(v: Any): Predicate = Compare.Ge(field, v)
 
     /** `field < value`. */
-    def <(v: Any): Predicate = Compare("lt", field, v)
+    def <(v: Any): Predicate = Compare.Lt(field, v)
 
     /** `field <= value`. */
-    def <=(v: Any): Predicate = Compare("le", field, v)
+    def <=(v: Any): Predicate = Compare.Le(field, v)
 
     /** `field in (v1, v2, ...)`. */
     def in(values: Any*): Predicate = In(field, values, negate = false)
