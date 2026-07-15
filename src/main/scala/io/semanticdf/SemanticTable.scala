@@ -543,7 +543,8 @@ final class SemanticTable private[semanticdf] (
         // needed since transforms have already been resolved).
         new SemanticTable(
           SemanticTableOp(transformedDf, j.leftRoot.name, j.leftRoot.description),
-          postAggPredicates)
+          postAggPredicates,
+          version)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
@@ -719,7 +720,7 @@ final class SemanticTable private[semanticdf] (
     val newRoot = pre.foldLeft(root) { (r, p) =>
       SemanticFilterOp(r, p)
     }
-    new SemanticTable(newRoot, postAggPredicates ++ post)
+    new SemanticTable(newRoot, postAggPredicates ++ post, version)
   }
 
   /** Apply a filter predicate explicitly as post-aggregation (HAVING).
@@ -727,7 +728,7 @@ final class SemanticTable private[semanticdf] (
     * Use when you want a dimension filter to apply after aggregation (rare, but
     * sometimes needed when the dimension is derived from a measure). */
   def having(pred: Predicate): SemanticTable =
-    new SemanticTable(root, postAggPredicates :+ pred)
+    new SemanticTable(root, postAggPredicates :+ pred, version)
 
   // -------------------------------------------------------------------------
   // Phase 5 completion: order_by / limit / query
@@ -841,7 +842,7 @@ final class SemanticTable private[semanticdf] (
   /** Begin a group-by + aggregate. Returns a builder whose `aggregate(...)` produces
     * the aggregated [[SemanticTable]]. */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates)
+    new SemanticGroupBy(root, keys, postAggPredicates, version)
 
   // -------------------------------------------------------------------------
   // Internals
@@ -932,6 +933,15 @@ final class SemanticTable private[semanticdf] (
       // Pre-join row filters are transparent — unwrap to find the underlying table.
       case SemanticRowFilterOp(src, _, _, _, _) =>
         new SemanticTable(src).requireRoot(label)
+      // Query wrappers (WHERE / ORDER BY / LIMIT / HINT) layer over the model —
+      // they don't expose a SemanticTableOp root, so users must join first.
+      case SemanticFilterOp(_, _) | SemanticOrderByOp(_, _) |
+           SemanticLimitOp(_, _) | SemanticHintOp(_, _, _) =>
+        throw new IllegalArgumentException(
+          s"$label: the left/right side is a query wrapper (filter/orderBy/limit/hint). " +
+            s"Construct joins from base tables (no query layer above them), then call groupBy() " +
+            s"and aggregate() on the joined model."
+        )
     }
 
   // -----------------------------------------------------------------------
@@ -1165,12 +1175,17 @@ final class SemanticGroupBy private[semanticdf] (
     source: SemanticOp,
     keys: Seq[String],
     postAggPredicates: List[Predicate] = Nil,
+    /** Per-model schema version, carried from the originating [[SemanticTable]]
+      * so that the result of `groupBy().aggregate(...)` keeps the version.
+      * Mirrors the convention used by `withDimensions` / `withMeasures` /
+      * `orderBy` / `limit` (which all pass `version`). */
+    version: Int = 0,
 ) {
   def aggregate(measures: String*): SemanticTable = {
     var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
     // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
     postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-    new SemanticTable(op)
+    new SemanticTable(op, version = version)
   }
 }
 
