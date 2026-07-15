@@ -71,7 +71,10 @@ object Main {
         .groupBy("plan_name")
         .aggregate("total_revenue", "active_customers", "arpu")
         .toDataFrame(spark)
-        .orderBy("arpu", col("plan_name"))
+        // Spark's DataFrame.orderBy has two overloads — (String, String*) and
+        // (Column*) — but no mixed form. The next query below uses the Column
+        // form, so we match that here for consistency.
+        .orderBy(col("arpu"), col("plan_name"))
         .show(false)
       println("  (ARPU = total_revenue / active_customers; active = countDistinct customer_id)")
 
