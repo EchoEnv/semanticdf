@@ -343,7 +343,7 @@ object YamlLoader {
     val description = cfg.get("description").collect { case s: String => s }
     val df = resolveTable(tableName)
 
-    var model = toSemanticTable(df, name = Some(name), description = description)
+    var model = toSemanticTable(df, name = Some(name), description = description, sourceTable = Some(tableName))
 
     // Optional `version:` field at the top of the model block. Non-negative integer;
     // 0 (default) means "pre-versioning". See mcp-contract.md, "Result envelope".

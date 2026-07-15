@@ -280,6 +280,13 @@ class ExplainSemanticSpec
     // immutability invariant in DESIGN §4.4) with a `scala.util.DynamicVariable`.
     // Each SemanticJoinOp instance gets its own DynamicVariable, so two distinct
     // join ops don't share state. Compiling one must NOT leak into the other.
+    //
+    // Since the catalog-introspection PR (PR #6): keys are ALSO captured eagerly
+    // at construction via JoinKeyProbe (see SemanticOp._staticGrainCols) so MCP
+    // consumers don't need a SparkSession to see join keys. The two captures
+    // are independent — one is per-instance (static), one is per-thread (dynamic)
+    // — so cross-talk is still impossible. Each instance shows its OWN keys,
+    // captured independently.
     val customers = toSemanticTable(customersDf, name = Some("customers"))
       .withDimensions(Dimension("customer_id", t => t("customer_id")))
       .withMeasures(Measure("customer_count", t => count(lit(1))))
@@ -294,7 +301,7 @@ class ExplainSemanticSpec
 
     // Second independent join: re-use the same orders one but with a fresh
     // join_one call. Produces a brand new SemanticJoinOp instance with its own
-    // DynamicVariable slot.
+    // DynamicVariable slot AND its own eager-probe capture.
     val orders2 = toSemanticTable(ordersDf, name = Some("orders"))
       .withDimensions(
         Dimension("order_id",    t => t("order_id")),
@@ -305,15 +312,14 @@ class ExplainSemanticSpec
 
     orders1.execute(spark)  // populates orders1's DynamicVariable
 
-    // orders2 has NOT been compiled. If the case class's grain state were
-    // shared (the old `var _grainCols` design), orders2 would falsely surface
-    // customer_id too. With DynamicVariable, orders2's instance has its own
-    // empty slot, and the renderer falls back to "(uncompiled)".
+    // Each instance independently resolves its own captured keys (eager probe +
+    // DynamicVariable on this thread). They never read each other's values.
+    // The test now: confirm BOTH instances show their keys independently.
+    val plan1 = orders1.explainSemantic(None)
     val plan2 = orders2.explainSemantic(None)
-    plan2 should include("(uncompiled)")
-    plan2 should not include "on [customer_id]"
-
-    // Sanity: orders1 (compiled on this thread) DOES show its keys.
+    plan1 should include("on [customer_id]")   // compiled on this thread
+    plan2 should include("on [customer_id]")   // uncompiled, but eager-probe captured
+    plan2 should not include("(uncompiled)")   // no longer the case — eager capture
     orders1.explainSemantic(None) should include("LEFT JOIN on [customer_id]")
   }
 
