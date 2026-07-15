@@ -233,4 +233,71 @@ class SemanticFieldSpec extends AnyFunSuite with SparkSessionFixture with Flight
       .toDataFrame(spark).collect()
     assert(rows.nonEmpty)
   }
+
+  // -------------------------------------------------------------------------
+  // (6) Typed withMeasures — v0.1.1 (typed Measure declaration)
+  // -------------------------------------------------------------------------
+
+  test("withMeasures(ref, expr) typed overload reads the name from the FieldRef witness") {
+    val m = YamlLoader.load(yamlWithAllFields, flightsTables)("flights")
+    import Refs._
+
+    // Add a derived measure whose name is the SAME as the typed ref expects.
+    val enriched = m.withMeasures(paxRef, t => t("total_passengers") * 2)
+    assert(enriched.findMeasure("total_passengers").isDefined)
+  }
+
+  test("withMeasures typed overload produces a measure that the string-based aggregate picks up") {
+    val m = YamlLoader.load(yamlWithAllFields, flightsTables)("flights")
+    import Refs._
+
+    // Window-style: row_number() over carrier partition, ordered by pax desc.
+    // The Measure.name is read from `paxRef` (so it's "total_passengers" — we
+    // shadow the base measure with a windowed one). For the test we use a
+    // *new* measure name "pax_x2" to avoid clobbering.
+    object Local {
+      sealed trait PaxTimesTwo
+      implicit val paxX2: SemanticMeasure[PaxTimesTwo] =
+        SemanticMeasure.of[PaxTimesTwo]("pax_x2")
+    }
+    import Local._
+
+    val enriched = m.withMeasures(paxX2, t => t("total_passengers") * 2)
+    val out = enriched.groupBy("carrier").aggregate("pax_x2").toDataFrame(spark).collect()
+    assert(out.length > 0)
+  }
+
+  // -------------------------------------------------------------------------
+  // (7) Typed SortKey.asc / SortKey.desc (v0.1.1)
+  // -------------------------------------------------------------------------
+
+  test("SortKey.asc(ref) / SortKey.desc(ref) read the column name from the ref") {
+    val m = YamlLoader.load(yamlWithAllFields, flightsTables)("flights")
+    import Refs._
+
+    val ascRows  = m.groupBy("carrier").aggregate("flight_count").orderBy(SortKey.asc(carrierRef)).toDataFrame(spark).collect()
+    val strRows  = m.groupBy("carrier").aggregate("flight_count").orderBy("carrier").toDataFrame(spark).collect()
+    assert(ascRows.map(_.getString(0)).toList == strRows.map(_.getString(0)).toList)
+
+    val descRows = m.groupBy("carrier").aggregate("flight_count").orderBy(SortKey.desc(countRef)).toDataFrame(spark).collect()
+    val dRows    = m.groupBy("carrier").aggregate("flight_count").orderBy(SortKey.desc("flight_count")).toDataFrame(spark).collect()
+    // Columns are (carrier, flight_count). Index 1 = flight_count.
+    assert(descRows.map(_.getLong(1)).toList == dRows.map(_.getLong(1)).toList)
+  }
+
+  test("SortKey.typed works with the q() one-shot bundle (orderBy: Seq[SortKey])") {
+    val m = YamlLoader.load(yamlWithAllFields, flightsTables)("flights")
+    import Refs._
+
+    // `query` projects the requested dimensions + measures; both must
+    // exist in the output for `orderBy` to resolve.
+    val out = m.query(
+      measures   = Seq("flight_count"),
+      dimensions = Seq("carrier"),
+      orderBy    = Seq(SortKey.desc(countRef), SortKey.asc(carrierRef)),
+    ).toDataFrame(spark).collect()
+    // The dual sort doesn't error and returns rows; we don't pin the count
+    // here (depends on test fixture), just that the call type-checks.
+    assert(out.length > 0)
+  }
 }

@@ -302,14 +302,19 @@ val rows = st.groupByDimensions(carrier)
               .limit(10)
               .execute(spark)
 
-// Typed predicate (sealed ADT — operator kind is in the type, not a string):
-val highPax = st.where(Compare.Gt(pax, 600)).execute(spark)
+// Typed predicate (operator kind is in the method name, not a runtime string):
+val highPax = st.where(Predicate.Gt(pax, 600)).execute(spark)
+
+// Typed measure declaration (v0.1.1) — name read from the SemanticMeasure witness:
+import org.apache.spark.sql.functions.row_number
+import org.apache.spark.sql.expressions.Window
+val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t("carrier")).orderBy(t("total_passengers").desc)))
 
 // Compile-time guarantees:
 //   groupByDimensions(pax)          // COMPILE ERROR — pax is a Measure, not a Dimension
 //   aggregateMeasures(carrier)      // COMPILE ERROR — carrier is a Dimension, not a Measure
 //   Compare.Greater(pax, 600)       // COMPILE ERROR — typo; only Eq/Ne/Lt/Le/Gt/Ge compile
-//   Compare.Gt(pax, "six hundred")  // legal — predicate.value is Any at this stage
+//   Predicate.Gt(pax, "six hundred")  // compiles — predicate.value is Any (fails at runtime, not compile time)
 ```
 
 - Pure additions to the library: the string API is unchanged. Zero runtime overhead —
@@ -366,7 +371,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | Method | Description |
 |---|---|
 | `toSemanticTable(df, name?)` | Construct a semantic model from a base `DataFrame`. |
-| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. |
+| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(ref, expr)` overload accepts a `SemanticMeasure` witness (v0.1.1). |
 | `.withTransforms(transforms*)` | Per-row logic (e.g. `datediff`, `case when`) applied to source data at model-load. Mirrors the YAML `transforms:` block. |
 | `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces the source-only / pre-join semantic at load time. |
 | `.version(v: Int)` | Set the model's version (forward-compat hint for consumers). `table.version` reads the current value (0 = unversioned). |
@@ -378,7 +383,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `Predicate.Eq/Ne/Gt/Ge/Lt/Le/in/notIn/isNull/isNotNull[F](ref, v)` | Typed predicate factories — `ref: FieldRef[F]` with `SemanticField[F]` witness. |
 | `Compare.Gt(field, value)` / `Compare.Eq(field, value)` / etc. | Sealed comparison ADT — operator kind (Eq/Ne/Lt/Le/Gt/Ge) is in the type, not a string. `Compare.apply("gt", ...)` legacy factory is preserved. |
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
-| `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. |
+| `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses (v0.1.1). |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). |
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |

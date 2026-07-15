@@ -23,6 +23,20 @@ object SortKey {
   /** Explicit descending key. */
   def desc(name: String): SortKey = Desc(name)
 
+  /** Typed ascending key — reads the column name directly from the
+    * [[SemanticField]] witness. Works for any field (dimension or measure),
+    * so `SortKey.asc(carrier)`, `SortKey.desc(pax)` are both valid.
+    *
+    * The parameter is the typeclass instance itself (not a `FieldRef`), so
+    * `SemanticDimension[F]` / `SemanticMeasure[F]` match by subtyping in
+    * Scala's phase-1 overload resolution — no implicit conversion is needed,
+    * and this overload is picked over `asc(name: String)` even from
+    * cross-package consumer code. */
+  def asc(field: SemanticField[_]): SortKey = Asc(field.name)
+
+  /** Typed descending key — see [[asc(field)*]]. */
+  def desc(field: SemanticField[_]): SortKey = Desc(field.name)
+
   /** Read the column-name field of any SortKey (private to avoid exposing the sealed
     * cases to public API). Used by [[SemanticTable.explainSemantic]]. */
   private[semanticdf] def nameOf(k: SortKey): String = k match {
@@ -470,7 +484,46 @@ final class SemanticTable private[semanticdf] (
 
   /** Extend the model with measures. Handles single-table and joined roots (Phase 4).
     * Returns a new [[SemanticTable]] (immutable). */
-  def withMeasures(measures: Measure*): SemanticTable = {
+  def withMeasures(measures: Measure*): SemanticTable = withMeasures0(measures)
+
+  /** Typed-overload of [[withMeasures(measures:Measure*)*]] — accepts a single
+    * [[SemanticMeasure]] witness whose `.name` becomes the measure name. The
+    * expr still has signature `SemanticScope => Column`, so window functions
+    * (`row_number().over(...)`, `lag(...)`, etc.) work the same as in the
+    * string-based form.
+    *
+    * Multi-measure definitions are still string-based:
+    * {{{
+    *   flights.withMeasures(rank, t => row_number().over(Window.partitionBy(t("carrier"))...))
+    *   flights.withMeasures(Measure("rank", expr), Measure("lag_pax", expr))   // multi-arity string
+    * }}}
+    *
+    * Compile-time guarantee: passing a `SemanticDimension[F]` is a compile
+    * error — `SemanticDimension` is not a subtype of `SemanticMeasure`, so
+    * this overload is not applicable and the varargs overload rejects it too
+    * (a `SemanticDimension` is not a `Measure`). The measure's name is read
+    * from the typed witness, not a string — a typo in
+    * `SemanticMeasure.of[RankWithinCarrier]("rank_winthin_carier")` would
+    * still surface at runtime when the model loads, but downstream
+    * `aggregateMeasures(rank)` / `Compare.Le(rank, 5)` are type-checked
+    * against the same ref.
+    *
+    * The first parameter is the typeclass instance itself (not a `FieldRef`),
+    * so `SemanticMeasure[F]` matches by subtyping in Scala's phase-1 overload
+    * resolution — no implicit conversion is needed, and this overload is
+    * picked over the varargs form even from cross-package consumer code. */
+  def withMeasures[F](
+      measure: SemanticMeasure[F],
+      expr: SemanticScope => Column,
+      description: Option[String] = None,
+      metadata: Map[String, String] = Map.empty,
+  ): SemanticTable = {
+    val m = Measure(name = measure.name, expr = expr, description = description, metadata = metadata)
+    withMeasures0(Seq(m))
+  }
+
+  /** Internal helper that all `withMeasures` paths funnel through. */
+  private def withMeasures0(measures: Seq[Measure]): SemanticTable = {
     val extra = measures.map(m => m.name -> m).toMap
     root match {
       case t: SemanticTableOp =>
