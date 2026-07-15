@@ -1,5 +1,11 @@
 package io.semanticdf.mcp
 
+import io.modelcontextprotocol.json.McpJsonMapper
+import io.modelcontextprotocol.spec.McpSchema.CallToolResult
+import io.modelcontextprotocol.spec.McpSchema.JsonSchema
+import io.modelcontextprotocol.spec.McpSchema.TextContent
+import java.util.{List => JList}
+
 /** Result envelope — every tool's `data` payload travels inside this.
   *
   * Mirrors the `mcp-contract.md` v2 §"Result envelope". The `status` field
@@ -52,3 +58,47 @@ final case class Meta(
     truncated: Boolean = false,
     model: Option[String] = None,
 )
+
+/** Internal helpers shared by all handler implementations. */
+object Handlers {
+
+  /** Wrap any value into a `CallToolResult` whose single `TextContent` is
+    * the JSON-serialised form. Used by every tool handler to deliver its
+    * [[Envelope]] to the MCP transport. */
+  def textResult[T](value: T, mapper: McpJsonMapper): CallToolResult = {
+    val json = mapper.writeValueAsString(value)
+    CallToolResult.builder()
+      .content(JList.of(new TextContent(json)))
+      .build()
+  }
+
+  /** JSON Schema for "this tool takes one required string argument named `model`".
+    * The MCP SDK validates the agent's `arguments` map against this schema
+    * (default-true per the SDK's per-tool input validation).
+    */
+  def modelNameSchema: JsonSchema = new JsonSchema(
+    "object",
+    java.util.Map.of(
+      "model", java.util.Map.of(
+        "type", "string",
+        "description", "Model name to describe (must match a model registered via YamlLoader.loadDir)."
+      ),
+    ),
+    JList.of("model"),
+    java.lang.Boolean.FALSE,
+    java.util.Map.of(),
+    java.util.Map.of(),
+  )
+
+  /** JSON Schema for "this tool takes no arguments".
+    * `{"type": "object", "properties": {}, "required": [], "additionalProperties": false}` —
+    * the canonical shape per JSON Schema 2020-12. */
+  def emptySchema: JsonSchema = new JsonSchema(
+    "object",
+    java.util.Map.of(),
+    JList.of(),
+    java.lang.Boolean.FALSE,
+    java.util.Map.of(),
+    java.util.Map.of(),
+  )
+}
