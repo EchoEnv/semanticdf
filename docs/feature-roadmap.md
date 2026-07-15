@@ -82,7 +82,7 @@ Emits a starter YAML file the user can edit.
 - `Scope.scala`: the pre-existing calc-layer `UnknownFieldError` already had "Did you mean" via the shared `closestMatch`
 - **Bug fix (incidental):** Measures with column typos (e.g. `t("flight_cont")`) were misclassified as base measures. Now caught in Pass 1 and retried via `MeasureScope` in Pass 2, surfacing the suggestion correctly
 
-**Tests:** 4 new tests in `HardeningSpec.scala` (unknown measure suggestion, close-but-wrong names, nothing-close guard, atTimeGrain dimension suggestion). Phase 1b pre-existing calc-typo test now passes. **121/121 total.**
+**Tests:** 4 new tests in `HardeningSpec.scala` (unknown measure suggestion, close-but-wrong names, nothing-close guard, atTimeGrain dimension suggestion). Phase 1b pre-existing calc-typo test now passes. **278/278 total.**
 
 **Effort:** 2-3 person-days
 **Impact:** Medium — every error path benefits.

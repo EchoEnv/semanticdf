@@ -11,15 +11,6 @@ This document lists features that do not work in v0.1. Read this before starting
 
 **Workaround:** Use only batch DataFrames for now.
 
-### Metastore / view registration
-Semantic tables cannot be registered as Spark views (`createTempView`, `createOrReplaceGlobalTempView`). You cannot query them with Spark SQL directly.
-
-**Workaround:** Call `.toDataFrame(spark)` and register the resulting DataFrame manually:
-```scala
-st.toDataFrame(spark).createOrReplaceTempView("my_view")
-spark.sql("SELECT * FROM my_view")
-```
-
 ### External customers / multi-tenant security
 There is no row-level security, column masking, or tenant isolation. All users with access to the Spark session can see all data.
 
