@@ -16,8 +16,10 @@ import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_num
   *   3. Percent-of-total (the classic BI trap, correctly avoided)
   *   4. Joined query (flights ⨝ carriers)
   *   5. Time-grain aggregation
-  *   6. Schema introspection (model.schema(spark))
-  *   7. Schema export for catalog persistence (e.g. Delta table)
+  *   6. Filter + aggregate, window functions + lag
+  *   7. Typed queries with compile-time field-reference safety (the typeclass pattern)
+  *   8. Schema introspection (model.schema(spark))
+  *   9. Schema export for catalog persistence (e.g. Delta table)
   *
   * To run:
   *   1. `mvn install` the parent semanticdf project (so the local jar is available)
@@ -164,7 +166,52 @@ object Main {
       println("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
 
       // ---------------------------------------------------------------------
-      // 8. Schema introspection — every dimension and measure as a DataFrame
+      // 8. Typed queries (compile-time safety)
+      // ---------------------------------------------------------------------
+      // Same shape as Q1, but using the typed API. Field refs are phantom-typed,
+      // so a measure-into-groupByDimensions is a COMPILE error, not a runtime
+      // one — typos happen once at the implicit-val declaration, not per call.
+      //
+      // Compare to Q1 (above): zero ref-string typos are possible here because
+      // every dimension/measure is a typed handle. See README and
+      // docs/phase-E-plan.md for the full story.
+
+      object Refs {
+        // Phantom tags — one per field you want to reference by type.
+        sealed trait Carrier
+        sealed trait TotalPassengers
+        sealed trait FlightCount
+        sealed trait AvgPassengers
+
+        // Implicit typeclass witnesses — the *only* place a field name is hard-coded.
+        implicit val carrier: SemanticDimension[Carrier]           = SemanticDimension.of[Carrier]("carrier")
+        implicit val pax:     SemanticMeasure[TotalPassengers]     = SemanticMeasure.of[TotalPassengers]("total_passengers")
+        implicit val count:   SemanticMeasure[FlightCount]         = SemanticMeasure.of[FlightCount]("flight_count")
+        implicit val avg:     SemanticMeasure[AvgPassengers]       = SemanticMeasure.of[AvgPassengers]("avg_passengers")
+      }
+      import Refs._
+
+      println("\n--- Q8 (typed): Top carriers (parallel to Q1 with compile-time ref safety) ---")
+      flights
+        .groupByDimensions(carrier)                         // dimension-only — measure refs are a compile error
+        .aggregateMeasures(pax, count, avg)                  // measure-only  — dimension refs are a compile error
+        .toDataFrame(spark)
+        .orderBy(col("total_passengers").desc)
+        .show(false)
+
+      // Typed predicate factory: `Predicate.Gt(pax, 500)` produces a `Compare.Gt`
+      // predicate internally — operator kind is in the type, not a runtime string.
+      println("\n--- Q9 (typed predicate): Total-passengers threshold via Predicate.Gt ---")
+      flights
+        .where(Predicate.Gt(pax, 500))                       // typed: `pax: FieldRef[TotalPassengers]`
+        .groupByDimensions(carrier)
+        .aggregateMeasures(pax, count)
+        .toDataFrame(spark)
+        .orderBy(col("total_passengers").desc)
+        .show(false)
+
+      // ---------------------------------------------------------------------
+      // 9. Schema introspection — every dimension and measure as a DataFrame
       // ---------------------------------------------------------------------
       println("\n--- Model schema (every field, every model) ---")
       val schema = flights.schema(spark)
