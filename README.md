@@ -172,6 +172,56 @@ references a column added by transform A, declare A first. There is
 no automatic topological sort (the user is responsible for ordering
 the dependencies correctly).
 
+### Filters (pre-join row-level hygiene, applied at model-load)
+
+Row-level **hygiene** — drop rows missing a required field, drop cancelled
+orders, dedup before aggregation — doesn't fit a query, because it
+governs which rows the model *contains*, not which rows a particular
+query returns. Declare it on the model via `filters:` (YAML) or
+`withRowFilter(...)` (Scala DSL). Filters run **pre-agg, pre-join**,
+against this model's source table only.
+
+```yaml
+# YAML
+flights:
+  table: flights_csv
+  # Pre-join row-level hygiene. Column references must resolve against
+  # flights_* — joined-side columns are rejected at load time.
+  filters:
+    require_origin_and_carrier:
+      expr: "origin IS NOT NULL AND carrier IS NOT NULL"
+      description: "Drop rows with null origin or carrier — flagged in upstream QA rule."
+      metadata:
+        owner: data-platform-team
+        tags: [data-quality]
+  dimensions:
+    carrier:
+      expr: carrier
+```
+
+```scala
+// Scala DSL — equivalent
+val flights = toSemanticTable(flightsDf, name = Some("flights"))
+  .withRowFilter(
+    name        = "require_origin_and_carrier",
+    expr        = "origin IS NOT NULL AND carrier IS NOT NULL",
+    description = Some("Drop rows with null origin or carrier — flagged in upstream QA rule."),
+    metadata    = Map("owner" -> "data-platform-team", "tags" -> "[data-quality]"),
+  )
+```
+
+**Source-only / pre-join — enforced.** `SparkFilterValidator` runs at YAML
+load time and rejects any filter whose `expr` references a column that
+isn't on this model's source table. The guarantee: a filter runs exactly
+once per row of source data, regardless of how the model is later joined,
+aggregated, or sliced.
+
+**Distinct from `.where(...)`.** Query-time `.where(predicate)` /
+`.query(where = ...)` compile to a `SemanticFilterOp` inside the op
+tree. Those are WHERE/HAVING clauses routed against the model's current
+grain — not pre-join model-load hygiene (see *Filters — WHERE/HAVING
+auto-routing* below for the query-time kind).
+
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
 ```scala
