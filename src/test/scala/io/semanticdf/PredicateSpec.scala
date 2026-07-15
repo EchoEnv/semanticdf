@@ -61,18 +61,20 @@ class PredicateSpec extends AnyFunSuite with SparkSessionFixture with FlightsFix
 
   test("each Compare sealed case produces the same compile() output as the legacy Compare form") {
     val scope = new BaseScope(flightsDf)
-    assert(Predicate.Compare("eq", "carrier", "AA").compile(scope).expr ==
-             Compare.Eq("carrier", "AA").compile(scope).expr)
-    assert(Predicate.Compare("ne", "carrier", "AA").compile(scope).expr ==
-             Compare.Ne("carrier", "AA").compile(scope).expr)
-    assert(Predicate.Compare("lt", "distance", 1000).compile(scope).expr ==
-             Compare.Lt("distance", 1000).compile(scope).expr)
-    assert(Predicate.Compare("le", "distance", 1000).compile(scope).expr ==
-             Compare.Le("distance", 1000).compile(scope).expr)
-    assert(Predicate.Compare("gt", "distance", 1000).compile(scope).expr ==
-             Compare.Gt("distance", 1000).compile(scope).expr)
-    assert(Predicate.Compare("ge", "distance", 1000).compile(scope).expr ==
-             Compare.Ge("distance", 1000).compile(scope).expr)
+    // Compare .toString (not Column.expr — removed from the public API in Spark 4).
+    // Both paths construct identical expressions, so the string form matches.
+    assert(Predicate.Compare("eq", "carrier", "AA").compile(scope).toString ==
+             Compare.Eq("carrier", "AA").compile(scope).toString)
+    assert(Predicate.Compare("ne", "carrier", "AA").compile(scope).toString ==
+             Compare.Ne("carrier", "AA").compile(scope).toString)
+    assert(Predicate.Compare("lt", "distance", 1000).compile(scope).toString ==
+             Compare.Lt("distance", 1000).compile(scope).toString)
+    assert(Predicate.Compare("le", "distance", 1000).compile(scope).toString ==
+             Compare.Le("distance", 1000).compile(scope).toString)
+    assert(Predicate.Compare("gt", "distance", 1000).compile(scope).toString ==
+             Compare.Gt("distance", 1000).compile(scope).toString)
+    assert(Predicate.Compare("ge", "distance", 1000).compile(scope).toString ==
+             Compare.Ge("distance", 1000).compile(scope).toString)
   }
 
   // ==================================================
