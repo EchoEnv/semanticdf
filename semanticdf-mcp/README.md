@@ -29,15 +29,18 @@ mvn package
 ```bash
 # Start the server (blocks; reads JSON-RPC on stdin, writes to stdout)
 mvn exec:java -Dexec.mainClass=io.semanticdf.mcp.Main \
-  -Dexec.args="--models ../examples/starter/models/ --data ../examples/starter/data-config.yaml"
+  -Dexec.args="--models ../examples/starter/models/ \
+               --data ../examples/starter/data-config.yaml \
+               --okf-bundle /tmp/okf/"
 ```
 
-Both arguments are required:
+All three arguments are required:
 
 | Argument | What |
 |---|---|
-| `--models <dir>` | directory of `*.yml` model files (passed to `YamlLoader.loadDir`) |
-| `--data <file>`  | data-config YAML (the `data:` block, see below) |
+| `--models <dir>`     | directory of `*.yml` model files (passed to `YamlLoader.loadDir`) |
+| `--data <file>`      | data-config YAML (the `data:` block, see below) |
+| `--okf-bundle <dir>` | where OkfGen writes the OKF markdown files; server reads them into memory at startup |
 
 ### Data config format
 

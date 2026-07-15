@@ -10,8 +10,10 @@ import org.slf4j.LoggerFactory
   *
   * Arguments (per `mcp-contract.md` v2 §"Server lifecycle"):
   *
-  *   --models <dir>     directory of `*.yml` model files
-  *   --data <file>      data-config YAML (see `DataConfig.fromFile`)
+  *   --models <dir>        directory of `*.yml` model files
+  *   --data <file>         data-config YAML (see `DataConfig.fromFile`)
+  *   --okf-bundle <dir>    where OkfGen writes the OKF markdowns (server
+  *                         caches them in memory at startup)
   *
   * Stdout is reserved for JSON-RPC (MCP hard requirement). All logs go to
   * stderr. Spark's own logging is configured to be silent on stdout for the
@@ -53,9 +55,14 @@ object Main {
     try {
       val dataConfig = DataConfig.fromFile(parsed.dataConfig)
       val models     = Models.load(parsed.modelsDir, dataConfig, spark)
-      val mapper     = McpJsonDefaults.getMapper()
 
-      val server = Server.build(models, mapper)
+      // Run OkfGen at startup, then read each *.md into memory. The server
+      // sees the cache as `Map[modelName, markdown]` with O(1) lookup at
+      // request time. See `OkfCache` scaladoc.
+      val okf = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
+
+      val mapper = McpJsonDefaults.getMapper()
+      val server = Server.build(models, okf, mapper)
 
       // Block until stdio closes (parent process exits / sends EOF) or
       // SIGINT/SIGTERM. McpSyncServer's `close()` is idempotent.
@@ -79,35 +86,40 @@ object Main {
   }
 
   // ---------------------------------------------------------------------------
-  // CLI parsing — minimal hand-rolled, no library. We need `--models` and
-  // `--data`; everything else is a usage error. Adding a flag parser would
-  // grow the dependency surface for two flags.
+  // CLI parsing — minimal hand-rolled, no library. We need three flags;
+  // everything else is a usage error. Adding a flag parser would grow the
+  // dependency surface for three flags.
   // ---------------------------------------------------------------------------
 
-  private case class Config(modelsDir: String, dataConfig: String)
+  private case class Config(modelsDir: String, dataConfig: String, okfBundleDir: String)
 
   private def parseArgs(args: Seq[String]): Either[String, Config] = {
     @scala.annotation.tailrec
     def loop(it: List[String], acc: Config): Either[String, Config] = it match {
       case Nil => Right(acc)
-      case "--models" :: v :: rest if v.nonEmpty => loop(rest, acc.copy(modelsDir = v))
-      case "--data"   :: v :: rest if v.nonEmpty => loop(rest, acc.copy(dataConfig = v))
-      case "--models" :: Nil => Left("--models requires a value")
-      case "--data"   :: Nil => Left("--data requires a value")
+      case "--models"     :: v :: rest if v.nonEmpty => loop(rest, acc.copy(modelsDir = v))
+      case "--data"       :: v :: rest if v.nonEmpty => loop(rest, acc.copy(dataConfig = v))
+      case "--okf-bundle" :: v :: rest if v.nonEmpty => loop(rest, acc.copy(okfBundleDir = v))
+      case "--models"     :: Nil => Left("--models requires a value")
+      case "--data"       :: Nil => Left("--data requires a value")
+      case "--okf-bundle" :: Nil => Left("--okf-bundle requires a value")
       case other :: _ => Left(s"unknown argument: $other")
     }
-    val init = Config(modelsDir = "", dataConfig = "")
+    val init = Config(modelsDir = "", dataConfig = "", okfBundleDir = "")
     loop(args.toList, init).flatMap { c =>
       if (c.modelsDir.isEmpty) Left("--models <dir> is required")
       else if (c.dataConfig.isEmpty) Left("--data <file> is required")
+      else if (c.okfBundleDir.isEmpty) Left("--okf-bundle <dir> is required")
       else Right(c)
     }
   }
 
   private val usage =
-    """usage: semanticdf-mcp --models <dir> --data <file>
+    """usage: semanticdf-mcp --models <dir> --data <file> --okf-bundle <dir>
       |
-      |  --models <dir>   directory of *.yml model files
-      |  --data <file>    data-config YAML (see docs/agents/mcp-contract.md §"Server lifecycle")
+      |  --models <dir>     directory of *.yml model files
+      |  --data <file>      data-config YAML (see docs/agents/mcp-contract.md §"Server lifecycle")
+      |  --okf-bundle <dir> directory for OkfGen output; server caches the .md files
+      |                     in memory at startup
       |""".stripMargin
 }

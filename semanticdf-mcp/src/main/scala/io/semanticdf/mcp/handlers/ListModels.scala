@@ -1,6 +1,10 @@
 package io.semanticdf.mcp.handlers
 
-import io.semanticdf.mcp.Envelope
+import io.modelcontextprotocol.json.McpJsonMapper
+import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification
+import io.modelcontextprotocol.spec.McpSchema.{CallToolRequest, Tool}
+import io.modelcontextprotocol.server.McpSyncServerExchange
+import io.semanticdf.mcp.{Envelope, Handlers, Models}
 
 /** `list_models` handler — the bootstrap tool. Reports which models the
   * server has loaded, with their human-readable descriptions.
@@ -47,5 +51,24 @@ final class ListModels {
       },
     )
     Envelope.ok(data)
+  }
+}
+
+/** Companion: registers the `list_models` tool in the MCP server. Kept at
+  * companion scope so `Server.build` can stay compact. */
+object ListModels {
+  def registerSpec(registry: Models, mapper: McpJsonMapper): SyncToolSpecification = {
+    val handler = new ListModels()
+    val tool = new Tool.Builder()
+      .name("list_models")
+      .description("List all loaded semantic models. Returns each model's name and human-readable description.")
+      .inputSchema(Handlers.emptySchema)
+      .build()
+    new SyncToolSpecification(
+      tool,
+      (_exchange: McpSyncServerExchange, _arguments: java.util.Map[String, Object]) => {
+        Handlers.textResult(handler.handle(registry), mapper)
+      },
+    )
   }
 }
