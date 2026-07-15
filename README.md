@@ -389,6 +389,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `.sourceTable: Option[String]` | Back-reference to the originating table name (when loaded from a registered/catalog source via `YamlLoader`). |
 | `.filters: Seq[SemanticFilter]` | The model's pre-join row filters in declaration order (`name`, `expr`, `description`, `metadata`). |
 | `.dimensions: Map[String, Dimension]` / `.measures: Map[String, Measure]` / `.findDimension(name)` / `.findMeasure(name)` | Catalog accessors. |
+| `.createOrReplaceTempView(name)` / `.createTempView(name)` / `.createOrReplaceGlobalTempView(name)` | Compile to `DataFrame` and register as a Spark temp view (session or global). All three take `(implicit spark: SparkSession)` — call from inside a `SparkSession.builder()` block. |
 | `.explain()` | Print the semanticdf op-tree summary (no Spark compile). |
 | `.explain(spark)` | Run the full query and print Spark's **simple** physical plan. |
 | `.explainExtended(spark)` | Run the full query and print Spark's **extended/cost** plan (incl. logical-plan sections). |

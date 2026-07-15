@@ -179,4 +179,4 @@ is affected. Sort results in Scala as a workaround.
 
 ---
 
-*This document is updated after each production soak cycle. Last updated: v0.1 Phase D + YAML loader.*
+*This document is updated after each production soak cycle. Last updated: v0.1 + Phase E (partial, typeclass + sealed Compare ADT) + okfgen (Phase F1).*
