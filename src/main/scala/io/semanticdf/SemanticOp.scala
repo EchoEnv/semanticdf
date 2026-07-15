@@ -53,8 +53,11 @@ object JoinCardinality {
 }
 
 /** Proxy passed to a join predicate `(l, r) => …`. Each side's `apply("col")`
-  * returns a Spark [[Column]] resolved against that side's DataFrame. */
-private[semanticdf] final class JoinSide(
+  * returns a Spark [[Column]] resolved against that side's DataFrame.
+  *
+  * Not `final` because [[JoinSide.recording]] returns a subclass that overrides
+  * `apply` for probe-time capture (see [[JoinKeyProbe]]). */
+private[semanticdf] class JoinSide(
     private[semanticdf] val sideName: String,
     private[semanticdf] val df: DataFrame,
     private[semanticdf] val dims: Map[String, Dimension],
@@ -67,6 +70,60 @@ private[semanticdf] final class JoinSide(
       s"Column '$name' not found on table '$sideName'. " +
         s"Available: ${df.columns.sorted.mkString(", ")}"
     )
+  }
+}
+
+private[semanticdf] object JoinSide {
+  /** Sentinel for [[JoinSide.df]] in probe mode. Never queried because the
+    * recording subclass overrides `apply` to skip the df check. Cast from
+    * `null` to satisfy the type. */
+  private val NullDf: DataFrame = null
+
+  /** Recording-only stub: captures names but never resolves against a DF.
+    * Used at [[SemanticJoinOp]] construction to discover join keys without
+    * compiling the model. The returned [[Column]] is discarded; only the
+    * captured-name side effect matters. */
+  def recording(sideName: String, captured: scala.collection.mutable.Map[String, Boolean]): JoinSide =
+    new JoinSide(sideName, NullDf, Map.empty, captured) {
+      override def apply(name: String): Column = {
+        captured.put(name, true)
+        import org.apache.spark.sql.functions.lit
+        lit(null.asInstanceOf[Any])
+      }
+    }
+}
+
+/** Probe the user-supplied `on` lambda at [[SemanticJoinOp]] construction to
+  * capture join-key column names without compiling the model.
+  *
+  * Used by MCP `describe_model.joins` — needs keys at model-describe time,
+  * before any `.toDataFrame(spark)` call. Before this, keys came from
+  * [[SemanticJoinOp._grainColsDyn]] which is only populated during `compile`,
+  * so any pre-compile introspection saw empty keys.
+  *
+  * The probe runs the user's predicate against [[JoinSide.recording]] stubs
+  * that record names but return a throwaway `lit(null)`. The resulting
+  * [[Column]] is discarded.
+  *
+  * For equi-joins (the common case: `l("x") === r("x")`), the intersection of
+  * names captured by both sides is the key set. For asymmetric / custom
+  * predicates, the LHS-captured names are used as a best-effort fallback
+  * (correctness is still enforced at compile time). */
+private[semanticdf] object JoinKeyProbe {
+  /** Run an `on` lambda against recording stubs and return the (sorted) capture
+    * keys. Discards the predicate's resulting [[Column]]. */
+  def captureKeys(on: (JoinSide, JoinSide) => Column): Seq[String] = {
+    val lCaptured = scala.collection.mutable.Map.empty[String, Boolean]
+    val rCaptured = scala.collection.mutable.Map.empty[String, Boolean]
+    val lProbe = JoinSide.recording("left",  lCaptured)
+    val rProbe = JoinSide.recording("right", rCaptured)
+    try on(lProbe, rProbe)
+    catch { case _: Throwable => Seq.empty /* leave keys empty on bad predicate */ }
+    val lKeys = lCaptured.keys.toSet
+    val rKeys = rCaptured.keys.toSet
+    val equi = lKeys intersect rKeys
+    if (equi.nonEmpty) equi.toSeq.sorted
+    else lKeys.toSeq.sorted  // best-effort fallback for asymmetric predicates
   }
 }
 
@@ -145,6 +202,16 @@ final case class SemanticJoinOp(
     * observe its keys. */
   private val _grainColsDyn = new DynamicVariable[Seq[String]](Seq.empty)
 
+  /** Join keys captured at construction time by probing the user's `on` lambda
+    * against [[JoinSide.recording]] stubs. Always populated; the typical
+    * equi-join case (`l("x") === r("x")`) puts `Seq("x")` here at construction
+    * without compiling the model. Pre-compile `grainCols` reads from this; a
+    * successful compile may overwrite the dynamic-variable slot with the
+    * post-compile observation (which can differ in pathological cases, but
+    * for equi-joins it doesn't). */
+  private[semanticdf] val _staticGrainCols: Seq[String] =
+    JoinKeyProbe.captureKeys(on)
+
   override def compile(spark: SparkSession): DataFrame = {
     val leftDf  = left.compile(spark)
     val rightDf = right.compile(spark)
@@ -160,9 +227,14 @@ final case class SemanticJoinOp(
     }
   }
 
-  /** Grain (join key) column names from the most recent compile on the *calling*
-    * thread. Reads via the `DynamicVariable` set during `compile`. */
-  private[semanticdf] def grainCols: Seq[String] = _grainColsDyn.value
+  /** Grain (join key) column names. Reads from the [[DynamicVariable]] set
+    * during `compile` on the calling thread when available; falls back to the
+    * eager probe at construction (see [[_staticGrainCols]]) for callers that
+    * haven't compiled yet (e.g. MCP `describe_model`). */
+  private[semanticdf] def grainCols: Seq[String] = {
+    val dyn = _grainColsDyn.value
+    if (dyn.nonEmpty) dyn else _staticGrainCols
+  }
 
   /** Scala 2.13 workaround: spread a Seq[Column] as the only varargs arg.
     * Used for `df.groupBy(all: _*)` and `df.select(all: _*)`.

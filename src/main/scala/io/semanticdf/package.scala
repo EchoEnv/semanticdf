@@ -64,11 +64,19 @@ package object semanticdf {
     * @param table       the base DataFrame
     * @param name        optional model name (used later for join prefixing)
     * @param description optional human-readable description
+    * @param sourceTable optional name of the underlying source (e.g. a Spark table
+    *                    name, or a name resolved against [[YamlLoader]]). Propagated
+    *                    through every model transformation so MCP `describe_model`
+    *                    can report it.
     */
   def toSemanticTable(
       table: DataFrame,
       name: Option[String] = None,
       description: Option[String] = None,
+      sourceTable: Option[String] = None,
   ): SemanticTable =
-    new SemanticTable(SemanticTableOp(table, name, description))
+    new SemanticTable(
+      SemanticTableOp(table, name, description),
+      sourceTable = sourceTable,
+    )
 }
