@@ -1,0 +1,13 @@
+data:
+  carriers_csv:
+    path: carriers.csv
+    format: csv
+    readOptions:
+      header: "true"
+      inferSchema: "true"
+  flights_csv:
+    path: flights.csv
+    format: csv
+    readOptions:
+      header: "true"
+      inferSchema: "true"

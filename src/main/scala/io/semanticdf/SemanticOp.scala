@@ -494,6 +494,8 @@ final case class SemanticHintOp(
 private[semanticdf] final case class MergedSemanticModel(
     dimensions: Map[String, Dimension],
     measures: Map[String, Measure],
+    name: Option[String] = None,
+    description: Option[String] = None,
 )
 
 // ---------------------------------------------------------------------------
