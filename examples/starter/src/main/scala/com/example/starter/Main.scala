@@ -1,7 +1,6 @@
 package com.example.starter
 
 import io.semanticdf._
-import io.semanticdf.Predicate.Compare
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_number}
@@ -120,23 +119,60 @@ object Main {
         .show(false)
 
       // ---------------------------------------------------------------------
+      // 5b. Typesafe field references — phantom-typed ref per field.
+      // ---------------------------------------------------------------------
+      // The Refs object is the only place a field name is hard-coded; all
+      // downstream consumers (groupByDimensions, aggregateMeasures, where,
+      // SortKey.asc/desc) are type-checked at compile time. See README and
+      // docs/phase-E-plan.md for the full story.
+      object Refs {
+        // Phantom tags — one per field you want to reference by type.
+        sealed trait Carrier
+        sealed trait Origin
+        sealed trait TotalPassengers
+        sealed trait FlightCount
+        sealed trait AvgPassengers
+        sealed trait RankWithinCarrier
+        sealed trait PrevMonthPassengers
+
+        // Implicit typeclass witnesses — the *only* place a field name is hard-coded.
+        implicit val carrier: SemanticDimension[Carrier]           = SemanticDimension.of[Carrier]("carrier")
+        implicit val origin:  SemanticDimension[Origin]            = SemanticDimension.of[Origin]("origin")
+        implicit val pax:     SemanticMeasure[TotalPassengers]     = SemanticMeasure.of[TotalPassengers]("total_passengers")
+        implicit val count:   SemanticMeasure[FlightCount]         = SemanticMeasure.of[FlightCount]("flight_count")
+        implicit val avg:     SemanticMeasure[AvgPassengers]       = SemanticMeasure.of[AvgPassengers]("avg_passengers")
+        // Q6 (window/rank) — name must match the withMeasures(rank, ...) below.
+        implicit val rank:    SemanticMeasure[RankWithinCarrier]    = SemanticMeasure.of[RankWithinCarrier]("rank_within_carrier")
+        // Q7 (lag) — name must match the withMeasures(prev, ...) below.
+        implicit val prev:    SemanticMeasure[PrevMonthPassengers]   = SemanticMeasure.of[PrevMonthPassengers]("prev_month_passengers")
+      }
+      import Refs._
+
+      // ---------------------------------------------------------------------
       // 6. Window function: rank within group (added in Scala, not YAML)
       // ---------------------------------------------------------------------
       // Top-5 origins per carrier by total passengers. Window functions are
       // added in Scala because the YAML CalcExpr parser supports only
       // arithmetic + all() — no OVER (...) syntax. See examples/window-analytics
       // for a fuller walkthrough of this pattern.
-      println("\n--- Q6: Top-5 origins per carrier (row_number window + filter) ---")
+      //
+      // Typesafe variants: the measure name comes from the typed `rank` ref
+      // (no string duplicated at the call site). All consumers
+      // (groupByDimensions, aggregateMeasures, where, orderBy) are
+      // type-checked — a measure-into-groupByDimensions is a compile error.
+      println("\n--- Q6: Top-5 origins per carrier (typed row_number window + filter) ---")
       val flightsWithWindow = flights.withMeasures(
-        Measure("rank_within_carrier",
-          t => row_number().over(Window.partitionBy(t("carrier")).orderBy(t("total_passengers").desc))),
+        rank,
+        t => row_number().over(
+          Window.partitionBy(t("carrier")).orderBy(t("total_passengers").desc)
+        )
       )
       flightsWithWindow
-        .groupBy("carrier", "origin")
-        .aggregate("total_passengers", "rank_within_carrier")
-        .where(Compare.Le("rank_within_carrier", 5))
+        .groupByDimensions(carrier, origin)                                 // typed
+        .aggregateMeasures(pax, rank)                                        // typed
+        .where(Predicate.Le(rank, 5))                                       // typed: Predicate.Le via the typed factory
+        .orderBy(SortKey.asc(carrier), SortKey.asc(rank))                   // typed SortKey
         .toDataFrame(spark)
-        .orderBy("carrier", "rank_within_carrier")
         .show(20, false)
 
       // ---------------------------------------------------------------------
@@ -146,23 +182,38 @@ object Main {
       // (via lag), then a calc-measure pct_change. Window functions are
       // added in Scala; the calc measure is added at the SemanticTable
       // level (must be defined before aggregate()).
-      println("\n--- Q7: Monthly passengers with MoM % change (lag window) ---")
-      val flightsWithLag = flights.withMeasures(
-        Measure("prev_month_passengers",
+      //
+      // Typesafe variant: `prev` uses the typed withMeasures(prev, expr)
+      // overload. `pct_change` is still a string-named calc measure — it
+      // references other measures by name (not via a typed ref), and the
+      // typed overload requires a SemanticMeasure witness, so calc measures
+      // use the string varargs form. This query shows BOTH overloads.
+      println("\n--- Q7: Monthly passengers with MoM % change (typed lag window) ---")
+      // Typed withMeasures(prev, expr) for the lag window measure. The calc
+      // measure `pct_change` has no SemanticMeasure witness (it references
+      // other measures by name, not via a typed ref), so it uses the string
+      // varargs form. This shows both overloads in one query:
+      val flightsWithLag = flights
+        .withMeasures(
+          prev,
           t => lag(t("total_passengers"), 1).over(
-            Window.partitionBy().orderBy(t("flight_date")))),
-        Measure("pct_change",
-          t => CalcHelpers.safeDivide(
-            t("total_passengers") - t("prev_month_passengers"),
-            t("prev_month_passengers"),
-            defaultValue = 0.0)),
-      )
+            Window.partitionBy().orderBy(t("flight_date"))))
+        .withMeasures(
+          Measure(
+            "pct_change",
+            t => CalcHelpers.safeDivide(
+              t("total_passengers") - t("prev_month_passengers"),
+              t("prev_month_passengers"),
+              defaultValue = 0.0
+            )
+          )
+        )
       flightsWithLag
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date")
         .aggregate("total_passengers", "prev_month_passengers", "pct_change")
+        .orderBy("flight_date")                  // flight_date isn't in the typed Refs above
         .toDataFrame(spark)
-        .orderBy("flight_date")
         .show(false)
       println("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
 
@@ -177,27 +228,12 @@ object Main {
       // every dimension/measure is a typed handle. See README and
       // docs/phase-E-plan.md for the full story.
 
-      object Refs {
-        // Phantom tags — one per field you want to reference by type.
-        sealed trait Carrier
-        sealed trait TotalPassengers
-        sealed trait FlightCount
-        sealed trait AvgPassengers
-
-        // Implicit typeclass witnesses — the *only* place a field name is hard-coded.
-        implicit val carrier: SemanticDimension[Carrier]           = SemanticDimension.of[Carrier]("carrier")
-        implicit val pax:     SemanticMeasure[TotalPassengers]     = SemanticMeasure.of[TotalPassengers]("total_passengers")
-        implicit val count:   SemanticMeasure[FlightCount]         = SemanticMeasure.of[FlightCount]("flight_count")
-        implicit val avg:     SemanticMeasure[AvgPassengers]       = SemanticMeasure.of[AvgPassengers]("avg_passengers")
-      }
-      import Refs._
-
       println("\n--- Q8 (typed): Top carriers (parallel to Q1 with compile-time ref safety) ---")
       flights
         .groupByDimensions(carrier)                         // dimension-only — measure refs are a compile error
         .aggregateMeasures(pax, count, avg)                  // measure-only  — dimension refs are a compile error
+        .orderBy(SortKey.desc(pax))                             // typed SortKey
         .toDataFrame(spark)
-        .orderBy(col("total_passengers").desc)
         .show(false)
 
       // Typed predicate factory: `Predicate.Gt(pax, 500)` produces a `Compare.Gt`
@@ -207,8 +243,8 @@ object Main {
         .where(Predicate.Gt(pax, 500))                       // typed: `pax: FieldRef[TotalPassengers]`
         .groupByDimensions(carrier)
         .aggregateMeasures(pax, count)
+        .orderBy(SortKey.desc(pax))                             // typed SortKey
         .toDataFrame(spark)
-        .orderBy(col("total_passengers").desc)
         .show(false)
 
       // ---------------------------------------------------------------------
