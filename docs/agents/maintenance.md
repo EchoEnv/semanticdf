@@ -50,6 +50,13 @@ processed. It's idempotent — running it twice produces the same output.
 differs, the command exits with status 1 and prints the diff (truncated to 80
 lines).
 
+**Timestamp lines are excluded from the comparison** (via `diff -I`). OkfGen
+embeds each YAML's last-git-commit time in the frontmatter `timestamp:` field
+and the `log.md` headers. These are derived from git history, which shifts on
+squash merges and pre-commit generation, so enforcing them would cause
+spurious drift. The check verifies **content** only — schema, measures,
+descriptions, joins, etc.
+
 CI runs `make okfgen-check` on every PR. A failing build means the bundle is
 out of sync.
 
