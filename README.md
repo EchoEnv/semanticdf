@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1.1 — type-safety + YAML load-time validation pass complete. **294/294 tests green** under Spark
+**Status:** v0.1.2 — lazy compile contract for `withTransforms` (no more `SparkSession.active` side effect on join models). **298/298 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -413,7 +413,7 @@ object SemanticServer extends App {
 # Standard Spark distribution layout
 $SPARK_HOME/sbin/start-thriftserver.sh \
   --master yarn \
-  --jars /path/to/semanticdf_2.13-0.1.1.jar,/path/to/your-models-loader.jar \
+  --jars /path/to/semanticdf_2.13-0.1.2.jar,/path/to/your-models-loader.jar \
   --conf spark.sql.hive.thriftServer.singleSession=false
 ```
 

@@ -27,13 +27,13 @@ page first.** The most common failure modes are listed there.
 From the repo root:
 
 ```bash
-mvn test                    # runs 294 tests on Spark 3.5.8
-mvn -Pspark4 test           # runs 294 tests on Spark 4.1.1
+mvn test                    # runs 298 tests on Spark 3.5.8
+mvn -Pspark4 test           # runs 298 tests on Spark 4.1.1
 mvn install -DskipTests     # builds the jar so examples/pipeline/ can use it
 ```
 
 Both profiles run the **same test suite** — the only difference is which Spark
-release is on the classpath. You should see `Tests: succeeded 294` either way.
+release is on the classpath. You should see `Tests: succeeded 298` either way.
 
 ### Cross-version sanity check
 
