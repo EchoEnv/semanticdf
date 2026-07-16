@@ -17,11 +17,62 @@ import org.apache.spark.sql.functions._
   *   Q3 — Roaming revenue contribution: total revenue, roaming revenue, and
   *        % of total that's roaming. The premium-service pattern.
   *
+  * ==Typed field references (v0.1.x typed API)==
+  *
+  * See the [[Refs]] object — phantom-typed witnesses for every dimension
+  * and measure. Downstream calls use the typed refs (groupByDimensions,
+  * aggregateMeasures, SortKey). A typo in a ref name is a compile error.
+  * See `examples/starter/Main.scala` and `docs/phase-E-plan.md` for the
+  * full story.
+  *
   * Run:
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.telcoanalytics.Main
   */
 object Main {
+
+  // -----------------------------------------------------------------------
+  // Phantom-typed field references. Name strings appear ONCE per field
+  // (in the implicit val below); downstream calls use typed refs.
+  // -----------------------------------------------------------------------
+  object Refs {
+    // Dimensions
+    sealed trait PlanName
+    sealed trait PromoCode
+    sealed trait EventDate
+    // Time-grain dimensions (typed via atTimeGrain API)
+
+    // Measures (declared in the YAML)
+    sealed trait EventCount
+    sealed trait TotalRevenue
+    sealed trait TotalRoamingRevenue
+    sealed trait AvgEventAmount
+    // Calc measure (declared in the YAML)
+    sealed trait RevenuePerEvent
+    // Temporary measures (added in Scala for Q1)
+    sealed trait ActiveCustomers
+    sealed trait Arpu
+    // Temporary measures (added in Scala for Q2)
+    sealed trait PctOfRevenue
+    sealed trait CustomersOnPromo
+    // Temporary measure (added in Scala for Q3)
+    sealed trait PctRoaming
+
+    implicit val planName:          SemanticDimension[PlanName]            = SemanticDimension.of[PlanName]("plan_name")
+    implicit val promoCode:         SemanticDimension[PromoCode]           = SemanticDimension.of[PromoCode]("promo_code")
+    implicit val eventDate:         SemanticDimension[EventDate]           = SemanticDimension.of[EventDate]("event_date")
+    implicit val eventCount:        SemanticMeasure[EventCount]            = SemanticMeasure.of[EventCount]("event_count")
+    implicit val totalRevenue:      SemanticMeasure[TotalRevenue]          = SemanticMeasure.of[TotalRevenue]("total_revenue")
+    implicit val totalRoamingRevenue: SemanticMeasure[TotalRoamingRevenue] = SemanticMeasure.of[TotalRoamingRevenue]("total_roaming_revenue")
+    implicit val avgEventAmount:    SemanticMeasure[AvgEventAmount]        = SemanticMeasure.of[AvgEventAmount]("avg_event_amount")
+    implicit val revenuePerEvent:   SemanticMeasure[RevenuePerEvent]       = SemanticMeasure.of[RevenuePerEvent]("revenue_per_event")
+    // Temporary measures — names come from typed refs
+    implicit val activeCustomers:   SemanticMeasure[ActiveCustomers]      = SemanticMeasure.of[ActiveCustomers]("active_customers")
+    implicit val arpu:              SemanticMeasure[Arpu]                  = SemanticMeasure.of[Arpu]("arpu")
+    implicit val pctOfRevenue:      SemanticMeasure[PctOfRevenue]          = SemanticMeasure.of[PctOfRevenue]("pct_of_revenue")
+    implicit val customersOnPromo:  SemanticMeasure[CustomersOnPromo]     = SemanticMeasure.of[CustomersOnPromo]("customers_on_promo")
+    implicit val pctRoaming:        SemanticMeasure[PctRoaming]            = SemanticMeasure.of[PctRoaming]("pct_roaming")
+  }
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
@@ -49,6 +100,9 @@ object Main {
       val models = YamlLoader.loadDir("models/", tables)
       val usage = models("usage")
 
+      // Bring the typed refs into scope
+      import Refs._
+
       println("=" * 70)
       println("Telco analytics template — ARPU, promotion effectiveness, roaming")
       println("=" * 70)
@@ -58,23 +112,20 @@ object Main {
       // ---------------------------------------------------------------------
       // ARPU = total revenue / distinct active customers in the period.
       // countDistinct isn't in the YAML keyword blocklist, so the measure
-      // is added in Scala.
+      // is added in Scala via withMeasures (typed ref → no string duplicate).
       println("\n--- Q1: Monthly ARPU per plan (Average Revenue Per User) ---")
       val usageWithArpu = usage.withMeasures(
-        Measure("active_customers", t => countDistinct(t("customer_id"))),
-        Measure("arpu",
+        Measure(activeCustomers.name, t => countDistinct(t("customer_id"))),
+        Measure(arpu.name,
           t => CalcHelpers.safeDivide(
             t("total_revenue"), t("active_customers"), defaultValue = 0.0)),
       )
       usageWithArpu
-        .atTimeGrain("event_date", "month")
-        .groupBy("plan_name")
-        .aggregate("total_revenue", "active_customers", "arpu")
-        .toDataFrame(spark)
-        // Spark's DataFrame.orderBy has two overloads — (String, String*) and
-        // (Column*) — but no mixed form. The next query below uses the Column
-        // form, so we match that here for consistency.
-        .orderBy(col("arpu"), col("plan_name"))
+        .atTimeGrain(eventDate.name, "month")
+        .groupByDimensions(planName)
+        .aggregateMeasures(totalRevenue, activeCustomers, arpu)
+        .orderBy(SortKey.asc(arpu), SortKey.asc(planName))
+        .execute(spark)
         .show(false)
       println("  (ARPU = total_revenue / active_customers; active = countDistinct customer_id)")
 
@@ -82,20 +133,23 @@ object Main {
       // 3. Q2: Promotion effectiveness
       // ---------------------------------------------------------------------
       // Per promo: how many customers, total revenue, and share of total.
-      // Uses t.all() for the percent-of-total.
+      // Uses t.all() for the percent-of-total. The two temporary measures
+      // (pct_of_revenue, customers_on_promo) are added in two separate
+      // withMeasures calls so each typed ref's name is sourced from the
+      // witness.
       println("\n--- Q2: Promotion effectiveness (revenue + customer count per promo) ---")
       val usageWithPromoPct = usage.withMeasures(
-        Measure("pct_of_revenue",
+        Measure(pctOfRevenue.name,
           t => t("total_revenue") / t.all("total_revenue")),
       )
       usageWithPromoPct
         .withMeasures(
-          Measure("customers_on_promo", t => countDistinct(t("customer_id"))),
+          Measure(customersOnPromo.name, t => countDistinct(t("customer_id"))),
         )
-        .groupBy("promo_code")
-        .aggregate("total_revenue", "customers_on_promo", "pct_of_revenue")
-        .toDataFrame(spark)
-        .orderBy(col("total_revenue").desc)
+        .groupByDimensions(promoCode)
+        .aggregateMeasures(totalRevenue, customersOnPromo, pctOfRevenue)
+        .orderBy(SortKey.desc(totalRevenue))
+        .execute(spark)
         .show(false)
       println("  (pct_of_revenue uses t.all() to re-evaluate total_revenue at zero grain)")
 
@@ -105,15 +159,18 @@ object Main {
       // The premium-service pattern: % of total revenue that comes from
       // roaming. The YAML already defines total_roaming_revenue as a base
       // measure; the pct_roaming calc uses t.all() for the denominator.
+      // Q3 aggregates over all rows (no groupBy), so we use string-based
+      // groupBy() since the typed groupByDimensions requires at least one
+      // dim ref.
       println("\n--- Q3: Roaming revenue contribution (% of total) ---")
       val usageWithRoamingPct = usage.withMeasures(
-        Measure("pct_roaming",
+        Measure(pctRoaming.name,
           t => t("total_roaming_revenue") / t.all("total_revenue")),
       )
       usageWithRoamingPct
         .groupBy()
-        .aggregate("total_revenue", "total_roaming_revenue", "pct_roaming")
-        .toDataFrame(spark)
+        .aggregateMeasures(totalRevenue, totalRoamingRevenue, pctRoaming)
+        .execute(spark)
         .show(false)
       println("  (pct_roaming shows what fraction of all revenue is from roaming events)")
 
