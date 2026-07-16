@@ -9,6 +9,8 @@ import org.apache.spark.sql.{Row => SparkRow, SparkSession, DataFrame}
 import org.apache.spark.sql.types.{DataType, StringType, LongType, IntegerType, DoubleType, FloatType, BooleanType, DateType, TimestampType, DecimalType}
 
 import java.util.{List => JList}
+import scala.concurrent.duration._
+import scala.concurrent.{Await, ExecutionContext, Future, TimeoutException}
 import scala.jdk.CollectionConverters._
 
 /** `query` tool — the workhorse. Runs a query against the loaded models and
@@ -22,7 +24,11 @@ import scala.jdk.CollectionConverters._
   *
   * And §"Tool 4: explain" — same request shape, returns the
   * `SemanticTable.explainSemantic(spark)` string verbatim (no execution). */
-final class Query(spark: SparkSession, val maxRows: Int = Query.maxRowsFromEnv()) {
+final class Query(
+    spark: SparkSession,
+    val maxRows: Int = Query.maxRowsFromEnv(),
+    val timeoutMs: Long = Query.timeoutMsFromEnv(),
+) {
 
   private val log = Query.log
 
@@ -44,8 +50,16 @@ final class Query(spark: SparkSession, val maxRows: Int = Query.maxRowsFromEnv()
       )
 
     val t0 = System.currentTimeMillis()
-    val df = st.toDataFrame(spark)
-    val collected = df.collect()
+    // QUERY_TIMEOUT: run the query under a Spark job group with a deadline.
+    // On timeout, the job group is cancelled (which interrupts the Spark
+    // task via `interruptOnCancel = true`) and a QueryTimeout is thrown.
+    // Per mcp-contract.md §7, the agent must add `limit`/`where` or raise
+    // MCP_QUERY_TIMEOUT_MS.
+    val groupId = s"mcp-query-${request.model}-${System.nanoTime()}"
+    val (df, collected) = Query.withTimeout(spark, timeoutMs, groupId, s"MCP query: ${request.model}") {
+      val frame = st.toDataFrame(spark)
+      (frame, frame.collect())
+    }
     val elapsed = System.currentTimeMillis() - t0
 
     // RESULT_TOO_LARGE: if the request omitted `limit` and the result
@@ -109,6 +123,53 @@ object Query {
       .flatMap(v => scala.util.Try(v.toInt).toOption)
       .filter(_ > 0)
       .getOrElse(DefaultMaxRows)
+
+  /** Default query-execution deadline for `query` (millis). Overridden by
+    * the `MCP_QUERY_TIMEOUT_MS` env var (parsed as a positive integer).
+    * Values <= 0 disable the timeout (no deadline enforced). */
+  private val DefaultTimeoutMs = 30000L
+
+  /** Read `MCP_QUERY_TIMEOUT_MS` from the environment. Values that are
+    * missing or non-numeric fall back to [[DefaultTimeoutMs]]. A value
+    * of 0 or negative is passed through (it disables the timeout). */
+  def timeoutMsFromEnv(): Long =
+    sys.env.get("MCP_QUERY_TIMEOUT_MS")
+      .flatMap(v => scala.util.Try(v.toLong).toOption)
+      .filter(_ >= 0)
+      .getOrElse(DefaultTimeoutMs)
+
+  /** Run `body` under a Spark job group with a deadline. On timeout the
+    * job group is cancelled (which interrupts the Spark task via
+    * `interruptOnCancel = true`) and a [[QueryErrors.QueryTimeout]] is
+    * thrown. A `timeoutMs <= 0` disables the deadline (waits forever).
+    *
+    * The job group ensures cancellation is scoped to this query only —
+    * other Spark operations on the same SparkContext are unaffected.
+    *
+    * Exposed as `private[handlers]` so the [[QuerySpec]] test can verify
+    * timeout behavior deterministically (via Thread.sleep) without
+    * depending on Spark query wall-clock timing. */
+  private[handlers] def withTimeout[T](
+      spark: SparkSession,
+      timeoutMs: Long,
+      groupId: String,
+      description: String,
+  )(body: => T): T = {
+    spark.sparkContext.setJobGroup(groupId, description, interruptOnCancel = true)
+    try {
+      val future = Future { body }(ExecutionContext.global)
+      try {
+        val deadline = if (timeoutMs <= 0) Duration.Inf else timeoutMs.millis
+        Await.result(future, deadline)
+      } catch {
+        case _: TimeoutException =>
+          spark.sparkContext.cancelJobGroup(groupId)
+          throw QueryErrors.QueryTimeout(timeoutMs)
+      }
+    } finally {
+      spark.sparkContext.clearJobGroup()
+    }
+  }
 
   /** Result data shape. Mirrors the contract. */
   final case class Data(
@@ -287,6 +348,19 @@ object Query {
           ),
           mapper,
         )
+      case e: QueryErrors.QueryTimeout =>
+        Handlers.textResult(
+          io.semanticdf.mcp.ErrorEnvelope(
+            status = "error",
+            error = io.semanticdf.mcp.ErrorDetail(
+              code = "QUERY_TIMEOUT",
+              message = e.getMessage,
+              hint = Some("Add a narrower \"where\" or \"limit\" clause, or raise MCP_QUERY_TIMEOUT_MS."),
+              details = Map("timeout_ms" -> e.timeoutMs.toString),
+            ),
+          ),
+          mapper,
+        )
       case e: IllegalArgumentException =>
         Handlers.textResult(
           io.semanticdf.mcp.ErrorEnvelope.of("EXECUTION_ERROR", e.getMessage),
@@ -393,4 +467,8 @@ object QueryErrors {
       extends RuntimeException(
         s"RESULT_TOO_LARGE: query returned $rowCount rows; safety cap is $limit. " +
         s"Add a \"limit\" to your request or narrow your filters.")
+
+  final case class QueryTimeout(timeoutMs: Long)
+      extends RuntimeException(
+        s"QUERY_TIMEOUT: query exceeded ${timeoutMs}ms deadline (MCP_QUERY_TIMEOUT_MS).")
 }

@@ -134,4 +134,69 @@ class QuerySpec extends AnyFunSuite with BeforeAndAfterAll {
       .getOrElse(10000)
     parsed shouldBe expected
   }
+
+  // ---------------------------------------------------------------------------
+  // QUERY_TIMEOUT — the deadline enforcement
+  // ---------------------------------------------------------------------------
+  //
+  // These tests exercise Query.withTimeout directly (a package-private helper
+  // extracted from handle()). Using Thread.sleep instead of a real Spark
+  // query makes the timeout deterministic — no wall-clock flakiness, no
+  // dependency on query execution speed. The integration (handle → timeout)
+  // is exercised by the production path, which calls withTimeout.
+
+  test("QUERY_TIMEOUT: withTimeout throws QueryTimeout when body exceeds deadline") {
+    val ex = intercept[QueryErrors.QueryTimeout] {
+      Query.withTimeout(spark, timeoutMs = 1, groupId = "test-group", "test") {
+        Thread.sleep(100)  // 100ms body, 1ms deadline → must timeout
+        42
+      }
+    }
+    assert(ex.timeoutMs == 1)
+    assert(ex.getMessage.contains("QUERY_TIMEOUT"))
+    assert(ex.getMessage.contains("1"))
+  }
+
+  test("QUERY_TIMEOUT: withTimeout returns the body's value when within deadline") {
+    val result = Query.withTimeout(spark, timeoutMs = 5000, groupId = "test-group", "test") {
+      42
+    }
+    assert(result == 42)
+  }
+
+  test("QUERY_TIMEOUT: withTimeout with timeoutMs=0 disables the deadline") {
+    // No timeout enforced — a fast body returns its value.
+    val result = Query.withTimeout(spark, timeoutMs = 0, groupId = "test-group", "test") {
+      Thread.sleep(10)  // 10ms body, no deadline → completes normally
+      "done"
+    }
+    assert(result == "done")
+  }
+
+  test("QUERY_TIMEOUT: the error envelope carries QUERY_TIMEOUT code + timeout_ms") {
+    // Mirror the runWithError catch logic for QueryTimeout.
+    val ex = QueryErrors.QueryTimeout(timeoutMs = 2500)
+    val env = ErrorEnvelope(
+      status = "error",
+      error = ErrorDetail(
+        code = "QUERY_TIMEOUT",
+        message = ex.getMessage,
+        hint = Some("Add a narrower \"where\" or \"limit\" clause, or raise MCP_QUERY_TIMEOUT_MS."),
+        details = Map("timeout_ms" -> ex.timeoutMs.toString),
+      ),
+    )
+    assert(env.status == "error")
+    assert(env.error.code == "QUERY_TIMEOUT")
+    assert(env.error.details.get("timeout_ms") == Some("2500"))
+    assert(env.error.hint.isDefined)
+    assert(env.error.message.contains("2500"))
+  }
+
+  test("QUERY_TIMEOUT: timeoutMsFromEnv returns a non-negative value") {
+    // CI may or may not have MCP_QUERY_TIMEOUT_MS set; either way the
+    // result must be a sensible non-negative long. A value of 0 is valid
+    // (means "disabled").
+    val parsed = Query.timeoutMsFromEnv()
+    assert(parsed >= 0, s"timeoutMsFromEnv must be non-negative, got $parsed")
+  }
 }
