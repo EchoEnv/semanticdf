@@ -199,4 +199,99 @@ class QuerySpec extends AnyFunSuite with BeforeAndAfterAll {
     val parsed = Query.timeoutMsFromEnv()
     assert(parsed >= 0, s"timeoutMsFromEnv must be non-negative, got $parsed")
   }
+
+  // ---------------------------------------------------------------------------
+  // AMBIGUOUS_MEASURE / AMBIGUOUS_DIMENSION — case-insensitive name collisions
+  // ---------------------------------------------------------------------------
+  //
+  // After a join, the merged model exposes both the left model's dimensions
+  // (bare names) and the right model's dimensions (aliased as `alias.col`).
+  // If a query name matches BOTH a bare and an aliased field
+  // case-insensitively, it's ambiguous — the agent needs to pick one
+  // explicitly. The MCP layer catches this BEFORE handing off to the
+  // library (whose resolution is case-sensitive exact-match, and would
+  // silently pick one).
+
+  private def joinedRegistry: Models = {
+    import spark.implicits._
+    // Two models with a MIXED-CASE field name (left has "Name", right
+    // has "name"). The library's case-sensitive collision check sees them
+    // as different fields, so the join succeeds. But case-insensitive
+    // resolution makes a query for "name" match BOTH.
+    val flights = toSemanticTable(
+      Seq(("AA", "flight-A", 100.0), ("UA", "flight-U", 200.0)).toDF("carrier", "Name", "distance"),
+      name = Some("flights"),
+    ).withDimensions(
+      Dimension("carrier", t => t("carrier")),
+      Dimension("Name",    t => t("Name")),
+    ).withMeasures(
+      Measure("flight_count", t => org.apache.spark.sql.functions.count(lit(1))),
+    )
+    val carriers = toSemanticTable(
+      Seq(("AA", "American"), ("UA", "United")).toDF("carrier", "name"),
+      name = Some("carriers"),
+    ).withDimensions(
+      Dimension("carrier", t => t("carrier")),
+      Dimension("name", t => t("name")),
+    )
+    val joined = flights.join_one(
+      carriers,
+      (l, r) => l("carrier") === r("carrier"),
+    )
+    new Models(Map("flights" -> joined), DataConfig(Map.empty))
+  }
+
+  test("AMBIGUOUS: query name matching case-insensitive duplicates throws AmbiguousDimension") {
+    // 'name' (lowercase) case-insensitively matches BOTH 'Name' (left)
+    // and 'name' (right) → two dimensions share a case-insensitive name.
+    val query = new Query(spark, maxRows = 10000)
+    val req = baseRequest.copy(
+      model      = "flights",
+      dimensions = Some(Seq("name")),
+      measures   = Seq("flight_count"),
+    )
+    val ex = intercept[QueryErrors.AmbiguousDimension] {
+      query.handle(joinedRegistry, req)
+    }
+    assert(ex.name == "name")
+    assert(ex.candidates.toSet == Set("Name", "name"))
+  }
+
+  test("AMBIGUOUS: unique-name query succeeds (single match — no false positive)") {
+    // 'carrier' matches exactly one field. Neither 'Name' nor 'name'
+    // case-insensitively matches 'carrier', so no ambiguity.
+    val query = new Query(spark, maxRows = 10000)
+    val req = baseRequest.copy(
+      model      = "flights",
+      dimensions = Some(Seq("carrier")),
+      measures   = Seq("flight_count"),
+    )
+    val env = query.handle(joinedRegistry, req)
+    assert(env.status == "ok")
+  }
+
+  test("AMBIGUOUS: checkAmbiguity throws when the same name appears as both dim and measure") {
+    import spark.implicits._
+    val ambigTable = toSemanticTable(
+      Seq(("AA", 1.0), ("UA", 2.0)).toDF("carrier", "score"),
+      name = Some("flights"),
+    ).withDimensions(
+      Dimension("carrier", t => t("carrier")),
+    ).withMeasures(
+      Measure("score", t => org.apache.spark.sql.functions.sum(t("score"))),
+    )
+    // Add a dimension with a case-insensitive duplicate name.
+    val withDup = ambigTable.withDimensions(
+      Dimension("SCORE", t => t("score")),
+    )
+    val req = QueryRequest(
+      model      = "flights",
+      measures   = Seq("score"),
+      dimensions = Some(Seq("SCORE")),
+    )
+    val ex = intercept[QueryErrors.AmbiguousDimension] {
+      Query.checkAmbiguity(req, withDup)
+    }
+    assert(ex.candidates.toSet == Set("score", "SCORE"))
+  }
 }

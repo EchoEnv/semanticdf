@@ -36,6 +36,15 @@ final class Query(
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
     val t = registry(request.model)
 
+    // AMBIGUOUS_MEASURE / AMBIGUOUS_DIMENSION: detect when a requested
+    // name matches multiple fields in the merged model. Spark is
+    // case-insensitive at the Column level, but the library's name
+    // resolution is case-sensitive — so a query like {dimensions: ["Carrier"]}
+    // would silently resolve to "carrier" even when "carriers.carrier" also
+    // exists. Catch this BEFORE the library call so the agent gets a
+    // typed error with candidates instead of a silent ambiguity.
+    Query.checkAmbiguity(request, t)
+
     // Build the library-level semantic-table chain.
     val st =
       t.query(
@@ -137,6 +146,37 @@ object Query {
       .flatMap(v => scala.util.Try(v.toLong).toOption)
       .filter(_ >= 0)
       .getOrElse(DefaultTimeoutMs)
+
+  /** Detect AMBIGUOUS_DIMENSION / AMBIGUOUS_MEASURE before the library
+    * silently resolves a name. For each requested dimension/measure name,
+    * check whether it matches more than one field in the merged model's
+    * dimensions or measures (case-insensitive comparison, matching
+    * Spark's column resolution). The first match wins if there's exactly
+    * one; if there are multiple, throw with the candidates list.
+    *
+    * Why MCP-layer (not library): the library's resolution is
+    * case-sensitive exact-match. Adding case-insensitive resolution to
+    * the library would change behavior for direct (non-MCP) callers.
+    * The MCP layer is the primary consumer and the right place for a
+    * safety check. */
+  private[handlers] def checkAmbiguity(request: QueryRequest, t: SemanticTable): Unit = {
+    val allNames = request.measures ++ request.dimensions.getOrElse(Nil)
+    allNames.foreach { name =>
+      val lc = name.toLowerCase
+      val dimMatches    = t.dimensions.keys.filter(_.toLowerCase == lc).toSeq
+      val measureMatches = t.measures.keys.filter(_.toLowerCase == lc).toSeq
+      val totalMatches  = (dimMatches ++ measureMatches).distinct
+      if (totalMatches.size > 1) {
+        // If all matches are in measures, throw AMBIGUOUS_MEASURE;
+        // otherwise (any dimension match), throw AMBIGUOUS_DIMENSION
+        // — dimensions are queried first in the library's resolveDim.
+        if (measureMatches.nonEmpty && dimMatches.isEmpty)
+          throw QueryErrors.AmbiguousMeasure(name, totalMatches)
+        else
+          throw QueryErrors.AmbiguousDimension(name, totalMatches)
+      }
+    }
+  }
 
   /** Run `body` under a Spark job group with a deadline. On timeout the
     * job group is cancelled (which interrupts the Spark task via
@@ -357,6 +397,32 @@ object Query {
               message = e.getMessage,
               hint = Some("Add a narrower \"where\" or \"limit\" clause, or raise MCP_QUERY_TIMEOUT_MS."),
               details = Map("timeout_ms" -> e.timeoutMs.toString),
+            ),
+          ),
+          mapper,
+        )
+      case e: QueryErrors.AmbiguousDimension =>
+        Handlers.textResult(
+          io.semanticdf.mcp.ErrorEnvelope(
+            status = "error",
+            error = io.semanticdf.mcp.ErrorDetail(
+              code = "AMBIGUOUS_DIMENSION",
+              message = e.getMessage,
+              hint = Some(s"Disambiguate with one of: ${e.candidates.mkString(", ")}"),
+              details = Map("candidates" -> e.candidates.mkString(",")),
+            ),
+          ),
+          mapper,
+        )
+      case e: QueryErrors.AmbiguousMeasure =>
+        Handlers.textResult(
+          io.semanticdf.mcp.ErrorEnvelope(
+            status = "error",
+            error = io.semanticdf.mcp.ErrorDetail(
+              code = "AMBIGUOUS_MEASURE",
+              message = e.getMessage,
+              hint = Some(s"Disambiguate with one of: ${e.candidates.mkString(", ")}"),
+              details = Map("candidates" -> e.candidates.mkString(",")),
             ),
           ),
           mapper,
