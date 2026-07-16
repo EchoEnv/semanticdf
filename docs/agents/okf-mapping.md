@@ -1,7 +1,7 @@
 # OKF Mapping for semanticdf
 
-**Status:** Draft v0.1 — pinning the YAML → OKF transformation before F2 lands.
-**Audience:** the F2 implementer (`OkfGen`), reviewer, and any later agent that consumes the bundle.
+**Status:** v0.1.1 — this spec is the per-field reference for the OKF bundle shipped by `okfgen` (see [`docs/agents/maintenance.md`](maintenance.md) for the regeneration workflow).
+**Audience:** anyone editing YAML model fields and wanting to know exactly how each one is rendered into OKF Markdown.
 
 This document is the **per-field spec** for how semanticdf YAML model files become
 OKF concept documents. Every YAML field listed here has exactly one OKF
