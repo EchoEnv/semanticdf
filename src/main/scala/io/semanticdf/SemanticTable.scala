@@ -15,8 +15,22 @@ sealed trait SortKey {
   private[semanticdf] def toColumn: Column
 }
 object SortKey {
-  private[semanticdf] final case class Asc(name: String)  extends SortKey { def toColumn = col(name).asc }
-  private[semanticdf] final case class Desc(name: String) extends SortKey { def toColumn = col(name).desc }
+
+  /** Wrap a column name in backticks if it contains characters that
+    * Spark's `col(...)` would misinterpret — notably `.` (treated as a
+    * table/struct qualifier). Joined dimensions are named `alias.column`
+    * (e.g. `customers.signup_date`); without quoting, `col("customers.x")`
+    * looks for a nested struct field instead of the literal column.
+    * Names already wrapped in backticks (by the caller) are left as-is,
+    * so this is backward-compatible with manual `` SortKey.asc(s"`x`") ``.
+    * Simple identifiers are returned unchanged. */
+  private def quote(name: String): String =
+    if (name.startsWith("`")) name
+    else if (name.matches("[a-zA-Z_][a-zA-Z0-9_]*")) name
+    else s"`$name`"
+
+  private[semanticdf] final case class Asc(name: String)  extends SortKey { def toColumn = col(quote(name)).asc }
+  private[semanticdf] final case class Desc(name: String) extends SortKey { def toColumn = col(quote(name)).desc }
 
   /** Explicit ascending key. */
   def asc(name: String): SortKey = Asc(name)
