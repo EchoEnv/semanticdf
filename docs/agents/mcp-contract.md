@@ -118,9 +118,13 @@ flights:
   expose them. MCP `describe_model` reads from the same accessor — one definition,
   three lenses (YAML / Scala DSL / MCP).
 - **Pre-join semantics:** each `expr:` operates on THIS model's source table only.
-  The YamlLoader validates via `SparkFilterValidator` (parses the Spark SQL
-  expression and rejects references to columns not in the source) so a
-  misconfigured filter fails at model-load time, not at query time.
+  The YamlLoader validates every `expr:` field via the YAML load-time
+  validation pass (`ExpressionValidator` for dims/transforms/measures,
+  `CalcExpr.validateReferences` for `calculated_measures`,
+  `SparkFilterValidator` for filters) so a misconfigured expression fails
+  at model-load time, not at query time. Each validator parses the
+  expression and rejects references to columns/measures not visible at
+  that point.
 - **Always applied:** the agent doesn't pass `filters` to `query` and doesn't need
   to know they exist. They're baked into every compiled query automatically.
 - **Distinct from query-time `where`:** for cross-table predicates (a filter that

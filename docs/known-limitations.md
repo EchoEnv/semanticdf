@@ -1,6 +1,6 @@
 # Known Limitations
 
-This document lists features that do not work in v0.1. Read this before starting — it will save you from hitting obvious gaps without context.
+This document lists features that do not work in v0.1.1. Read this before starting — it will save you from hitting obvious gaps without context.
 
 ---
 
@@ -144,8 +144,11 @@ join engine's symmetric-key constraint or column-rename preprocessing).
 ### Base measures use Spark SQL expressions
 
 YAML `measures:` are Spark SQL aggregate strings (`sum(distance)`, `count(distinct user_id)`).
-These are NOT type-checked at compile time — typos surface at runtime. The Scala DSL
-(`t => sum(t("distance"))`) catches column-name typos earlier via scope resolution.
+Typos in column references are caught at model-load time by `ExpressionValidator`
+(visible column set: source + transforms + previously-declared measures — see
+`ExpressionValidator` and `docs/feature-roadmap.md`). The Scala DSL
+(`t => sum(t("distance"))`) catches typos even earlier via scope resolution
+and the typed `withMeasures(measure, expr)` overload (PR #24).
 
 ### Calc measures: arithmetic only
 
@@ -179,4 +182,4 @@ is affected. Sort results in Scala as a workaround.
 
 ---
 
-*This document is updated after each production soak cycle. Last updated: v0.1 + Phase E (partial, typeclass + sealed Compare ADT) + okfgen (Phase F1).*
+*This document is updated after each production soak cycle. Last updated: v0.1.1 (typed `withMeasures` + `SortKey.asc/desc`, `ExpressionValidator` for dims/transforms/measures/filters, `CalcExpr.validateReferences` for calculated_measures).*

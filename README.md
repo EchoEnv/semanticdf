@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1 — core capabilities complete. **278/278 tests green** under Spark
+**Status:** v0.1.1 — type-safety + YAML load-time validation pass complete. **294/294 tests green** under Spark
 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
 record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
@@ -397,7 +397,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | Method | Description |
 |---|---|
 | `toSemanticTable(df, name?)` | Construct a semantic model from a base `DataFrame`. |
-| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(ref, expr)` overload accepts a `SemanticMeasure` witness (v0.1.1). |
+| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(measure, expr)` overload accepts a `SemanticMeasure` witness directly via subtyping (v0.1.1). |
 | `.withTransforms(transforms*)` | Per-row logic (e.g. `datediff`, `case when`) applied to source data at model-load. Mirrors the YAML `transforms:` block. |
 | `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces pre-join column visibility (source + transforms; joined-side columns not visible) at load time. |
 | `.version(v: Int)` | Set the model's version (forward-compat hint for consumers). `table.version` reads the current value (0 = unversioned). |
@@ -566,7 +566,7 @@ All three flags are required:
       "command": "java",
       "args": [
         "-jar",
-        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.0-SNAPSHOT.jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1-SNAPSHOT.jar",
         "--models",
         "/path/to/your/models",
         "--data",
@@ -585,8 +585,8 @@ request/response schema of every tool.
 
 ## Cross-version compatibility
 
-Verified green on all three lines (278 tests each — Phase D + integration + YAML loader +
-regression suites):
+Verified green on all three lines (294 tests each — Phase D + integration + YAML loader +
+type-safety + load-time validation regression suites):
 
 | Spark | Scala | Status |
 |---|---|---|

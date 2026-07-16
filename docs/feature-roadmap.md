@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** Phase E (PARTIAL) shipped, 7 templates shipping, no consumer yet
+**Last updated:** v0.1.1 shipped (typed `withMeasures` + `SortKey.asc/desc` overloads, YAML load-time validation pass for dims/transforms/measures/filters/calcs), 7 templates shipping, no consumer yet
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -484,3 +484,4 @@ If we want a rough sequence to discuss:
 ## Decision log
 
 - **2024-XX:** This document created. T1 features identified as universal wins. T2-T4 features gated on consumer feedback.
+- **2026-07:** v0.1.1 shipped four PRs (typed withMeasures + SortKey.asc/desc overloads; ExpressionValidator for dims/transforms/measures/filters; CalcExpr.validateReferences for calculated_measures). The YAML load-time validation pass is now complete — every `expr` field in the YAML model schema has consistent fail-fast validation with explicit, documented visibility rules. The library is at 294 tests on both Spark 3.5.8 and 4.1.1; MCP server at 35 tests.

@@ -157,6 +157,32 @@ site (`st.groupBy("carierr")`), not at the declaration.
 - Each case has its own `compile()` / `describe()` — no string dispatch per compile.
 - 8 regression tests in `PredicateSpec.scala` verifying identical output to the legacy form.
 
+### Done — typed `withMeasures` + `SortKey.asc/desc` overloads (PR #24, v0.1.1)
+
+- `SortKey.asc(field: SemanticField[_])` / `SortKey.desc(field: SemanticField[_])` accept the
+  typeclass instance directly via subtyping, so the typed overload is picked over
+  `asc(name: String)` even from cross-package consumer code (Scala 2.13 phase-1 overload
+  resolution matches by subtyping without needing an implicit conversion).
+- `withMeasures[F](measure: SemanticMeasure[F], expr, ...)` — same subtype-based approach;
+  the measure name is read from the witness. Both overloads funnel through a private
+  `withMeasures0` helper.
+- 4 new tests in `SemanticFieldSpec` (282 total at this point).
+
+### Done — YAML load-time validation pass (PRs #25–#27, v0.1.1)
+
+- `ExpressionValidator` (PR #25) parses every `dimensions:`, `transforms:`, and `measures:`
+  `expr` at load time via Spark's `CatalystSqlParser` and checks that every column
+  reference resolves against the visible columns at that point. A typo fails fast at
+  model-load time with a clear error, not later at first query time as a cryptic Spark
+  `UNRESOLVED_COLUMN.WITH_SUGGESTION`.
+- `CalcExpr.validateReferences` (PR #26) does the same for `calculated_measures:` — parses
+  the CalcExpr DSL and checks every `Ref(name)` and `All(name)` against the visible
+  measure set. Calc-of-calc chains validate in declaration order.
+- Filter visibility tightened (PR #27) — `SparkFilterValidator` now sees transform outputs
+  (a filter that references a transform output is no longer falsely rejected).
+- 11 new tests in `VersionAndValidatorSpec` covering all four YAML blocks. 294 total
+  library tests on both Spark 3.5.8 and 4.1.1.
+
 ### What's NOT done from the original plan
 
 - **`E1 — ResultDecoder[T]`:** still deferred. The typed field refs already give the highest-
