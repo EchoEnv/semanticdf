@@ -566,7 +566,7 @@ All three flags are required:
       "command": "java",
       "args": [
         "-jar",
-        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1-SNAPSHOT.jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1.jar",
         "--models",
         "/path/to/your/models",
         "--data",

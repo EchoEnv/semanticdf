@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>semanticdf-pipeline_2.13</artifactId>
-    <version>0.1.1-SNAPSHOT</version>
+    <version>0.1.1</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-pipeline</name>
@@ -19,7 +19,7 @@
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semanticdf.version>0.1.1-SNAPSHOT</semanticdf.version>
+        <semanticdf.version>0.1.1</semanticdf.version>
     </properties>
 
     <dependencies>
