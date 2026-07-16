@@ -92,22 +92,8 @@ final class Introspect(spark: SparkSession) {
   // SDK adapter
   // ---------------------------------------------------------------------------
 
-  /** Schema for the `introspect` tool input. `path` and `model_name` are
-    * the only required fields. */
-  val introspectSchema: McpJsonSchema = new McpJsonSchema(
-    "object",
-    java.util.Map.of(
-      "path"        , java.util.Map.of("type", "string"),
-      "model_name"  , java.util.Map.of("type", "string"),
-      "table"       , java.util.Map.of("type", "string"),
-      "format"      , java.util.Map.of("type", "string"),
-      "read_options", java.util.Map.of("type", "object"),
-    ),
-    JList.of("path", "model_name"),
-    java.lang.Boolean.TRUE,    // extra props allowed (forward-compat: extra options)
-    java.util.Map.of(),
-    java.util.Map.of(),
-  )
+  // (The `introspectSchema` definition lives in the companion `Introspect`
+  // object — see below. It's referenced from `registerSpec`.)
 
   // ---------------------------------------------------------------------------
   // Helpers — derive inventory + warnings from the YAML
