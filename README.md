@@ -300,6 +300,62 @@ flights.query(
 ).execute(spark)
 ```
 
+### Querying from a notebook via `spark.sql(...)`
+
+For notebook users (Jupyter, Databricks, Zeppelin) and any SQL-first consumer
+(BI tools via Spark Thrift Server, dbt, etc.), a compiled semantic model can
+be registered as a Spark temp view and queried with plain SQL.
+
+```scala
+// One-time setup: register the model as a Spark temp view
+implicit val spark: SparkSession = ...
+val flights = YamlLoader.load("flights.yml", dataConfig)("flights")
+flights.createOrReplaceTempView("flights")   // session-scoped
+
+// Now any cell, any language, any tool can query the model:
+spark.sql("SELECT carrier, total_passengers FROM flights GROUP BY carrier")
+```
+
+The view is the **compiled output** of the model — joins, pre-join filters,
+dimensions, base measures, and calc measures are all baked in. SQL consumers
+see a clean relational view, not the raw source table.
+
+**"What can I query?" — discovery.** Before writing SQL, a consumer needs to
+know what dimensions and measures the model exposes. Use `schema(spark)`:
+
+```scala
+flights.schema(spark).show(false)
+// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
+// |model_name |model_description  |field_name |field_type|description                |metadata_keys       |...
+// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
+// |flights    |Flight facts:...   |carrier    |dimension |Airline carrier code       |owner,tags          |...
+// |flights    |Flight facts:...   |origin     |dimension |Origin airport code        |owner,tags          |...
+// |flights    |Flight facts:...   |flight_date|dimension |Scheduled flight date      |null                |...
+// |flights    |Flight facts:...   |total_passengers|measure|Total passengers across...|owner,unit,aggregation|...
+// |flights    |Flight facts:...   |flight_count   |measure|Number of flights (rows)...|owner,unit,aggregation|...
+// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
+```
+
+The same metadata is also served by the MCP server's `describe_model` tool
+and rendered as Markdown via `okfgen` (see [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md)).
+Pick the surface that fits your tool.
+
+**Temp view scope.** Three variants map to standard Spark conventions:
+
+| Method | Scope | Conflict policy |
+|---|---|---|
+| `createOrReplaceTempView(name)` | session | replaces if exists |
+| `createTempView(name)` | session | throws if exists |
+| `createOrReplaceGlobalTempView(name)` | cluster (across sessions) | replaces if exists |
+
+All three take `(implicit spark: SparkSession)` — call from inside a
+`SparkSession.builder()` block.
+
+**Limitations.** A registered view has a single fixed shape — the grain at
+which the model was compiled. SQL consumers can't switch grains in-band
+(`SELECT ... WHERE grain = 'monthly'`); use the typed `atTimeGrain(...)` API
+or build separate views for each grain you need.
+
 ### Typed queries (compile-time safety)
 
 The string-based API above is convenient but typo-prone — a wrong field name is a runtime
