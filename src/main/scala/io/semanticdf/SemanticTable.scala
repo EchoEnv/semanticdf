@@ -623,6 +623,23 @@ final class SemanticTable private[semanticdf] (
     * `SemanticMeasure`) because they aren't declared anywhere — adding them to
     * the catalog is a separate, additive feature.
     *
+    * ==Chaining==
+    *
+    * Calling `withTransforms` multiple times composes all the transforms into
+    * a single [[SemanticTransformsOp]] layer, applied in declaration order at
+    * `toDataFrame(spark)` time. The earlier transforms are NOT replaced — they
+    * compose with the new ones. This is the same `withColumn`-chain semantics
+    * you'd get in plain Spark, just deferred.
+    *
+    * {{{
+    *   st
+    *     .withTransforms(Transform("a", t => t("v") + 1))   // applied first
+    *     .withTransforms(Transform("b", t => t("a") * 2))   // applied second, sees `a`
+    * }}}
+    *
+    * If transform B references a column added by transform A, declare A first
+    * (the composition preserves declaration order).
+    *
     * @example
     * {{{
     * val orders = ...
