@@ -4,6 +4,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.expr
 import org.yaml.snakeyaml.Yaml
 
+import scala.collection.immutable.ListMap
 import scala.jdk.CollectionConverters._
 
 /** Declarative YAML model loader — defines semantic models in a config file, for
@@ -229,17 +230,25 @@ object YamlLoader {
     }
     if (raw == null)
       throw new IllegalArgumentException(s"YAML file '$path' is empty or could not be parsed.")
-    raw.asScala.view.mapValues(_.asInstanceOf[AnyRef]).toMap.map { case (k, v) =>
-      k -> toScalaMap(v)
-    }
+    // Build a ListMap (not the default HashMap) so model iteration order
+    // matches YAML declaration order — the transforms / measures /
+    // calculated_measures fold-lefts depend on it (a later entry may
+    // reference an earlier entry's output). For >4 entries Scala's default
+    // immutable.Map is a HashMap, which drops insertion order.
+    ListMap.from(raw.asScala.iterator.map { case (k, v) =>
+      k -> toScalaMap(v.asInstanceOf[AnyRef])
+    })
   }
 
-  /** Recursively convert SnakeYAML's java.util.LinkedHashMap nests to Scala Maps. */
+  /** Recursively convert SnakeYAML's java.util.LinkedHashMap nests to Scala
+    * [[ListMap]]s so that declaration order is preserved. Order matters for
+    * the `transforms` / `measures` / `calculated_measures` fold-lefts, where
+    * a later entry may reference an earlier entry's output column. */
   private def toScalaMap(v: AnyRef): Map[String, Any] = v match {
     case jm: java.util.Map[_, _] =>
-      jm.asScala.view.map { case (k, valv) =>
+      ListMap.from(jm.asScala.iterator.map { case (k, valv) =>
         k.toString -> toScalaVal(valv.asInstanceOf[AnyRef])
-      }.toMap
+      })
     case other =>
       throw new IllegalArgumentException(
         s"Expected a YAML mapping but got ${other.getClass.getSimpleName}: $other")
@@ -276,10 +285,11 @@ object YamlLoader {
   }
 
   /** Convert nested java.util.Map / java.util.List to Scala equivalents, leaving
-    * scalars (String, Int, Boolean, etc.) untouched. */
+    * scalars (String, Int, Boolean, etc.) untouched. Nested maps become
+    * [[ListMap]]s to preserve YAML declaration order (see [[toScalaMap]]). */
   private def toScalaVal(v: AnyRef): Any = v match {
     case jm: java.util.Map[_, _] =>
-      jm.asScala.view.map { case (k, vv) => k.toString -> toScalaVal(vv.asInstanceOf[AnyRef]) }.toMap
+      ListMap.from(jm.asScala.iterator.map { case (k, vv) => k.toString -> toScalaVal(vv.asInstanceOf[AnyRef]) })
     case jl: java.util.List[_] =>
       jl.asScala.map(e => toScalaVal(e.asInstanceOf[AnyRef])).toSeq
     case null => null

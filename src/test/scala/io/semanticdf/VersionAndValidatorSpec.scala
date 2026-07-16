@@ -448,4 +448,64 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
     assert(models("flights").measures.keySet == Set(
       "flight_count", "total_passengers", "total_distance", "avg_per_flight", "pct_of_total"))
   }
+
+  // -------------------------------------------------------------------------
+  // 6. YAML declaration-order preservation (regression: HashMap dropped order)
+  // -------------------------------------------------------------------------
+  //
+  // YamlLoader.toScalaVal/toScalaMap convert SnakeYAML's order-preserving
+  // LinkedHashMap to a Scala immutable.Map. For >4 entries, .toMap produces
+  // a HashMap that does NOT preserve insertion order. The transforms /
+  // measures / calculated_measures fold-lefts all depend on declaration
+  // order (a later entry may reference an earlier entry's output). This
+  // broke nondeterministically whenever the HashMap iteration order put a
+  // dependent before its dependency. The fix: preserve order via ListMap.
+
+  test("YAML declaration order: 5-entry transform chain loads regardless of key hashes") {
+    // Each transform references the PREVIOUS transform's output column.
+    // This is a strict dependency chain — the only valid iteration order is
+    // t1 → t2 → t3 → t4 → t5. With the old HashMap conversion (5+ entries),
+    // at least one transform was validated before its dependency and the
+    // load threw. ListMap preserves declaration order, so all 5 resolve.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  transforms:
+        |    t1: "distance + 1"
+        |    t2: "t1 + 1"
+        |    t3: "t2 + 1"
+        |    t4: "t3 + 1"
+        |    t5: "t4 + 1"
+        |  measures:
+        |    grand_total: "sum(t5)"
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models("flights").measures.keySet == Set("grand_total"))
+  }
+
+  test("YAML declaration order: 5-entry measure chain loads regardless of key hashes") {
+    // Same pattern with measures: m2 references m1, m3 references m2, etc.
+    // (e.g. a window measure that ORDER BYs a prior aggregate). With 5+
+    // entries the old HashMap conversion reordered nondeterministically.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    m1: "sum(distance)"
+        |    m2: "rank() over (order by m1 desc)"
+        |    m3: "rank() over (order by m2 desc)"
+        |    m4: "rank() over (order by m3 desc)"
+        |    m5: "rank() over (order by m4 desc)"
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models("flights").measures.keySet == Set("m1", "m2", "m3", "m4", "m5"))
+  }
 }
