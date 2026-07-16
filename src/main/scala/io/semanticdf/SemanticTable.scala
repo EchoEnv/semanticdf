@@ -186,6 +186,9 @@ final class SemanticTable private[semanticdf] (
 
     // Hint is a Spark planner wrapper; semanticdflly a pass-through for non-compile concerns.
     case SemanticHintOp(src, _, _) => explainNode(src, sb, indent)
+
+    // Transforms are applied at compile time; for explain purposes, walk through to the source.
+    case SemanticTransformsOp(src, _) => explainNode(src, sb, indent)
   }
 
   /** Print the Spark physical plan after compiling the op tree.
@@ -475,6 +478,12 @@ final class SemanticTable private[semanticdf] (
         val inner = new SemanticTable(src).withDimensions(dims: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
 
+      // Transforms are applied at compile time; dims should attach to the underlying
+      // model so they're visible to the join/table op. Recurse and re-wrap.
+      case SemanticTransformsOp(src, transforms) =>
+        val inner = new SemanticTable(src).withDimensions(dims: _*)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable)
+
       case _ =>
         throw new IllegalStateException(
           s"withDimensions: unexpected root type ${root.getClass.getSimpleName}"
@@ -561,6 +570,12 @@ final class SemanticTable private[semanticdf] (
         val inner = new SemanticTable(src).withMeasures(measures: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
 
+      // Transforms are applied at compile time; measures should attach to the underlying
+      // model so they're visible to the join/table op. Recurse and re-wrap.
+      case SemanticTransformsOp(src, transforms) =>
+        val inner = new SemanticTable(src).withMeasures(measures: _*)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable)
+
       case _ =>
         throw new IllegalStateException(
           s"withMeasures: unexpected root type ${root.getClass.getSimpleName}"
@@ -628,6 +643,11 @@ final class SemanticTable private[semanticdf] (
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
+
+      // Chained transforms: the new transforms compose with the existing layer.
+      case SemanticTransformsOp(src, existing) =>
+        val inner = new SemanticTable(src).withTransforms(transforms: _*)
+        new SemanticTable(SemanticTransformsOp(inner.root, existing ++ transforms), postAggPredicates, version, sourceTable)
 
       case _ =>
         throw new IllegalStateException(
@@ -1001,6 +1021,7 @@ final class SemanticTable private[semanticdf] (
     case SemanticOrderByOp(src, _)    => new SemanticTable(src).resolveDimension(name)
     case SemanticLimitOp(src, _)      => new SemanticTable(src).resolveDimension(name)
     case SemanticHintOp(src, _, _)    => new SemanticTable(src).resolveDimension(name)
+    case SemanticTransformsOp(src, _) => new SemanticTable(src).resolveDimension(name)
     case _ => SemanticOp.rootModel(root).flatMap(_.dimensions.get(name))
   }
 
@@ -1012,6 +1033,9 @@ final class SemanticTable private[semanticdf] (
       new SemanticTable(src).resolveAllMeasureNames
     case SemanticHintOp(src, _, _) =>
       // Hint is a Spark planner wrapper; recurse to find the underlying model.
+      new SemanticTable(src).resolveAllMeasureNames
+    case SemanticTransformsOp(src, _) =>
+      // Transforms don't change the measure catalog; recurse to the source.
       new SemanticTable(src).resolveAllMeasureNames
     case _ =>
       SemanticOp.rootModel(root).map(_.measures.keySet).getOrElse(Set.empty)
@@ -1043,6 +1067,9 @@ final class SemanticTable private[semanticdf] (
         )
       // Pre-join row filters are transparent — unwrap to find the underlying table.
       case SemanticRowFilterOp(src, _, _, _, _) =>
+        new SemanticTable(src).requireRoot(label)
+      // Transforms are applied at compile time; unwrap to find the underlying table.
+      case SemanticTransformsOp(src, _) =>
         new SemanticTable(src).requireRoot(label)
       // Query wrappers (WHERE / ORDER BY / LIMIT / HINT) layer over the model —
       // they don't expose a SemanticTableOp root, so users must join first.
@@ -1115,6 +1142,7 @@ final class SemanticTable private[semanticdf] (
     case SemanticLimitOp(src, _)           => collectJoins(src)
     case SemanticAggregateOp(src, _, _)    => collectJoins(src)
     case SemanticHintOp(src, _, _)         => collectJoins(src)
+    case SemanticTransformsOp(src, _)      => collectJoins(src)  // transforms are transparent
     case _: SemanticTableOp                => Nil
   }
 
@@ -1245,6 +1273,7 @@ final class SemanticTable private[semanticdf] (
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(root)
     val allMsMap      = allMs.toMap
@@ -1311,6 +1340,8 @@ final class SemanticTable private[semanticdf] (
     case SemanticOrderByOp(src, _) => new SemanticTable(src).resolveRootModel
     case SemanticLimitOp(src, _)   => new SemanticTable(src).resolveRootModel
     case SemanticHintOp(src, _, _) => new SemanticTable(src).resolveRootModel
+    // Transforms are transparent — they don't change the declared model.
+    case SemanticTransformsOp(src, _) => new SemanticTable(src).resolveRootModel
   }
 
   override def toString: String = s"SemanticTable(${root.getClass.getSimpleName})"
@@ -1337,6 +1368,7 @@ final class SemanticTable private[semanticdf] (
     case SemanticOrderByOp(src, _)      => collectFilters(src)
     case SemanticLimitOp(src, _)        => collectFilters(src)
     case SemanticHintOp(src, _, _)      => collectFilters(src)
+    case SemanticTransformsOp(src, _)   => collectFilters(src)  // transforms are transparent
     case _                              => Nil
   }
 
@@ -1494,6 +1526,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         walk(src)
       case SemanticLimitOp(src, _)     => walk(src)
       case SemanticHintOp(src, _, _)   => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(st.root)
 
@@ -1534,6 +1567,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
@@ -1556,6 +1590,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _)  => walk(src)
       case SemanticLimitOp(src, _)    => walk(src)
       case SemanticHintOp(src, _, _)  => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
@@ -1575,6 +1610,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticLimitOp(src, _)    => walk(src)
       case _: SemanticTableOp         => // leaf
       case SemanticHintOp(src, _, _)  => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
@@ -1603,6 +1639,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticLimitOp(src, _)   => walk(src)
       case _: SemanticTableOp        => // leaf
       case SemanticHintOp(src, _, _) => walk(src)
+      case SemanticTransformsOp(src, _) => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
@@ -1624,6 +1661,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticLimitOp(src, _)        => walk(src)
       case _: SemanticTableOp             => // leaf
       case SemanticHintOp(src, _, _)      => walk(src)
+      case SemanticTransformsOp(src, _)   => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
@@ -1651,6 +1689,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _)      => findAggregate(src)
       case SemanticLimitOp(src, _)        => findAggregate(src)
       case SemanticHintOp(src, _, _)      => findAggregate(src)
+      case SemanticTransformsOp(src, _)   => findAggregate(src)  // transforms are transparent
       case _                             => None
     }
     findAggregate(st.root) match {
@@ -1727,6 +1766,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
         walkDirect(src)
       case SemanticLimitOp(src, _)     => walkDirect(src)
       case SemanticHintOp(src, _, _)   => walkDirect(src)
+      case SemanticTransformsOp(src, _) => walkDirect(src)  // transforms are transparent
       case _: SemanticJoinOp           =>
       case _: SemanticTableOp          =>
     }
@@ -1952,6 +1992,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
       case SemanticOrderByOp(src, _)      => walk(src)
       case SemanticLimitOp(src, _)        => walk(src)
       case SemanticHintOp(src, _, _)      => walk(src)
+      case SemanticTransformsOp(src, _)   => walk(src)  // transforms are transparent
     }
     walk(st.root)
     acc.toSeq
