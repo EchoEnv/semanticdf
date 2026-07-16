@@ -3,7 +3,7 @@ type: SemanticTable
 title: Patients
 description: Cleansed patient master data
 resource: file://examples/hospital/models/patients.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-16T07:25:17Z
 tags: [semantic-table]
 ---
 
@@ -20,12 +20,6 @@ tags: [semantic-table]
 | mrn | dimension | `mrn` | Medical Record Number | — |
 | patient_id | dimension | `patient_id` | Patient ID (primary key) | — |
 | patient_count | measure | `count(1)` | Number of unique patients in the group | — |
-
-# Calculated measures
-
-| name | kind | expr | description | metadata |
-|------|------|------|-------------|----------|
-| age_years | calc | `2024 - year(date_of_birth)` | Patient age in years (computed against 2024) | — |
 
 # Examples
 

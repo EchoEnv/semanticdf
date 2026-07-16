@@ -230,9 +230,20 @@ any previously-declared transforms (for `transforms:` and `measures:`)
 and previously-declared measures (for `measures:` referencing other
 measures, common in window-function ORDER BYs). A typo fails fast at
 load time with a clear error, not later at first query time as a
-cryptic Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION`. See
-[`ExpressionValidator`](src/main/scala/io/semanticdf/ExpressionValidator.scala)
-for the full visibility rules.
+cryptic Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION`.
+
+`calculated_measures:` are validated separately by `CalcExpr.validateReferences`
+(the CalcExpr DSL is arithmetic over already-aggregated measures, with
+`all(name)` for percent-of-total — a different parser). Same fail-fast
+guarantee: a typo in a referenced measure name or `all()` arg throws
+`IllegalArgumentException` at `YamlLoader.load(...)` instead of surfacing
+as a cryptic `UnknownFieldError` at query time. Calc measures can
+reference base measures and earlier-declared calc measures (in
+declaration order).
+
+See [`ExpressionValidator`](src/main/scala/io/semanticdf/ExpressionValidator.scala)
+and [`CalcExpr`](src/main/scala/io/semanticdf/CalcExpr.scala) for the
+full visibility rules.
 
 ### Joins (`join_one` / `join_many` / `join_cross`)
 

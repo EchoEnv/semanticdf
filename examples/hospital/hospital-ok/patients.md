@@ -25,7 +25,7 @@ tags: [semantic-table]
 
 | name | kind | expr | description | metadata |
 |------|------|------|-------------|----------|
-| age_years | calc | `2024 - year(date_of_birth)` | Patient age in years (computed against 2024) | — |
+| patient_count | base | `count(1)` | Number of unique patients in the group | — |
 
 # Examples
 

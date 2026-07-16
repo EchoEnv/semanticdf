@@ -312,4 +312,101 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
     val models = YamlLoader.load(path, flightsTables)
     assert(models.contains("flights"))
   }
+
+  // ---------------------------------------------------------------------------
+  // 5. Calc-measure validation — calculated_measures: typos caught at load time
+  // ---------------------------------------------------------------------------
+  //
+  // The CalcExpr DSL (arithmetic over already-aggregated measures, with
+  // `all(name)` for percent-of-total) is parsed up-front so a typo in a
+  // referenced measure name fails fast instead of surfacing as a cryptic
+  // UnknownFieldError at query time.
+
+  test("CalcValidator: calc measure with a typo in a referenced measure name is rejected at load time") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_passengers: "sum(passengers)"
+        |  calculated_measures:
+        |    avg_per_passenger:
+        |      expr: "total_pax / flight_count"  # total_pax doesn't exist
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("total_pax"),
+      s"Expected missing-measure error mentioning 'total_pax', got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("calculated_measures"),
+      s"Expected error to mention 'calculated_measures', got: ${ex.getMessage}")
+  }
+
+  test("CalcValidator: calc measure with a typo in an `all()` arg is rejected at load time") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_passengers: "sum(passengers)"
+        |  calculated_measures:
+        |    pct_of_total:
+        |      expr: "total_passengers / all(total_pax)"  # total_pax doesn't exist
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("total_pax"),
+      s"Expected missing-measure error mentioning 'total_pax', got: ${ex.getMessage}")
+  }
+
+  test("CalcValidator: a calc can reference a previously-declared calc measure") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_passengers: "sum(passengers)"
+        |  calculated_measures:
+        |    avg_per_flight:
+        |      expr: "total_passengers / flight_count"
+        |    pct_of_total_avg:
+        |      expr: "avg_per_flight / all(avg_per_flight)"  # refs earlier calc
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models("flights").measures.keySet == Set(
+      "flight_count", "total_passengers", "avg_per_flight", "pct_of_total_avg"))
+  }
+
+  test("CalcValidator: valid calc expressions load cleanly") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_passengers: "sum(passengers)"
+        |    total_distance: "sum(distance)"
+        |  calculated_measures:
+        |    avg_per_flight:
+        |      expr: "total_passengers / flight_count"
+        |    pct_of_total:
+        |      expr: "total_passengers / all(total_passengers)"
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models("flights").measures.keySet == Set(
+      "flight_count", "total_passengers", "total_distance", "avg_per_flight", "pct_of_total"))
+  }
 }
