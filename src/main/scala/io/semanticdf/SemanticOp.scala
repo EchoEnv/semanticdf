@@ -31,6 +31,7 @@ object SemanticOp {
     case SemanticOrderByOp(src, _)      => rootModel(src)
     case SemanticLimitOp(src, _)        => rootModel(src)
     case SemanticHintOp(src, _, _)      => rootModel(src)
+    case SemanticTransformsOp(src, _)   => rootModel(src)  // transforms are transparent — they don't change the underlying model
   }
 }
 
@@ -487,6 +488,47 @@ final case class SemanticHintOp(
   override def compile(spark: SparkSession): DataFrame =
     if (params.isEmpty) source.compile(spark).hint(strategy)
     else                 source.compile(spark).hint(strategy, params: _*)
+}
+
+/** Per-row transforms applied at compile time (Phase 2: `withTransforms`).
+  *
+  * Holds the transform list and applies them to `source.compile(spark)` lazily,
+  * one `withColumn` per transform in declaration order. The transforms are
+  * NOT applied when the op is built — they're applied when the consumer calls
+  * `toDataFrame(spark)` (or any other terminal that traverses to this op).
+  *
+  * ==Why a dedicated op (not eager `withColumn` in `SemanticTable.withTransforms`)==
+  *
+  * Without this op, `withTransforms` on a join model had to compile the join
+  * immediately to get the joined DataFrame (so it could `withColumn` against
+  * it). That broke the lazy contract: `SparkSession.active` was called as a
+  * side effect (auto-creating a default session if none was set), and the join
+  * was forced to build its logical plan at op-tree construction time. Every
+  * other op in the tree is a passthrough that defers compilation to the
+  * terminal; this op restores the same pattern for transforms.
+  *
+  * ==What is NOT in this op==
+  *
+  * Transform outputs (e.g. `Transform("los_days", t => datediff(...))`) are
+  * DataFrame columns, NOT catalog dimensions or measures. They cannot be
+  * referenced via typed refs (`SemanticDimension`/`SemanticMeasure`); users
+  * reference them by string in subsequent measure/dimension expressions,
+  * just as they would reference any source column. Adding transform outputs
+  * to the catalog is a separate, additive feature.
+  *
+  * Tree walkers treat this op as a passthrough — recurse to `source` for
+  * dimensions, measures, joins, filters. */
+final case class SemanticTransformsOp(
+    source: SemanticOp,
+    transforms: Seq[Transform],
+) extends SemanticOp {
+  override def compile(spark: SparkSession): DataFrame = {
+    val base = source.compile(spark)
+    transforms.foldLeft(base) { (currentDf, t) =>
+      val scope = new BaseScope(currentDf)
+      currentDf.withColumn(t.name, t.expr(scope))
+    }
+  }
 }
 
 /** A merged model assembled from two joined tables. Used by [[SemanticAggregateOp]]
