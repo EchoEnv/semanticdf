@@ -3,7 +3,7 @@ type: SemanticTable
 title: Patients
 description: Cleansed patient master data
 resource: file://examples/hospital/models/patients.yml
-timestamp: 2026-07-16T07:25:17Z
+timestamp: 2026-07-16T07:42:42Z
 tags: [semantic-table]
 ---
 
