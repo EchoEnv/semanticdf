@@ -3,7 +3,7 @@ type: SemanticTable
 title: Orders
 description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
 resource: file://examples/pipeline/models/orders.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-16T18:33:15Z
 tags: [identifier, semantic-table]
 ---
 
