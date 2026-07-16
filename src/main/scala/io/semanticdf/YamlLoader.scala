@@ -345,6 +345,12 @@ object YamlLoader {
 
     var model = toSemanticTable(df, name = Some(name), description = description, sourceTable = Some(tableName))
 
+    // Cumulative set of columns visible at the current evaluation point. Starts
+    // with the source DataFrame's columns; grows as transforms are declared.
+    // Used by ExpressionValidator to fail fast on typos in dim/transform/measure
+    // expressions at model-load time instead of at first query time.
+    var transformOutputs: Set[String] = df.columns.toSet
+
     // Optional `version:` field at the top of the model block. Non-negative integer;
     // 0 (default) means "pre-versioning". See mcp-contract.md, "Result envelope".
     val declaredVersion: Int = cfg.get("version") match {
@@ -359,28 +365,51 @@ object YamlLoader {
     }
     if (declaredVersion != 0) model = model.version(declaredVersion)
 
+    // Source columns form the base visibility set. Every expression in
+    // dimensions / transforms / measures must resolve against this set
+    // (or against earlier transforms, in the case of later transforms /
+    // measures). Validated up-front by ExpressionValidator at model-load time.
+    val sourceColumns: Set[String] = df.columns.toSet
+
     cfg.get("dimensions").foreach { dimsRaw =>
       val dims = asStringToAnyMap(dimsRaw, s"model '$name' dimensions")
       model = model.withDimensions(dims.map { case (dName, dCfg) =>
-        buildDimension(dName, dCfg)
+        buildDimension(dName, dCfg, sourceColumns, name)
       }.toSeq: _*)
     }
 
     // Transforms must be applied BEFORE measures/calculated_measures are
     // added, so that the new columns are visible to the column-reference
     // probe in buildBaseMeasure. Order is preserved from the YAML.
+    //
+    // Each transform's `expr` is validated against the cumulative column set
+    // (source + previously-declared transforms), so a typo in a later transform
+    // that references an earlier transform's output is caught at load time.
     cfg.get("transforms").foreach { transformsRaw =>
       val transforms = asStringToAnyMap(transformsRaw, s"model '$name' transforms")
-      model = model.withTransforms(transforms.map { case (tName, tCfg) =>
-        buildTransform(tName, tCfg)
-      }.toSeq: _*)
+      val (builtTransforms, finalColumns) = transforms.foldLeft((Vector.empty[Transform], sourceColumns)) {
+        case ((acc, visible), (tName, tCfg)) =>
+          val (t, tCols) = buildTransform(tName, tCfg, visible, name)
+          (acc :+ t, tCols)
+      }
+      model = model.withTransforms(builtTransforms: _*)
+      // Capture for measure validation below.
+      transformOutputs = finalColumns
     }
 
     cfg.get("measures").foreach { measuresRaw =>
       val measures = asStringToAnyMap(measuresRaw, s"model '$name' measures")
-      model = model.withMeasures(measures.map { case (mName, mCfg) =>
-        buildBaseMeasure(mName, mCfg)
-      }.toSeq: _*)
+      // Each measure's expr may reference SOURCE columns, TRANSFORM outputs, AND
+      // previously-declared MEASURES (common for window-function measures that
+      // reference an aggregate measure in their ORDER BY: e.g.
+      // `rank() over (order by total_passengers desc)`). The validator needs
+      // all three sets; track the accumulated measure names in the fold.
+      val (builtMeasures, _) = measures.foldLeft((Vector.empty[Measure], transformOutputs)) {
+        case ((acc, visible), (mName, mCfg)) =>
+          val m = buildBaseMeasure(mName, mCfg, visible, name)
+          (acc :+ m, visible + mName)
+      }
+      model = model.withMeasures(builtMeasures: _*)
     }
 
     cfg.get("calculated_measures").foreach { calcsRaw =>
@@ -441,9 +470,18 @@ object YamlLoader {
     * - Simple column name → scope-based resolution (`t => t("col")`) so the framework's
     *   resolvability probing (join pre-agg) produces clean errors.
     * - Complex SQL expression → `functions.expr(sql)` (derived dimensions).
+    *
+    * The expr is validated up-front (see [[ExpressionValidator]]) so a typo in
+    * the column reference fails fast at model-load time, not at first query.
     */
-  private def buildDimension(name: String, cfg: Any): Dimension = {
+  private def buildDimension(
+      name: String,
+      cfg: Any,
+      sourceColumns: Set[String],
+      modelName: String,
+  ): Dimension = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "dimension", name)
+    ExpressionValidator.validate(exprStr, sourceColumns, "dimension", modelName, name)
     val metadata = metadataFromYaml(extra.get("metadata"))
     val isTimeDim = extra.getOrElse("is_time_dimension", false).asInstanceOf[Boolean]
     val isEntity = extra.getOrElse("is_entity", false).asInstanceOf[Boolean]
@@ -471,10 +509,22 @@ object YamlLoader {
     * The expr is always passed through `functions.expr()` (Spark's full SQL
     * parser) — transforms can use per-row functions (datediff, case-when)
     * and window functions (lag, lead, row_number) which the CalcExpr
-    * parser for `calculated_measures:` doesn't support. */
-  private def buildTransform(name: String, cfg: Any): Transform = {
+    * parser for `calculated_measures:` doesn't support.
+    *
+    * The expr is validated up-front against `visibleColumns` (source columns
+    * plus any previously-declared transforms). Returns the built Transform and
+    * the augmented column set (transform's name is added as a new visible
+    * column for subsequent transforms and measures).
+    */
+  private def buildTransform(
+      name: String,
+      cfg: Any,
+      visibleColumns: Set[String],
+      modelName: String,
+  ): (Transform, Set[String]) = {
     val (exprStr, description, _) = parseMetricConfig(cfg, "transform", name)
-    Transform(name, _ => expr(exprStr), description)
+    ExpressionValidator.validate(exprStr, visibleColumns, "transform", modelName, name)
+    (Transform(name, _ => expr(exprStr), description), visibleColumns + name)
   }
 
   /** Build a base [[Measure]] from the `measures:` section.
@@ -485,9 +535,18 @@ object YamlLoader {
     * on each side by calling `m.expr(scope)` and catching `UnknownFieldError`. A bare
     * `_ => expr(sql)` would NOT throw (Spark's `expr()` is lazy), so every base measure
     * would be considered resolvable on both sides of a join → duplicate columns.
-    * Probing column refs through the scope makes the resolvability test accurate. */
-  private def buildBaseMeasure(name: String, cfg: Any): Measure = {
+    * Probing column refs through the scope makes the resolvability test accurate.
+    *
+    * The expr is validated up-front against `visibleColumns` (source columns
+    * plus any transform outputs) so a typo fails fast at model-load time. */
+  private def buildBaseMeasure(
+      name: String,
+      cfg: Any,
+      visibleColumns: Set[String],
+      modelName: String,
+  ): Measure = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "measure", name)
+    ExpressionValidator.validate(exprStr, visibleColumns, "measure", modelName, name)
     val metadata = metadataFromYaml(extra.get("metadata"))
     val colRefs = extractColumnRefs(exprStr)
     Measure(name, t => {

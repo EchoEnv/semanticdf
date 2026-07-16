@@ -31,6 +31,12 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     "carriers_tbl" -> carriersTable,
   )
 
+  /** Tables fixture with a `ts` timestamp column for time-dimension tests.
+    * Uses the [[flightsWithTimeDf]] fixture (3 months × 6 carriers, 18 rows). */
+  private def flightsTimeTables: Map[String, DataFrame] = Map(
+    "flights_ts_tbl" -> flightsWithTimeDf,
+  )
+
   private def writeYaml(content: String): String = {
     val f = File.createTempFile("semanticdf-test", ".yml")
     f.deleteOnExit()
@@ -444,19 +450,19 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     val path = writeYaml(
       """
         |flights:
-        |  table: flights_tbl
+        |  table: flights_ts_tbl
         |  dimensions:
         |    carrier: carrier
-        |    dep_time:
-        |      expr: dep_time
+        |    ts:
+        |      expr: ts
         |      is_time_dimension: true
         |      smallest_time_grain: day
         |  measures:
         |    flight_count: "count(1)"
         |""".stripMargin)
 
-    val flights = YamlLoader.load(path, flightsTables)("flights")
-    val depTime = flights.findDimension("dep_time")
+    val flights = YamlLoader.load(path, flightsTimeTables)("flights")
+    val depTime = flights.findDimension("ts")
     depTime shouldBe defined
     depTime.get.isTimeDimension shouldEqual true
     depTime.get.smallestTimeGrain shouldEqual Some("day")
