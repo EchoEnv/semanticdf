@@ -588,10 +588,40 @@ final class SemanticTable private[semanticdf] (
     * `derived_table` — per-row logic (`datediff`, `case when ...`, window
     * functions) that doesn't fit the `agg()` aggregate context.
     *
-    * Transforms are applied to the source DataFrame once (at this call), in
-    * declaration order. If transform B references a column added by transform
-    * A, declare A first. The result replaces the source DataFrame on the
-    * root op; downstream measures/dimensions see the augmented schema.
+    * ==Lazy contract==
+    *
+    * Transforms are NOT applied when this method is called — they are wrapped
+    * in a [[SemanticTransformsOp]] and applied lazily when the consumer calls
+    * [[toDataFrame]] (or any other terminal that compiles the op tree). This
+    * preserves the lazy compile contract (DESIGN §4.4) — `toDataFrame(spark)` is
+    * the only place where Spark actually runs. Other passthrough ops
+    * ([[where]], [[orderBy]], [[limit]], etc.) follow the same pattern.
+    *
+    * ==Why a dedicated op (not eager `withColumn` in this method)==
+    *
+    * Before this refactor, `withTransforms` on a join model called
+    * `j.compile(SparkSession.active)` eagerly to get the joined DataFrame, then
+    * applied `withColumn` against it. That broke the lazy contract in two ways:
+    *
+    *   1. `SparkSession.active` is a side effect — it auto-creates a default
+    *      session if none is set. A consumer building a SemanticTable in a
+    *      context without a session (config loading, `validate()` calls,
+    *      catalog accessors) would silently get a Spark session.
+    *   2. The join was forced to build its logical plan at op-tree construction
+    *      time. Every other op in the tree is a passthrough that defers
+    *      compilation to `toDataFrame`.
+    *
+    * With [[SemanticTransformsOp]], transforms are applied at the terminal,
+    * consistent with the rest of the tree.
+    *
+    * ==Transform outputs are NOT in the catalog==
+    *
+    * The output of a transform (e.g. `Transform("los_days", t => datediff(...))`)
+    * is a DataFrame column, NOT a catalog dimension or measure. Users reference
+    * transform outputs by string in subsequent measure/dimension expressions.
+    * Transform outputs cannot be referenced via typed refs (`SemanticDimension` /
+    * `SemanticMeasure`) because they aren't declared anywhere — adding them to
+    * the catalog is a separate, additive feature.
     *
     * @example
     * {{{
@@ -607,25 +637,22 @@ final class SemanticTable private[semanticdf] (
     if (transforms.isEmpty) return this
     root match {
       case t: SemanticTableOp =>
-        val transformedDf = applyTransforms(t.table, transforms)
-        new SemanticTable(t.copy(table = transformedDf), postAggPredicates, version, sourceTable)
+        // Single-table models: wrap in a SemanticTransformsOp. The transforms
+        // are applied at toDataFrame() time, not now. This matches the lazy
+        // pattern used for joins below.
+        new SemanticTable(
+          SemanticTransformsOp(t, transforms),
+          postAggPredicates, version, sourceTable)
 
       case j: SemanticJoinOp =>
-        // Apply transforms to the joined table (j.left + j.right concatenated
-        // minus dup key cols — mirrors the pre-agg DataFrame shape). For a
-        // typical use case (per-row transform on the joined data), this is
-        // what users want.
-        val joinedDf = j.compile(org.apache.spark.sql.SparkSession.active)
-        val transformedDf = applyTransforms(joinedDf, transforms)
-        // The transformed DataFrame supersedes the join's role as the source
-        // for downstream measures. We replace the join with a SemanticTableOp
-        // holding the transformed DataFrame (the join itself is no longer
-        // needed since transforms have already been resolved).
+        // Joined models: wrap in a SemanticTransformsOp. CRUCIALLY, we do NOT
+        // call j.compile(...) here — that would force the join to build its
+        // logical plan now and would trigger SparkSession.active (the
+        // side effect we're fixing). The join is compiled at toDataFrame()
+        // time, and the transforms are applied then too.
         new SemanticTable(
-          SemanticTableOp(transformedDf, j.leftRoot.name, j.leftRoot.description),
-          postAggPredicates,
-          version,
-          sourceTable)
+          SemanticTransformsOp(j, transforms),
+          postAggPredicates, version, sourceTable)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
@@ -653,17 +680,6 @@ final class SemanticTable private[semanticdf] (
         throw new IllegalStateException(
           s"withTransforms: unexpected root type ${root.getClass.getSimpleName}"
         )
-    }
-  }
-
-  /** Apply a sequence of transforms to a DataFrame in declaration order. */
-  private def applyTransforms(
-      df: org.apache.spark.sql.DataFrame,
-      transforms: Seq[Transform],
-  ): org.apache.spark.sql.DataFrame = {
-    transforms.foldLeft(df) { (currentDf, t) =>
-      val scope = new BaseScope(currentDf)
-      currentDf.withColumn(t.name, t.expr(scope))
     }
   }
 
