@@ -16,15 +16,20 @@ tags: [identifier, semantic-table]
 | order_id | dimension | `order_id` | Unique order identifier | owner=data-platform-team; tags=[identifier] |
 | product | dimension | `product` | Product name | owner=data-platform-team |
 | status | dimension | `status` | Order status (shipped, pending, cancelled, returned) | owner=data-platform-team |
-| avg_order_value | measure | `total_revenue / order_count` | Average order value in USD | owner=finance-team; unit=USD |
 | order_count | measure | `count(1)` | Number of orders in this group | aggregation=count; owner=analytics-team; unit=count |
-| pct_of_total_revenue | measure | `total_revenue / all(total_revenue)` | Fraction of all revenue from this group | format=percent; owner=finance-team; unit=ratio |
 | total_revenue | measure | `sum(total_amount)` | Total revenue from this group | aggregation=sum; owner=finance-team; unit=USD |
 | total_units | measure | `sum(qty)` | Total units sold in this group | aggregation=sum; owner=analytics-team; unit=count |
 
 # Joins
 
 - **[customers](customers.md)** — one, on \`customer_id = customer_id\`
+
+# Calculated measures
+
+| name | kind | expr | description | metadata |
+|------|------|------|-------------|----------|
+| avg_order_value | calc | `total_revenue / order_count` | Average order value in USD | owner=finance-team; unit=USD |
+| pct_of_total_revenue | calc | `total_revenue / all(total_revenue)` | Fraction of all revenue from this group | format=percent; owner=finance-team; unit=ratio |
 
 # Examples
 

@@ -75,6 +75,13 @@ orders:
                 owner: analytics-team
                 unit: count
                 aggregation: sum
+        # NOTE: avg_order_value and pct_of_total_revenue are calculated
+        # measures (arithmetic over measures by name, including all() for
+        # percent-of-total). They live in calculated_measures: below, NOT
+        # here — measures: only accepts Spark SQL aggregates (sum, count,
+        # rank() over ...) and cannot parse the CalcExpr `all()` construct.
+
+    calculated_measures:
         avg_order_value:
             expr: "total_revenue / order_count"
             description: "Average order value in USD"

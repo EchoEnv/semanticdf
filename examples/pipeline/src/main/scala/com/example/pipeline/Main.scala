@@ -18,6 +18,19 @@ import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
   *   6. CATALOG  — register as temp views for downstream queries
   *   7. SEMANTIC — build YAML models on the parquet, run queries
   *
+  * ==Typed field references (v0.1.x typed API)==
+  *
+  * See the [[Refs]] object — phantom-typed witnesses for every dimension
+  * and measure used in the semantic queries. Downstream calls use the
+  * typed refs (groupByDimensions, aggregateMeasures, SortKey). A typo
+  * in a ref name is a compile error. See `examples/starter/Main.scala`
+  * and `docs/phase-E-plan.md` for the full story.
+  *
+  * Note: the pipeline steps 1-6 use raw Spark DataFrame APIs, not
+  * semanticdf — they're for transforming raw CSVs into parquet, not
+  * for running semantic queries. The typed refs are only relevant for
+  * the semantic queries in STEP 7.
+  *
   * Run with:
   *   1. mvn install the parent semanticdf project (so the local jar is available)
   *   2. From this directory: mvn scala:run -DmainClass=com.example.pipeline.Main
@@ -25,6 +38,34 @@ import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
   * Output (parquet tables and temp views) goes to ./output/
   */
 object Main {
+
+  // -----------------------------------------------------------------------
+  // Phantom-typed field references. Only the fields used in STEP 7
+  // (semantic queries) need typed refs. The pipeline steps use raw
+  // Spark DataFrame APIs on raw column names.
+  // -----------------------------------------------------------------------
+  object Refs {
+    // Dimensions (orders model)
+    sealed trait OrderId
+    sealed trait OrderDate
+    // Dimensions (joined from customers)
+    sealed trait Name
+    sealed trait City
+    sealed trait Country
+    // Measures (orders model)
+    sealed trait TotalRevenue
+    sealed trait OrderCount
+    sealed trait TotalUnits
+
+    implicit val orderId:      SemanticDimension[OrderId]      = SemanticDimension.of[OrderId]("order_id")
+    implicit val orderDate:    SemanticDimension[OrderDate]    = SemanticDimension.of[OrderDate]("order_date")
+    implicit val name:         SemanticDimension[Name]         = SemanticDimension.of[Name]("name")
+    implicit val city:         SemanticDimension[City]         = SemanticDimension.of[City]("city")
+    implicit val country:      SemanticDimension[Country]      = SemanticDimension.of[Country]("country")
+    implicit val totalRevenue:  SemanticMeasure[TotalRevenue]   = SemanticMeasure.of[TotalRevenue]("total_revenue")
+    implicit val orderCount:   SemanticMeasure[OrderCount]    = SemanticMeasure.of[OrderCount]("order_count")
+    implicit val totalUnits:   SemanticMeasure[TotalUnits]    = SemanticMeasure.of[TotalUnits]("total_units")
+  }
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
@@ -34,6 +75,9 @@ object Main {
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()
     try {
+      // Bring the typed refs into scope
+      import Refs._
+
       println("=" * 70)
       println("STEP 1: INGEST raw CSV")
       println("=" * 70)
@@ -129,35 +173,39 @@ object Main {
 
       println(s"  loaded ${models.size} semantic models: ${models.keys.mkString(", ")}")
 
-      // Query 1: Revenue per customer
+      // Query 1: Revenue per customer (joined orders + customers).
+      // groupByDimensions takes dimension refs only — the compiler rejects
+      // measure refs here. aggregateMeasures takes measure refs only.
       println("\n--- Q1: Revenue per customer (joined orders + customers) ---")
       orders
-        .groupBy("name", "city", "country")
-        .aggregate("total_revenue", "order_count", "total_units")
-        .toDataFrame(spark)
-        .orderBy(col("total_revenue").desc)
+        .groupByDimensions(name, city, country)
+        .aggregateMeasures(totalRevenue, orderCount, totalUnits)
+        .orderBy(SortKey.desc(totalRevenue))
+        .execute(spark)
         .show(10, false)
 
       // Query 2: Revenue per country
       println("\n--- Q2: Revenue per country ---")
       orders
-        .groupBy("country")
-        .aggregate("total_revenue", "order_count")
-        .toDataFrame(spark)
-        .orderBy(col("total_revenue").desc)
+        .groupByDimensions(country)
+        .aggregateMeasures(totalRevenue, orderCount)
+        .orderBy(SortKey.desc(totalRevenue))
+        .execute(spark)
         .show(false)
 
       // Query 3: Monthly trend
       println("\n--- Q3: Monthly revenue trend ---")
       orders
-        .atTimeGrain("order_date", "month")
-        .groupBy("order_date")
-        .aggregate("total_revenue", "order_count")
-        .toDataFrame(spark)
-        .orderBy("order_date")
+        .atTimeGrain(orderDate.name, "month")
+        .groupByDimensions(orderDate)
+        .aggregateMeasures(totalRevenue, orderCount)
+        .orderBy(SortKey.asc(orderDate))
+        .execute(spark)
         .show(false)
 
-      // Schema introspection — every field from every model as a DataFrame
+      // Schema introspection — every field from every model as a DataFrame.
+      // schema(spark) is a SemanticTable method that returns the catalog
+      // schema (one row per field, with type/description/metadata).
       println("\n--- Model schema (every field, full metadata) ---")
       val schema = orders.schema(spark)
       schema.show(50, false)
@@ -208,7 +256,11 @@ object Main {
   }
 
   // ---------------------------------------------------------------------------
-  // Pipeline steps
+  // Pipeline steps (STAGES 1-4 — pure Spark, not semanticdf)
+  //
+  // These transforms use raw column names, not typed refs — they're
+  // ETL helpers, not semantic queries. The typed refs in [[Refs]] are
+  // for the semantic queries in STEP 7.
   // ---------------------------------------------------------------------------
 
   /** Clean orders: drop null critical fields, dedupe, cast types, normalize strings. */
