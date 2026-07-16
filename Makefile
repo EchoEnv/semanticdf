@@ -41,6 +41,14 @@ okfgen: okfgen-build
 #
 # Generates into a temp dir, then `diff -ru` against the checked-in bundle.
 # Exits 0 if in sync, 1 if drift. Used by CI; safe to run locally.
+#
+# Timestamp lines are EXCLUDED from the comparison (-I flags). OkfGen embeds
+# the YAML file's last-git-commit timestamp in two places — the frontmatter
+# `timestamp:` field and the log.md `## <ISO-date>` header. These are derived
+# from git history, which is inherently non-reproducible across:
+#   - pre-commit generation (the YAML is dirty; git returns the PRIOR commit)
+#   - squash merges (GitHub creates a new commit with a new timestamp)
+# So the check verifies CONTENT only, not volatile metadata timestamps.
 # ---------------------------------------------------------------------------
 .PHONY: okfgen-check
 okfgen-check: okfgen-build
@@ -50,8 +58,8 @@ okfgen-check: okfgen-build
 	  mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
 	    -Dexec.args="okfgen --path $$d --out $$TMP/$$name"; \
 	done; \
-	if diff -ru "$$TMP" docs/agents/reference/ > "$$DIFF" 2>&1; then \
-	  echo "okfgen-check: bundle is in sync."; \
+	if diff -ru -I '^timestamp: ' -I '^## [0-9]' "$$TMP" docs/agents/reference/ > "$$DIFF" 2>&1; then \
+	  echo "okfgen-check: bundle is in sync (content; timestamps excluded)."; \
 	  exit 0; \
 	else \
 	  echo "okfgen-check: bundle is OUT OF DATE."; \
