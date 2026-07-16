@@ -20,11 +20,67 @@ import org.apache.spark.sql.functions._
   *   5. QUERIES — Q1 patient demographics, Q2 ALOS by department, Q3 30-day
   *      readmission rate
   *
+  * ==Typed field references (v0.1.x typed API)==
+  *
+  * See the [[Refs]] object — phantom-typed witnesses for every dimension
+  * and measure. Downstream calls use the typed refs (groupByDimensions,
+  * aggregateMeasures, SortKey, Predicate.Eq). A typo in a ref name is a
+  * compile error. See `examples/starter/Main.scala` and
+  * `docs/phase-E-plan.md` for the full story.
+  *
   * Run:
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.hospital.Main
   */
 object Main {
+
+  // -----------------------------------------------------------------------
+  // Phantom-typed field references. Name strings appear ONCE per field
+  // (in the implicit val below); downstream calls use typed refs.
+  // -----------------------------------------------------------------------
+  object Refs {
+    // patient model dimensions
+    sealed trait PatientId
+    sealed trait Mrn
+    sealed trait Gender
+    sealed trait Insurance
+    // patient model measures
+    sealed trait PatientCount
+    // encounter model dimensions
+    sealed trait EncounterId
+    sealed trait AdmissionDate
+    sealed trait Department
+    // encounter model measures
+    sealed trait EncounterCount
+    sealed trait TotalLos
+    sealed trait ExpiredCount
+    sealed trait AvgLos
+    // per-row columns used in Q3 (window/lag) — not in any catalog,
+    // but typed via SemanticDimension so Predicate.Eq accepts them.
+    sealed trait DaysSincePrev
+    sealed trait IsReadmission
+    // temporary measure added in Scala for Q3
+    sealed trait AnyReadmission
+
+    implicit val patientId:       SemanticDimension[PatientId]       = SemanticDimension.of[PatientId]("patient_id")
+    implicit val mrn:            SemanticDimension[Mrn]            = SemanticDimension.of[Mrn]("mrn")
+    implicit val gender:         SemanticDimension[Gender]         = SemanticDimension.of[Gender]("gender")
+    implicit val insurance:      SemanticDimension[Insurance]      = SemanticDimension.of[Insurance]("insurance")
+    implicit val patientCount:    SemanticMeasure[PatientCount]      = SemanticMeasure.of[PatientCount]("patient_count")
+
+    implicit val encounterId:     SemanticDimension[EncounterId]     = SemanticDimension.of[EncounterId]("encounter_id")
+    implicit val admissionDate:   SemanticDimension[AdmissionDate]   = SemanticDimension.of[AdmissionDate]("admission_date")
+    implicit val department:     SemanticDimension[Department]      = SemanticDimension.of[Department]("department")
+    implicit val encounterCount:  SemanticMeasure[EncounterCount]    = SemanticMeasure.of[EncounterCount]("encounter_count")
+    implicit val totalLos:        SemanticMeasure[TotalLos]          = SemanticMeasure.of[TotalLos]("total_los")
+    implicit val expiredCount:    SemanticMeasure[ExpiredCount]      = SemanticMeasure.of[ExpiredCount]("expired_count")
+    implicit val avgLos:          SemanticMeasure[AvgLos]            = SemanticMeasure.of[AvgLos]("avg_los")
+
+    // Q3 typed refs for the per-row readmission window columns.
+    implicit val daysSincePrev:   SemanticDimension[DaysSincePrev]   = SemanticDimension.of[DaysSincePrev]("days_since_prev")
+    implicit val isReadmission:   SemanticDimension[IsReadmission]   = SemanticDimension.of[IsReadmission]("is_readmission")
+    implicit val anyReadmission:  SemanticMeasure[AnyReadmission]     = SemanticMeasure.of[AnyReadmission]("any_readmission")
+  }
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession
@@ -35,6 +91,9 @@ object Main {
       .config("spark.sql.shuffle.partitions", "2")
       .getOrCreate()
     try {
+      // Bring the typed refs into scope
+      import Refs._
+
       println("=" * 70)
       println(
         "Hospital data management + cleansing — full ETL → semantic workflow"
@@ -63,12 +122,6 @@ object Main {
       println(s"  raw encounters:  ${rawEncounters.count()} rows")
       println(s"  diagnoses:        ${diagnoses.count()} rows")
 
-      // The pre-cleansed encounters CSV already has los_days, but the
-      // raw data doesn't — and the framework's Pass 1 only accepts
-      // aggregate functions in base measures, so we pre-compute los_days
-      // here (just like in the cleansed CSV). This mirrors the pattern
-      // used in the operations-analytics template.
-
       // ---------------------------------------------------------------------
       // 2. QUALITY REPORT — surface the data quality issues
       // ---------------------------------------------------------------------
@@ -76,7 +129,11 @@ object Main {
       println("STEP 2: Data quality report")
       println("=" * 70)
 
-      // Duplicate patients by (first_name, last_name, dob) — case-insensitive
+      // Duplicate patients by (first_name, last_name, dob) — case-insensitive.
+      // These use raw Spark DataFrame APIs (groupBy, count) — they're
+      // diagnostic queries, not semanticdf queries. The typed refs aren't
+      // applicable here because we're operating on raw (pre-cleansing) data
+      // and we don't want to build a semanticdf model just for diagnostics.
       val rawPatientsLower = rawPatients
         .withColumn("first_name", lower(col("first_name")))
         .withColumn("last_name", lower(col("last_name")))
@@ -106,15 +163,9 @@ object Main {
       println("=" * 70)
 
       // 3a. Normalize names to Title Case, then deduplicate by (name, dob).
-      //     dropDuplicates keeps the first occurrence (alphabetical by
-      //     patient_id in the natural order — for production you'd want
-      //     a stable ordering by ingest time).
       val normalizedPatients = rawPatients
         .withColumn("first_name", initcap(col("first_name")))
         .withColumn("last_name", initcap(col("last_name")))
-      // Identify duplicates and pick the canonical patient_id (lowest).
-      // Here, for simplicity, dropDuplicates drops all-but-one per
-      // (first_name, last_name, dob).
       val cleansedPatients = normalizedPatients
         .dropDuplicates("first_name", "last_name", "date_of_birth")
         // Fill missing MRNs with a generated value.
@@ -130,8 +181,7 @@ object Main {
             .otherwise(col("mrn"))
         )
 
-      // 3b. Remap encounter patient_ids to the primary (the canonical
-      //     patient_id from the dedup'd patients table). In a real pipeline
+      // 3b. Remap encounter patient_ids to the primary. In a real pipeline
       //     you'd do this with a join; here the raw data is already
       //     consistent with our dedup (P003, P004, P011 → P001, etc.).
       val cleansedEncounters = rawEncounters
@@ -169,25 +219,25 @@ object Main {
       // Q1: Patient demographics — by gender + by insurance.
       println("\n--- Q1: Patient demographics (by gender, by insurance) ---")
       patients
-        .groupBy("gender")
-        .aggregate("patient_count")
-        .toDataFrame(spark)
-        .orderBy("gender")
+        .groupByDimensions(gender)
+        .aggregateMeasures(patientCount)
+        .orderBy(SortKey.asc(gender))
+        .execute(spark)
         .show(false)
       patients
-        .groupBy("insurance")
-        .aggregate("patient_count")
-        .toDataFrame(spark)
-        .orderBy(col("patient_count").desc)
+        .groupByDimensions(insurance)
+        .aggregateMeasures(patientCount)
+        .orderBy(SortKey.desc(patientCount))
+        .execute(spark)
         .show(false)
 
       // Q2: ALOS by department.
       println("\n--- Q2: Average length of stay (ALOS) by department ---")
       encounters
-        .groupBy("department")
-        .aggregate("avg_los", "encounter_count")
-        .toDataFrame(spark)
-        .orderBy("department")
+        .groupByDimensions(department)
+        .aggregateMeasures(avgLos, encounterCount)
+        .orderBy(SortKey.asc(department))
+        .execute(spark)
         .show(false)
 
       // Q3: 30-day readmission rate. Per-encounter `days_since_prev` and
@@ -202,17 +252,17 @@ object Main {
       val encountersDf = encounters
         .toDataFrame(spark)
         .withColumn(
-          "days_since_prev",
+          daysSincePrev.name,
           datediff(
-            col("admission_date"),
-            lag(col("admission_date"), 1)
-              .over(Window.partitionBy("patient_id").orderBy("admission_date"))
+            col(admissionDate.name),
+            lag(col(admissionDate.name), 1)
+              .over(Window.partitionBy(patientId.name).orderBy(admissionDate.name))
           )
         )
         .withColumn(
-          "is_readmission",
+          isReadmission.name,
           when(
-            col("days_since_prev") > 0 && col("days_since_prev") <= 30,
+            col(daysSincePrev.name) > 0 && col(daysSincePrev.name) <= 30,
             lit(1)
           )
             .otherwise(lit(0))
@@ -225,13 +275,15 @@ object Main {
             "encounters_clean_csv" -> encountersDf
           )
         )("encounters")
-        .withMeasures(Measure("any_readmission", t => max(t("is_readmission"))))
+        .withMeasures(Measure(anyReadmission.name, t => max(t(isReadmission.name))))
       val perPatient = encountersWithReadmission
-        .groupBy("patient_id")
-        .aggregate("encounter_count", "any_readmission")
-        .toDataFrame(spark)
-      val multiEncounter = perPatient.filter(col("encounter_count") > 1)
-      val readmitted = multiEncounter.filter(col("any_readmission") === 1)
+        .groupByDimensions(patientId)
+        .aggregateMeasures(encounterCount, anyReadmission)
+        .execute(spark)
+      // Final ratio is computed in Scala because it crosses group boundaries
+      // (we need a count across all patients, not per-patient).
+      val multiEncounter = perPatient.filter(col(encounterCount.name) > 1)
+      val readmitted = multiEncounter.filter(col(anyReadmission.name) === 1)
       val rate =
         if (multiEncounter.count() > 0)
           readmitted.count().toDouble / multiEncounter.count().toDouble
