@@ -768,6 +768,10 @@ final case class SemanticAggregateOp(
       case SemanticRowFilterOp(s, _, _, _, _) => unwrap(s)
       case SemanticOrderByOp(s, _)         => unwrap(s)
       case SemanticLimitOp(s, _)           => unwrap(s)
+      // Transforms are transparent wrappers — they apply at compile time but
+      // don't change the declared model. Unwrap to find the underlying
+      // SemanticTableOp or SemanticJoinOp.
+      case SemanticTransformsOp(s, _)      => unwrap(s)
       case other                           => other
     }
     unwrap(src) match {
