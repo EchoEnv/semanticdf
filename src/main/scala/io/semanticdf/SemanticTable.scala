@@ -671,10 +671,17 @@ final class SemanticTable private[semanticdf] (
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
 
-      // Chained transforms: the new transforms compose with the existing layer.
+      // Chained transforms: append the new transforms to the existing layer.
+      // Do NOT recurse — recursion would re-enter the case below and create a
+      // new SemanticTransformsOp with only the new transforms, losing the
+      // existing ones. The passthrough ops above (filter/orderBy/etc.) DO
+      // recurse because their semantics are "re-apply the transformation to
+      // the underlying source", but transforms are cumulative — each call
+      // adds to the chain, not replaces it.
       case SemanticTransformsOp(src, existing) =>
-        val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticTransformsOp(inner.root, existing ++ transforms), postAggPredicates, version, sourceTable)
+        new SemanticTable(
+          SemanticTransformsOp(src, existing ++ transforms),
+          postAggPredicates, version, sourceTable)
 
       case _ =>
         throw new IllegalStateException(
