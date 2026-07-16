@@ -135,18 +135,13 @@ object Main {
       // t => date_trunc("month", t("signup_date"))).
       //
       // Note: the resulting DataFrame has a column literally named
-      // `customers.signup_date`. The typed SortKey reads the column name
-      // from the SemanticDimension witness — no backtick-escaping needed.
+      // `customers.signup_date`. The typed SortKey backtick-quotes names
+      // containing dots, so the join-prefixed dimension sorts correctly.
       println("\n--- Q2: Customer activity by signup-day cohort ---")
       orders
         .groupByDimensions(signupDate)
         .aggregateMeasures(orderCount, orderAmount)
-        // Dotted column name workaround: the typed SortKey reads the raw
-        // column name from the witness ("customers.signup_date"). Spark's
-        // `col(...)` API interprets `.` as a table.column qualifier and
-        // fails to resolve. We use the string-based orderBy with backtick
-        // escaping, which Spark interprets as one identifier.
-        .orderBy(SortKey.asc(s"`${signupDate.name}`"))
+        .orderBy(SortKey.asc(signupDate))
         .execute(spark)
         .show(20, false)
     } finally spark.stop()

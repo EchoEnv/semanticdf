@@ -300,4 +300,64 @@ class SemanticFieldSpec extends AnyFunSuite with SparkSessionFixture with Flight
     // here (depends on test fixture), just that the call type-checks.
     assert(out.length > 0)
   }
+
+  // -------------------------------------------------------------------------
+  // (8) SortKey with dotted (joined) dimension names — regression for the
+  //     col("alias.column") struct-qualifier bug. The fix backtick-quotes
+  //     names containing dots so Spark treats them as one identifier.
+  // -------------------------------------------------------------------------
+
+  private def yamlWithJoin = writeYaml(
+    """
+      |flights:
+      |  table: flights_tbl
+      |  dimensions:
+      |    carrier: carrier
+      |  measures:
+      |    flight_count: "count(1)"
+      |  joins:
+      |    carriers:
+      |      model: carriers
+      |      type: one
+      |      left_on: carrier
+      |      right_on: carrier
+      |carriers:
+      |  table: carriers_tbl
+      |  dimensions:
+      |    carrier: carrier
+      |    name: name
+      |""".stripMargin)
+
+  test("SortKey handles joined dimension names with dots (carriers.name)") {
+    // Joined dimensions are named `alias.column` by the join handler
+    // (e.g. "carriers.name"). Before the fix, col("carriers.name") was
+    // misinterpreted as a struct path and orderBy failed at runtime.
+    val m = YamlLoader.load(yamlWithJoin, flightsTables)("flights")
+
+    val ascRows = m.groupBy("carriers.name").aggregate("flight_count")
+      .orderBy(SortKey.asc("carriers.name"))
+      .toDataFrame(spark).collect()
+    // Carriers: American, United, Delta — sorted ascending by name.
+    assert(ascRows.map(_.getString(0)).toList == List("American", "Delta", "United"))
+
+    val descRows = m.groupBy("carriers.name").aggregate("flight_count")
+      .orderBy(SortKey.desc("carriers.name"))
+      .toDataFrame(spark).collect()
+    assert(descRows.map(_.getString(0)).toList == List("United", "Delta", "American"))
+  }
+
+  test("SortKey is backward-compatible with manually backtick-quoted names") {
+    // The customer-analytics example worked around the dotted-name bug by
+    // wrapping in backticks: SortKey.asc(s"`carrier`"). The fix detects
+    // already-quoted names and leaves them as-is (no double-wrap).
+    val m = YamlLoader.load(yamlWithAllFields, flightsTables)("flights")
+
+    val quoted = m.groupBy("carrier").aggregate("flight_count")
+      .orderBy(SortKey.asc("`carrier`"))
+      .toDataFrame(spark).collect()
+    val plain = m.groupBy("carrier").aggregate("flight_count")
+      .orderBy("carrier")
+      .toDataFrame(spark).collect()
+    assert(quoted.map(_.getString(0)).toList == plain.map(_.getString(0)).toList)
+  }
 }
