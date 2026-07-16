@@ -172,12 +172,18 @@ object Introspect {
     )
   }
 
-  /** Parse warnings out of the YAML header. Today `Introspector` doesn't
-    * emit explicit warning lines, so we return empty. The hook is in
-    * place: a future library change that writes lines like
-    * `# WARN: skipped field 'foo' (no classification)` will be picked up
-    * here without changing the rest of the handler. */
-  def parseWarnings(yaml: String): Seq[String] = Seq.empty
+  /** Parse warnings out of the YAML header. The Introspector emits
+    * `# WARN: field 'X' (type) was skipped — reason` lines for any field
+    * that didn't get classified as a dimension, measure, or join. Each
+    * WARN line becomes one entry in the returned seq (without the `# WARN:`
+    * prefix, per the contract response shape).
+    *
+    * The regex is anchored to the start of a line so the same string
+    * inside a quoted description doesn't accidentally match. */
+  def parseWarnings(yaml: String): Seq[String] = {
+    val warnRe = """(?m)^# WARN: (.+)$""".r
+    warnRe.findAllMatchIn(yaml).map(_.group(1)).toSeq
+  }
 
   /** JSON Schema for the `introspect` tool input. `path` and `model_name` are
     * the only required fields. */
