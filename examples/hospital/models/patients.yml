@@ -43,11 +43,3 @@ patients:
         patient_count:
             expr: "count(1)"
             description: "Number of unique patients in the group"
-
-    calculated_measures:
-        # Age as of the current year (a hardcoded cutoff, since the YAML CalcExpr
-        # parser doesn't support current_date or year()). Production would use
-        # current_date for real-time age computation.
-        age_years:
-            expr: "2024 - year(date_of_birth)"
-            description: "Patient age in years (computed against 2024)"

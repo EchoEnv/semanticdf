@@ -67,6 +67,57 @@ object CalcExpr {
     node
   }
 
+  /** Validate that every measure reference in `expr` resolves to a known name.
+    *
+    * The CalcExpr DSL is: arithmetic over already-aggregated measures, with
+    * `all(name)` for percent-of-total. References are either `Ref(name)` (a
+    * regular measure reference) or `All(name)` (a percent-of-total reference).
+    * Both must resolve against `knownMeasures` — base + previously-declared
+    * calc measures for the model.
+    *
+    * Used by `YamlLoader` to fail fast at model-load time on typos in
+    * `calculated_measures:` expressions (which previously surfaced as cryptic
+    * `UnknownFieldError`s at query time).
+    *
+    * @param expr           the calc-measure expression string
+    * @param knownMeasures  measure names visible at this point (base + prior calcs)
+    * @param modelName      for error messages
+    * @param calcName       the calc-measure entry's name (for error messages)
+    * @throws IllegalArgumentException on parse failure or unknown reference
+    */
+  private[semanticdf] def validateReferences(
+      expr: String,
+      knownMeasures: Set[String],
+      modelName: String,
+      calcName: String,
+  ): Unit = {
+    val ast = parseCached(expr)
+    val refs = collectRefs(ast)
+    if (refs.isEmpty) return
+    val missing = refs.filterNot(knownMeasures.contains)
+    if (missing.nonEmpty) {
+      throw new IllegalArgumentException(
+        s"calculated_measures '$calcName' on model '$modelName' references " +
+        s"measure(s) ${missing.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")} " +
+        s"that are not defined in this model. Visible measures: " +
+        s"${knownMeasures.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")}. " +
+        s"Did you misspell a measure name? Note: calc measures can only reference " +
+        s"base measures (defined in `measures:`) or earlier calc measures (defined " +
+        s"earlier in the same `calculated_measures:` block) — they cannot reference " +
+        s"`transforms:` outputs or source columns directly."
+      )
+    }
+  }
+
+  /** Walks the AST and returns every measure reference name (case-sensitive). */
+  private def collectRefs(node: Node): Set[String] = node match {
+    case Num(_)     => Set.empty
+    case Ref(name)  => Set(name)
+    case All(name)  => Set(name)
+    case Neg(inner) => collectRefs(inner)
+    case Bin(_, l, r) => collectRefs(l) ++ collectRefs(r)
+  }
+
   // --- AST nodes ---
 
   private[semanticdf] sealed trait Node {

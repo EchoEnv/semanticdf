@@ -404,19 +404,25 @@ object YamlLoader {
       // reference an aggregate measure in their ORDER BY: e.g.
       // `rank() over (order by total_passengers desc)`). The validator needs
       // all three sets; track the accumulated measure names in the fold.
-      val (builtMeasures, _) = measures.foldLeft((Vector.empty[Measure], transformOutputs)) {
+      val (builtMeasures, allMeasureNames) = measures.foldLeft((Vector.empty[Measure], transformOutputs)) {
         case ((acc, visible), (mName, mCfg)) =>
           val m = buildBaseMeasure(mName, mCfg, visible, name)
           (acc :+ m, visible + mName)
       }
       model = model.withMeasures(builtMeasures: _*)
-    }
 
-    cfg.get("calculated_measures").foreach { calcsRaw =>
-      val calcs = asStringToAnyMap(calcsRaw, s"model '$name' calculated_measures")
-      model = model.withMeasures(calcs.map { case (mName, mCfg) =>
-        buildCalcMeasure(mName, mCfg)
-      }.toSeq: _*)
+      // Calc measures build on top: they reference base measures and earlier
+      // calc measures by name (via the CalcExpr DSL — arithmetic over already-
+      // aggregated measures, with `all(name)` for percent-of-total).
+      cfg.get("calculated_measures").foreach { calcsRaw =>
+        val calcs = asStringToAnyMap(calcsRaw, s"model '$name' calculated_measures")
+        val (builtCalcs, _) = calcs.foldLeft((Vector.empty[Measure], allMeasureNames)) {
+          case ((acc, visible), (cName, cCfg)) =>
+            val c = buildCalcMeasure(cName, cCfg, visible, name)
+            (acc :+ c, visible + cName)
+        }
+        model = model.withMeasures(builtCalcs: _*)
+      }
     }
 
     // Optional `filters:` block — row-level hygiene on this model's source table.
@@ -598,9 +604,18 @@ object YamlLoader {
     *
     * The expression is parsed by [[CalcExpr]] so identifiers resolve through the
     * SemanticScope — this is what makes the framework's calc classification work.
-    * `all(name)` references become `t.all(name)` for percent-of-total. */
-  private def buildCalcMeasure(name: String, cfg: Any): Measure = {
+    * `all(name)` references become `t.all(name)` for percent-of-total.
+    *
+    * The expr is validated up-front (see [[CalcExpr.validateReferences]]) so a
+    * typo in a measure name fails fast at model-load time, not at first query. */
+  private def buildCalcMeasure(
+      name: String,
+      cfg: Any,
+      knownMeasures: Set[String],
+      modelName: String,
+  ): Measure = {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "calculated measure", name)
+    CalcExpr.validateReferences(exprStr, knownMeasures, modelName, name)
     val metadata = metadataFromYaml(extra.get("metadata"))
     Measure(name, t => CalcExpr(t, exprStr), description, metadata)
   }
