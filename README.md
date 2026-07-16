@@ -356,6 +356,99 @@ which the model was compiled. SQL consumers can't switch grains in-band
 (`SELECT ... WHERE grain = 'monthly'`); use the typed `atTimeGrain(...)` API
 or build separate views for each grain you need.
 
+#### BI tools via Spark Thrift Server (Power BI, Tableau, Looker, Metabase, ...)
+
+The temp view pattern above is per-session. To expose semantic models to
+**external BI tools** that speak JDBC/ODBC, the standard path is
+**Spark Thrift Server** (a.k.a. Spark HiveServer2). Once running, a
+Power BI desktop / Tableau workbook / dbt project can connect with the
+standard Hive JDBC driver and query the models as if they were regular
+SQL tables.
+
+**Architecture:**
+
+```
++--------------------+        +-----------------------+        +------------------+
+| Power BI / Tableau | JDBC   |  Spark Thrift Server  |  talks |  semanticdf      |
+| (your laptop)      | -----> |  (HiveServer2 on a   | -----> |  YAML model     |
+|                    |        |   long-lived box)     |        |  + temp view     |
++--------------------+        +-----------------------+        +------------------+
+```
+
+**One-time setup** (a small launcher script that runs in a long-lived
+Spark process — not the same JVM as your notebook):
+
+```scala
+// Server.scala — run as a long-lived service
+import org.apache.spark.sql.SparkSession
+import io.semanticdf._
+
+object SemanticServer extends App {
+  // A long-lived Spark session
+  implicit val spark: SparkSession = SparkSession.builder()
+    .appName("semanticdf-bridge")
+    .enableHiveSupport()                  // required for Thrift Server
+    .getOrCreate()
+
+  // Load all your models and register them as global temp views
+  val models = YamlLoader.loadDir("models/", dataConfig)
+  models.values.foreach { st =>
+    // Global temp views are visible across all sessions connected to
+    // this Thrift Server, including the BI tool's session
+    st.createOrReplaceGlobalTempView(s"semantic_${st.name}")
+    // Optional: also expose schema metadata as a sidecar view for
+    // the BI tool's data catalog
+    st.schema(spark).createOrReplaceGlobalTempView(s"semantic_${st.name}__schema")
+  }
+
+  // Block forever — the Thrift Server is now serving SQL over your
+  // semantic models on the standard port (10000)
+  Thread.currentThread().join()
+}
+```
+
+**Start the Thrift Server** with your JAR on the classpath:
+
+```bash
+# Standard Spark distribution layout
+$SPARK_HOME/sbin/start-thriftserver.sh \
+  --master yarn \
+  --jars /path/to/semanticdf_2.13-0.1.1.jar,/path/to/your-models-loader.jar \
+  --conf spark.sql.hive.thriftServer.singleSession=false
+```
+
+The server exposes the standard HiveServer2 port (default `10000`).
+
+**Connect from Power BI / Tableau / etc.** — use the standard **Hive
+JDBC driver** with a JDBC URL like:
+
+```
+jdbc:hive2://thrift-server-host:10000/default;transportMode=http;httpPath=cliservice
+```
+
+In the BI tool:
+- The temp views appear as tables in the `default` database (or
+  `global_temp` if you registered them there). For Power BI: rename
+  `global_temp.semantic_flights` to `semantic_flights` for clarity.
+- Each view is the compiled model — joins, pre-join filters, calc
+  measures, all baked in.
+- Discovery: query `SELECT * FROM global_temp.semantic_flights__schema`
+  to see the dimension/measure list, or open the OKF Markdown at
+  `docs/agents/reference/<project>/<model>.md`.
+
+**Limitations vs the typed API:**
+
+- Single-grain views (same as notebook case above)
+- No typed compile-time checks — typos surface at query time as
+  `AnalysisException: cannot resolve 'foo'`
+- No access to `.explainSemantic(...)` — use the local library for
+  plan-level debugging
+
+For the full REST API path (JSON over HTTP, no JDBC driver needed,
+works with any HTTP-capable tool), see the v0.2 roadmap in
+[`docs/feature-roadmap.md`](docs/feature-roadmap.md) §3.1. Thrift Server
+is the pragmatic v0.1.1 path.
+
 ### Typed queries (compile-time safety)
 
 The string-based API above is convenient but typo-prone — a wrong field name is a runtime
