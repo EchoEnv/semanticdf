@@ -22,7 +22,7 @@ import scala.jdk.CollectionConverters._
   *
   * And §"Tool 4: explain" — same request shape, returns the
   * `SemanticTable.explainSemantic(spark)` string verbatim (no execution). */
-final class Query(spark: SparkSession) {
+final class Query(spark: SparkSession, val maxRows: Int = Query.maxRowsFromEnv()) {
 
   private val log = Query.log
 
@@ -48,6 +48,12 @@ final class Query(spark: SparkSession) {
     val collected = df.collect()
     val elapsed = System.currentTimeMillis() - t0
 
+    // RESULT_TOO_LARGE: if the request omitted `limit` and the result
+    // exceeds the safety cap, reject it. Per mcp-contract.md §7, this is
+    // a fast rejection — the agent must add `limit` or narrow filters.
+    if (collected.length > maxRows && request.limit.isEmpty)
+      throw QueryErrors.ResultTooLarge(collected.length, maxRows)
+
     val columns = df.schema.fields.toList.map(f => Query.ColumnInfo(f.name, Query.typeName(f.dataType)))
     val rows    = collected.toList.map(Query.rowToSeq)
 
@@ -55,7 +61,7 @@ final class Query(spark: SparkSession) {
       columns    = columns,
       rows       = rows,
       row_count  = rows.length,
-      truncated  = false,    // RESULT_TOO_LARGE enforcement deferred to a follow-up
+      truncated  = false,
     )
 
     Envelope.ok(
@@ -89,6 +95,20 @@ final class Query(spark: SparkSession) {
 object Query {
 
   private[handlers] val log = org.slf4j.LoggerFactory.getLogger(classOf[Query])
+
+  /** Default row-count safety cap for `query` results. Overridden by the
+    * `MCP_MAX_ROWS` env var (parsed as a positive integer). Per
+    * `mcp-contract.md`, queries that omit `limit` and exceed this cap are
+    * rejected with `RESULT_TOO_LARGE`. */
+  private val DefaultMaxRows = 10000
+
+  /** Read `MCP_MAX_ROWS` from the environment. Values that are missing,
+    * non-numeric, or <= 0 fall back to [[DefaultMaxRows]]. */
+  def maxRowsFromEnv(): Int =
+    sys.env.get("MCP_MAX_ROWS")
+      .flatMap(v => scala.util.Try(v.toInt).toOption)
+      .filter(_ > 0)
+      .getOrElse(DefaultMaxRows)
 
   /** Result data shape. Mirrors the contract. */
   final case class Data(
@@ -254,6 +274,19 @@ object Query {
           ),
           mapper,
         )
+      case e: QueryErrors.ResultTooLarge =>
+        Handlers.textResult(
+          io.semanticdf.mcp.ErrorEnvelope(
+            status = "error",
+            error = io.semanticdf.mcp.ErrorDetail(
+              code = "RESULT_TOO_LARGE",
+              message = s"Query returned ${e.rowCount} rows; safety cap is ${e.limit}. Add a \"limit\" to your request or narrow your filters.",
+              hint = Some(s"Add \"limit\": ${e.limit} to your request, or narrow your filters with \"where\"."),
+              details = Map("suggested_limit" -> e.limit.toString),
+            ),
+          ),
+          mapper,
+        )
       case e: IllegalArgumentException =>
         Handlers.textResult(
           io.semanticdf.mcp.ErrorEnvelope.of("EXECUTION_ERROR", e.getMessage),
@@ -355,4 +388,9 @@ object QueryErrors {
 
   final case class AmbiguousDimension(name: String, candidates: Seq[String])
       extends RuntimeException(s"AMBIGUOUS_DIMENSION: '$name' matches multiple dimensions: ${candidates.mkString(", ")}")
+
+  final case class ResultTooLarge(rowCount: Int, limit: Int)
+      extends RuntimeException(
+        s"RESULT_TOO_LARGE: query returned $rowCount rows; safety cap is $limit. " +
+        s"Add a \"limit\" to your request or narrow your filters.")
 }
