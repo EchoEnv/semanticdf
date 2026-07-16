@@ -1,5 +1,152 @@
 # Release notes
 
+## v0.1.2 — lazy compile contract for `withTransforms`
+
+A focused refactor that fixes a long-standing side effect in
+`SemanticTable.withTransforms` on join models. Library and MCP server
+are at `io.semanticdf:semanticdf_2.13:0.1.2` and
+`io.semanticdf:semanticdf-mcp_2.13:0.1.2`.
+
+### What changed
+
+Before v0.1.2, `withTransforms` on a join model called
+`j.compile(SparkSession.active)` eagerly to get the joined DataFrame, then
+applied `withColumn` against it. Two problems:
+
+1. **`SparkSession.active` is a side effect** — it auto-creates a default
+   session if none is set. A consumer building a `SemanticTable` in a
+   context without a session (config loading, `validate()` calls, catalog
+   accessors like `dimensions`/`measures`/`joins`) would silently get a
+   Spark session.
+2. **Eager join compilation** broke the lazy compile contract
+   (DESIGN §4.4). Every other op in the tree (`filter`, `orderBy`,
+   `limit`, `hint`) is a passthrough that defers compilation to
+   `toDataFrame(spark)`. `withTransforms` on a join was the only op
+   that didn't.
+
+After v0.1.2, `withTransforms` wraps the source in a new
+`SemanticTransformsOp`. The transforms are applied lazily at
+`toDataFrame(spark)` time, consistent with every other op. The op tree
+holds no `SparkSession`, the compiled `DataFrame` is never stored in a
+node, and `toDataFrame(spark)` is the only place that compiles.
+
+### Public API: zero breaking changes
+
+- `withTransforms` signature is unchanged
+- Return type (`SemanticTable`) is unchanged
+- Catalog accessors (`dimensions`, `measures`, `joins`, `filters`,
+  `schema(spark)`, `findDimension`, `findMeasure`, etc.) return the
+  same data
+- `toDataFrame(spark)` produces a byte-identical `DataFrame` for the
+  same query — verified by the 8 pre-existing `TransformsSpec` tests
+  passing unchanged
+
+### Chained transforms compose
+
+Multiple `withTransforms` calls compose into a single
+`SemanticTransformsOp` layer, applied in declaration order. The
+earlier transforms are NOT replaced — they compose with the new ones.
+This is the same `withColumn`-chain semantics you'd get in plain
+Spark, just deferred.
+
+```scala
+st
+  .withTransforms(Transform("a", t => t("v") + 1))   // applied first
+  .withTransforms(Transform("b", t => t("a") * 2))   // applied second, sees `a`
+```
+
+### How this was built
+
+5 PRs landed on top of v0.1.1, each small enough to review
+independently:
+
+- **#33** — scaffolded the new `SemanticTransformsOp` op node
+  (pure addition, no behavior change)
+- **#34** — added passthrough cases to all 20 tree walkers in
+  `SemanticTable.scala` so the new op is recognized everywhere
+  (pure addition, no behavior change)
+- **#35** — flipped the switch: `withTransforms` now returns
+  `SemanticTransformsOp` instead of eager-applying. The
+  `applyTransforms` private helper was removed (its logic is now
+  in `SemanticTransformsOp.compile`). One extra case was added to
+  `SemanticAggregateOp.resolveModel` to unwrap the new op when
+  finding the underlying model.
+- **#36** — added the `LazyTransformsSpec` test suite (4 tests) AND
+  fixed a chained-transforms bug that the new test caught: the
+  recursion in the `SemanticTransformsOp` case was re-entering
+  the match and dropping the existing transforms. Fix: don't
+  recurse, just append.
+- **#37** — documented the chaining behavior in the
+  `withTransforms` scaladoc (17 lines).
+
+### Why this matters
+
+`withTransforms` is the bridge between the library and Spark
+internals — it's how users add per-row derived columns
+(`datediff`, `case when`, window functions). The eager-compile
+side effect made it dangerous in library code paths that
+shouldn't depend on Spark (config loading, `validate()` for CI
+gates, catalog accessors for tooling). v0.1.2 makes it safe to
+use `withTransforms` anywhere, with the same lazy contract as
+every other op.
+
+### Tests
+
+- **298** library tests on both Spark 3.5.8 (default) and 4.1.1
+  (was 294 in v0.1.1; +4 from `LazyTransformsSpec`)
+- All 7 examples still build and run end-to-end
+- **All 3 CI checks** (OKF drift, Spark 3.5.8, Spark 4.1.1) pass
+
+### Files changed (cumulative across #33-#37)
+
+- `src/main/scala/io/semanticdf/SemanticOp.scala` — adds
+  `SemanticTransformsOp` case class; one extra unwrap case in
+  `SemanticAggregateOp.resolveModel`
+- `src/main/scala/io/semanticdf/SemanticTable.scala` — `withTransforms`
+  switch flip; 20 passthrough cases in tree walkers; removes
+  `applyTransforms` helper; rewritten scaladoc
+- `src/test/scala/io/semanticdf/LazyTransformsSpec.scala` — **NEW
+  FILE**, 4 tests verifying the lazy-transforms contract
+
+### Migration
+
+None required. Public API is unchanged. Any code that called
+`withTransforms` on a join model will see identical query results
+(verified by the 8 pre-existing `TransformsSpec` tests), but the
+op tree is now lazy — the join isn't compiled until
+`toDataFrame(spark)` is called. For the typical
+`st.withTransforms(...).groupBy(...).aggregate(...).execute(spark)`
+pattern, this is invisible.
+
+### Out of scope for v0.1.2 (deferred to v0.2)
+
+- `QUERY_TIMEOUT` / `RESULT_TOO_LARGE` MCP error codes
+- `AMBIGUOUS_MEASURE` / `AMBIGUOUS_DIMENSION` (for multi-hop joins)
+- `Introspector` warning lines in generated YAML
+- `ResultDecoder[T]` (typed query *results*)
+- **REST API** (Tier 3 plan) — JSON over HTTP, no JDBC driver needed
+- Transform outputs in the catalog (so they can be referenced via
+  typed refs) — separate, additive feature
+
+All additive — they widen the contract without breaking any
+existing agent.
+
+### Verifying the release
+
+```bash
+# Library
+mvn -o test                          # 298/298 on Spark 3.5.8
+mvn -o test -Pspark4                 # 298/298 on Spark 4.1.1
+
+# MCP server
+cd semanticdf-mcp && mvn -o test    # 35/35
+
+# OKF drift
+make okfgen-check                   # bundle in sync with YAMLs
+```
+
+---
+
 ## v0.1.1 — type-safety + YAML load-time validation pass
 
 A focused release that completes the type-safety story (PR #24) and the YAML

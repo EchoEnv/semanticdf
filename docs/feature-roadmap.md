@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.1 shipped (typed `withMeasures` + `SortKey.asc/desc` overloads, YAML load-time validation pass for dims/transforms/measures/filters/calcs), 7 templates shipping, no consumer yet
+**Last updated:** v0.1.2 shipped (lazy `withTransforms` for join models; chained-transforms fix; `LazyTransformsSpec` test suite), 7 templates shipping, no consumer yet
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 

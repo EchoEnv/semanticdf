@@ -1,6 +1,6 @@
 # Known Limitations
 
-This document lists features that do not work in v0.1.1. Read this before starting — it will save you from hitting obvious gaps without context.
+This document lists features that do not work in v0.1.2. Read this before starting — it will save you from hitting obvious gaps without context.
 
 ---
 
@@ -182,4 +182,4 @@ is affected. Sort results in Scala as a workaround.
 
 ---
 
-*This document is updated after each production soak cycle. Last updated: v0.1.1 (typed `withMeasures` + `SortKey.asc/desc`, `ExpressionValidator` for dims/transforms/measures/filters, `CalcExpr.validateReferences` for calculated_measures).*
+*This document is updated after each production soak cycle. Last updated: v0.1.2 (lazy `withTransforms` for join models; no `SparkSession.active` side effect).*

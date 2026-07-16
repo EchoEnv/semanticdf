@@ -356,7 +356,7 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf_2.13</artifactId>
-  <version>0.1.1</version>
+  <version>0.1.2</version>
   <packaging>jar</packaging>
 
   <properties>
