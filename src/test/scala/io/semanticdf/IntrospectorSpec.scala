@@ -177,5 +177,67 @@ class IntrospectorSpec extends AnyFunSpec with SparkSessionFixture with Matchers
       }
       caught.getMessage must include("model name")
     }
+
+    // (N) # WARN: header lines for fields the Introspector couldn't classify.
+    // These are the raw signals the MCP `introspect` tool surfaces via
+    // `response.warnings` — the contract requires them so an agent knows
+    // which fields were silently dropped.
+
+    it("emits # WARN: for unclassified fields when they don't make the measure cut") {
+      // MapType has no dimension or measure classification — it falls
+      // through to the `_ =>` branch in classifyField and gets
+      // (false, None, None), i.e. suggestedMeasureKind = None. With
+      // maxMeasures=1, the unclassified field is dropped (numeric
+      // measures always sort higher) and should be warned.
+      val schema = StructType(Seq(
+        StructField("category", StringType),       // dimension
+        StructField("kv_pairs", MapType(StringType, IntegerType)), // unclassified
+        StructField("revenue", DoubleType),       // numeric measure (priority 2)
+      ))
+      val df = spark.createDataFrame(spark.sparkContext.emptyRDD[Row], schema)
+      val yaml = new io.semanticdf.tools.Introspector(
+        io.semanticdf.tools.Introspector.Config(maxMeasures = 1)
+      ).toYaml(df, "test_model")
+      yaml must include("# WARN:")
+      yaml must include("'kv_pairs'")
+      yaml must include("no dimension or measure classification")
+      // The classified fields are NOT warned.
+      yaml must not include "'category'"
+      yaml must not include "'revenue'"
+    }
+
+    it("emits # WARN: when a measure candidate is dropped by maxMeasures") {
+      // With maxMeasures=1 and three numeric candidates, two should be dropped.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(
+          Row(1.0, 2.0, 3.0),
+        )),
+        StructType(Seq(
+          StructField("a", DoubleType),
+          StructField("b", DoubleType),
+          StructField("c", DoubleType),
+        )),
+      )
+      val yaml = new io.semanticdf.tools.Introspector(
+        io.semanticdf.tools.Introspector.Config(maxMeasures = 1)
+      ).toYaml(df, "test_model")
+      yaml must include("max measures limit reached")
+      val warnCount = "# WARN:".r.findAllIn(yaml).length
+      warnCount mustBe 2
+    }
+
+    it("emits no # WARN: lines when every field is classified") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(
+          Row("AA", 100.0),
+        )),
+        StructType(Seq(
+          StructField("carrier", StringType),
+          StructField("revenue", DoubleType),
+        )),
+      )
+      val yaml = new io.semanticdf.tools.Introspector().toYaml(df, "test_model")
+      yaml must not include "# WARN:"
+    }
   }
 }
