@@ -93,9 +93,14 @@ class OkfGen {
 
   private def loadFile(path: String): Seq[ModelEntry] = {
     val yaml = new Yaml()
+    // Use the JDK's `Files.readString` — opens the file via try-with-resources
+    // internally, so the file handle is closed even if parsing throws. The
+    // older `Source.fromFile(path).mkString` pattern does NOT close the handle
+    // (Source is an Iterator, not AutoCloseable in the same way); a long
+    // `okfgen` run over thousands of YAML files would leak file descriptors.
     val raw = try {
-      yaml.load[java.util.Map[String, java.util.Map[String, Any]]](
-        scala.io.Source.fromFile(path).mkString)
+      val content = java.nio.file.Files.readString(java.nio.file.Paths.get(path))
+      yaml.load[java.util.Map[String, java.util.Map[String, Any]]](content)
     } catch {
       case e: Exception =>
         System.err.println(s"Skipping $path: ${e.getMessage}")
@@ -506,8 +511,22 @@ class OkfGen {
     pb.directory(new File("."))
     pb.redirectErrorStream(true)
     val proc = pb.start()
-    val out = scala.io.Source.fromInputStream(proc.getInputStream).mkString.trim
-    proc.waitFor()
+    // Read the git stdout (merged with stderr via redirectErrorStream(true) above)
+    // and close the stream explicitly. `waitFor()` alone does NOT close the
+    // process's open file descriptors — a long `okfgen` run over many models
+    // would accumulate descriptors until the JVM's GC runs. Read with JDK's
+    // `Files.readAllBytes` via the stream's NIO view, which uses try-with-resources
+    // internally; this keeps the close path explicit and safe.
+    val out = try {
+      val input = proc.getInputStream
+      try new String(input.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8).trim
+      finally input.close()
+    } finally {
+      // `destroy()` is a no-op if the process already exited; it ensures the OS
+      // releases any subprocess handles that `waitFor` would otherwise leak.
+      proc.waitFor()
+      proc.destroy()
+    }
     if (proc.exitValue() == 0 && out.nonEmpty) {
       // Convert epoch seconds to ISO 8601 UTC, second precision.
       // Instant.toString at second precision always emits the `Z` suffix.

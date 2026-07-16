@@ -52,6 +52,25 @@ object Main {
       .config("spark.sql.ansi.enabled", "false")  // match library test baseline
       .getOrCreate()
 
+    // Register the shutdown hook IMMEDIATELY after spark is created so that
+    // any throw between here and the try block still triggers spark.stop().
+    // Without this, an exception during `DataConfig.fromFile` or
+    // `Models.load` (e.g. malformed YAML) would leak the Spark session —
+    // Spark's default cleanup only runs on JVM exit, not on early throws.
+    // The `server` field is a `var` so this hook can also call `server.close()`
+    // once it's been built inside the try block (see assignment below).
+    // SparkSession.stop() is idempotent so the hook is safe to invoke twice
+    // (once after the build, once on JVM exit) — but we guard with a flag
+    // to keep the intent explicit.
+    @volatile var server: io.modelcontextprotocol.server.McpSyncServer = null
+    Runtime.getRuntime.addShutdownHook(new Thread(() => {
+      try {
+        if (server != null) server.close()
+      } finally {
+        try { spark.stop() } catch { case _: Throwable => /* best-effort */ }
+      }
+    }))
+
     try {
       val dataConfig = DataConfig.fromFile(parsed.dataConfig)
       val models     = Models.load(parsed.modelsDir, dataConfig, spark)
@@ -62,14 +81,13 @@ object Main {
       val okf = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
 
       val mapper = McpJsonDefaults.getMapper()
-      val server = Server.build(models, okf, spark, mapper)
+      server = Server.build(models, okf, spark, mapper)
 
       // Block until stdio closes (parent process exits / sends EOF) or
-      // SIGINT/SIGTERM. McpSyncServer's `close()` is idempotent.
+      // SIGINT/SIGTERM. The shutdown hook (registered above, BEFORE the try
+      // block, so it fires on early throws) is responsible for calling
+      // server.close() and spark.stop(). McpSyncServer's close() is idempotent.
       log.info("semanticdf-mcp listening on stdio. Press Ctrl-D to stop.")
-      Runtime.getRuntime.addShutdownHook(new Thread(() => {
-        try { server.close() } finally { spark.stop() }
-      }))
 
       // Park the main thread — the SDK runs on a daemon thread pool and
       // close() is invoked from the shutdown hook above.
