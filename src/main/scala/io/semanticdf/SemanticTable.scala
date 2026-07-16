@@ -123,6 +123,23 @@ final class SemanticTable private[semanticdf] (
   /** Fluent-chain alias for [[toDataFrame]]. */
   def execute(spark: SparkSession): DataFrame = toDataFrame(spark)
 
+  /** Typed terminal — compile the op tree, collect the rows, decode each
+    * into `T` via the implicit [[ResultDecoder]]. The decoder is the
+    * caller's responsibility (supply an implicit instance or use one of
+    * the built-in primitives). Returns `Seq[T]`, not `DataFrame` — this
+    * is the typed counterpart to `execute(spark).collect().map(_.toSeq)`.
+    *
+    * Example:
+    * {{{
+    *   val names: Seq[String] = table.execute(spark).collectAs[String]
+    * }}}
+    *
+    * The decoder must match the DataFrame's schema (column count, types).
+    * For multi-column results, write a custom decoder — see
+    * [[ResultDecoder]] for the typeclass contract. */
+  def collectAs[T](spark: SparkSession)(implicit decoder: ResultDecoder[T], ct: scala.reflect.ClassTag[T]): Seq[T] =
+    toDataFrame(spark).collect().toSeq.map(decoder.decode)
+
   // -------------------------------------------------------------------------
   // Observability (Phase B)
   // -------------------------------------------------------------------------
