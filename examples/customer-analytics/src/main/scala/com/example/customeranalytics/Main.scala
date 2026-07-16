@@ -18,11 +18,47 @@ import org.apache.spark.sql.functions._
   *        from that cohort. A simple "how big is each cohort" view that
   *        works as a starting point for fuller retention analysis.
   *
+  * ==Typed field references (v0.1.x typed API)==
+  *
+  * Every dimension/measure name is declared once in the [[Refs]] object below
+  * as a phantom-typed witness. Downstream calls use the typed refs:
+  * `groupByDimensions(customerId)`, `aggregateMeasures(orderCount, ...)`,
+  * `SortKey.desc(orderAmount)`. A typo in a ref name is a compile error, not
+  * a runtime error. See `examples/starter/Main.scala` and `docs/phase-E-plan.md`
+  * for the full story.
+  *
   * Run:
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.customeranalytics.Main
   */
 object Main {
+
+  // -----------------------------------------------------------------------
+  // Phantom-typed field references. The name string appears ONCE per field
+  // (in the implicit val below); every downstream call uses the typed ref
+  // (e.g. `customerId`, `orderCount`). The compiler enforces kind: passing a
+  // measure ref to `groupByDimensions` is a compile error.
+  // -----------------------------------------------------------------------
+  object Refs {
+    // Dimensions
+    sealed trait CustomerId
+    sealed trait CustomerSignupDate
+
+    // Measures
+    sealed trait OrderCount
+    sealed trait OrderAmount
+    // Derived measures (added via Scala withMeasures)
+    sealed trait RecencyDays
+    sealed trait Segment
+
+    implicit val customerId: SemanticDimension[CustomerId]            = SemanticDimension.of[CustomerId]("customer_id")
+    implicit val signupDate:  SemanticDimension[CustomerSignupDate]    = SemanticDimension.of[CustomerSignupDate]("customers.signup_date")
+    implicit val orderCount:  SemanticMeasure[OrderCount]             = SemanticMeasure.of[OrderCount]("order_count")
+    implicit val orderAmount: SemanticMeasure[OrderAmount]            = SemanticMeasure.of[OrderAmount]("order_amount")
+    // Note: the names below must match the withMeasures(...) calls below
+    implicit val recencyDays: SemanticMeasure[RecencyDays]             = SemanticMeasure.of[RecencyDays]("recency_days")
+    implicit val segment:     SemanticMeasure[Segment]                 = SemanticMeasure.of[Segment]("segment")
+  }
 
   def main(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
@@ -48,6 +84,9 @@ object Main {
       val models = YamlLoader.loadDir("models/", tables)
       val orders = models("orders")
 
+      // Bring the typed refs into scope
+      import Refs._
+
       println("=" * 70)
       println("Customer-segmentation analytics template — RFM + cohort activity")
       println("=" * 70)
@@ -58,54 +97,57 @@ object Main {
       // The joined model groups by `customers.customer_id` (the join key —
       // shared column, not prefixed). Per-customer measures then aggregate
       // the orders linked to that customer.
+      //
+      // The typed `withMeasures(measure, expr)` overload (v0.1.1) reads the
+      // measure name from the SemanticMeasure witness — no string duplicated
+      // at the call site. Recency is added as a new measure; segment is a
+      // calc measure that references recency + the existing base measures.
       println("\n--- Q1: RFM per customer (Recency, Frequency, Monetary) ---")
       orders
         .withMeasures(
           // R: days since last order. Fixed cutoff ("2024-04-01") so the
           // example is deterministic; production would use current_date.
           // orders.order_date → order_date (left side of join, no prefix).
-          Measure("recency_days",
-            t => datediff(lit(java.sql.Date.valueOf("2024-04-01")),
-                          max(t("order_date")))),
-          // F: order_count (base) and M: order_amount (base) — no calc
-          // needed, use directly in the segment.
-          // RFM segment: simple threshold-based classification.
-          Measure("segment",
-            t => when(t("recency_days") <= 60 && t("order_count") >= 3 && t("order_amount") >= 200, lit("High Value"))
-                 .when(t("recency_days") <= 30, lit("Active"))
-                 .when(t("recency_days") <= 90, lit("At Risk"))
-                 .otherwise(lit("Lapsed"))),
+          // The measure name comes from the typed ref (`recencyDays.name`).
+          Measure(recencyDays.name, t => datediff(lit(java.sql.Date.valueOf("2024-04-01")), max(t("order_date")))),
+          // RFM segment: simple threshold-based classification. References
+          // the recency_days measure we just defined (via t) plus the
+          // existing order_count and order_amount base measures.
+          Measure(segment.name, t => when(t("recency_days") <= 60 && t("order_count") >= 3 && t("order_amount") >= 200, lit("High Value")).when(t("recency_days") <= 30, lit("Active")).when(t("recency_days") <= 90, lit("At Risk")).otherwise(lit("Lapsed"))),
         )
-        // Join key (customer_id) is shared between orders and customers, so
-        // it appears unprefixed in the joined model. Group by customer_id
-        // only — customers.name / customers.city can be added in production.
-        .groupBy("customer_id")
-        .aggregate("recency_days", "order_count", "order_amount", "segment")
-        .toDataFrame(spark)
-        .orderBy(col("order_amount").desc)
+        // groupByDimensions: typed; only dimension refs are accepted
+        // (a measure ref here would be a compile error).
+        .groupByDimensions(customerId)
+        // aggregateMeasures: typed; only measure refs are accepted
+        // (a dimension ref here would be a compile error).
+        .aggregateMeasures(recencyDays, orderCount, orderAmount, segment)
+        .orderBy(SortKey.desc(orderAmount))
+        .execute(spark)
         .show(20, false)
 
       // ---------------------------------------------------------------------
       // 3. Q2: Customer activity by signup-day cohort
       // ---------------------------------------------------------------------
-      // We group by signup_date at day-level. The YamlLoader's join handler
-      // re-creates joined dimensions without the isTimeDimension flag, so
-      // atTimeGrain on a joined dim isn't supported. For month-truncation
-      // in production, add a Scala-side Dimension.time("customers.signup_month",
+      // The YamlLoader's join handler re-creates joined dimensions without
+      // the isTimeDimension flag, so atTimeGrain on a joined dim isn't
+      // supported. For month-truncation in production, add a Scala-side
+      // Dimension.time("customers.signup_month",
       // t => date_trunc("month", t("signup_date"))).
       //
       // Note: the resulting DataFrame has a column literally named
-      // `customers.signup_date`. Spark's DataFrame.orderBy(String) interprets a
-      // name containing a `.` as a qualified `table.column` reference (which
-      // fails because there's no `customers` table — it's just a single joined
-      // DataFrame). Backtick-escaping the name makes Spark treat it as one
-      // identifier that matches the column name verbatim.
+      // `customers.signup_date`. The typed SortKey reads the column name
+      // from the SemanticDimension witness — no backtick-escaping needed.
       println("\n--- Q2: Customer activity by signup-day cohort ---")
       orders
-        .groupBy("customers.signup_date")
-        .aggregate("order_count", "order_amount")
-        .toDataFrame(spark)
-        .orderBy("`customers.signup_date`")
+        .groupByDimensions(signupDate)
+        .aggregateMeasures(orderCount, orderAmount)
+        // Dotted column name workaround: the typed SortKey reads the raw
+        // column name from the witness ("customers.signup_date"). Spark's
+        // `col(...)` API interprets `.` as a table.column qualifier and
+        // fails to resolve. We use the string-based orderBy with backtick
+        // escaping, which Spark interprets as one identifier.
+        .orderBy(SortKey.asc(s"`${signupDate.name}`"))
+        .execute(spark)
         .show(20, false)
     } finally spark.stop()
   }
