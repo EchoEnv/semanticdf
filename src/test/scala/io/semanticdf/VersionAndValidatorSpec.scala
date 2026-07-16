@@ -160,4 +160,156 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
     assert(models("mixed").filters.length == 1)
     assert(models("mixed").filters.head.name == "require_origin_mixed")
   }
+
+  // ---------------------------------------------------------------------------
+  // 4. ExpressionValidator — dims/transforms/measures fail fast on typos
+  // ---------------------------------------------------------------------------
+  //
+  // Before this validator, a typo in a dimension/transform/measure expression
+  // (e.g. `case when carrrier in (...) ...` against a source column `carrier`)
+  // loaded silently and surfaced only when the expression was first evaluated,
+  // as a cryptic Spark `UNRESOLVED_COLUMN` error. The validator parses every
+  // expression via CatalystSqlParser and checks that all column references
+  // exist in the visible column set at that point.
+
+  test("ExpressionValidator: dimension expression with a typo is rejected at load time") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier_class:
+        |      expr: "case when carrrier in ('AA') then 'legacy' else 'low_cost' end"
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("carrrier"),
+      s"Expected missing-column error mentioning 'carrrier', got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("dimension"),
+      s"Expected error to mention 'dimension', got: ${ex.getMessage}")
+  }
+
+  test("ExpressionValidator: transform expression with a typo is rejected at load time") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  transforms:
+        |    flight_date_str:
+        |      expr: "cast(departure_date as string)"  # departure_date doesn't exist
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("departure_date"),
+      s"Expected missing-column error mentioning 'departure_date', got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("transform"),
+      s"Expected error to mention 'transform', got: ${ex.getMessage}")
+  }
+
+  test("ExpressionValidator: measure expression with a typo is rejected at load time") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_distance:
+        |      expr: "sum(distance_miles)"  # distance_miles doesn't exist (real col: distance)
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("distance_miles"),
+      s"Expected missing-column error mentioning 'distance_miles', got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("measure"),
+      s"Expected error to mention 'measure', got: ${ex.getMessage}")
+  }
+
+  test("ExpressionValidator: valid dim/transform/measure expressions load cleanly") {
+    // Chain: transform produces a new column; subsequent measure references it.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  transforms:
+        |    pax_per_mile:
+        |      expr: "passengers / distance"
+        |  dimensions:
+        |    carrier: carrier
+        |    origin: origin
+        |    carrier_class:
+        |      expr: "case when distance > 200 then 'long_haul' else 'short_haul' end"
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_ppm:
+        |      expr: "sum(pax_per_mile)"  # references the transform output
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models.contains("flights"))
+    assert(models("flights").measures.keySet == Set("flight_count", "total_ppm"))
+  }
+
+  test("ExpressionValidator: a measure can reference a previously-defined measure") {
+    // Window measures commonly ORDER BY another measure's output. E.g.
+    // `rank() over (order by total_passengers desc)` — `total_passengers`
+    // is a measure, not a source column, but it's visible in the projected
+    // DataFrame after the prior measure ran.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_passengers: "sum(passengers)"
+        |    rank_by_total: "rank() over (order by total_passengers desc)"
+        |""".stripMargin)
+    // Should NOT throw.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models("flights").measures.keySet == Set("total_passengers", "rank_by_total"))
+  }
+
+  test("ExpressionValidator: a typo in a measure-to-measure reference is still caught") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_passengers: "sum(passengers)"
+        |    rank_by_total: "rank() over (order by total_pax desc)"  # total_pax doesn't exist
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("total_pax"),
+      s"Expected missing-identifier error mentioning 'total_pax', got: ${ex.getMessage}")
+  }
+
+  test("ExpressionValidator: case-insensitive column matching (parity with Spark)") {
+    // Source column `passengers`, expression `PASSENGERS` — should pass.
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    total_pax: "sum(PASSENGERS)"  # upper-case matches `passengers`
+        |""".stripMargin)
+    // Should NOT throw — Spark resolves column names case-insensitively.
+    val models = YamlLoader.load(path, flightsTables)
+    assert(models.contains("flights"))
+  }
 }

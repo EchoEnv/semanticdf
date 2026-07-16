@@ -222,6 +222,18 @@ tree. Those are WHERE/HAVING clauses routed against the model's current
 grain — not pre-join model-load hygiene (see *Filters — WHERE/HAVING
 auto-routing* below for the query-time kind).
 
+**YAML expression validation (v0.1.1+).** `ExpressionValidator` parses
+every `dimensions:`, `transforms:`, and `measures:` `expr` at load time
+(via Spark's `CatalystSqlParser`) and checks that every column reference
+resolves against the visible columns at that point — source columns plus
+any previously-declared transforms (for `transforms:` and `measures:`)
+and previously-declared measures (for `measures:` referencing other
+measures, common in window-function ORDER BYs). A typo fails fast at
+load time with a clear error, not later at first query time as a
+cryptic Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION`. See
+[`ExpressionValidator`](src/main/scala/io/semanticdf/ExpressionValidator.scala)
+for the full visibility rules.
+
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
 ```scala
