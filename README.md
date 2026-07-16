@@ -212,9 +212,12 @@ val flights = toSemanticTable(flightsDf, name = Some("flights"))
 
 **Source-only / pre-join — enforced.** `SparkFilterValidator` runs at YAML
 load time and rejects any filter whose `expr` references a column that
-isn't on this model's source table. The guarantee: a filter runs exactly
-once per row of source data, regardless of how the model is later joined,
-aggregated, or sliced.
+isn't on this model's source table or produced by a `transforms:` entry
+(transforms run before filters, so their outputs are visible at filter
+time). Joined-side columns are NOT visible — filters apply pre-join by
+design. The guarantee: a filter runs exactly once per row of source
+data, regardless of how the model is later joined, aggregated, or
+sliced.
 
 **Distinct from `.where(...)`.** Query-time `.where(predicate)` /
 `.query(where = ...)` compile to a `SemanticFilterOp` inside the op
@@ -396,7 +399,7 @@ model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pul
 | `toSemanticTable(df, name?)` | Construct a semantic model from a base `DataFrame`. |
 | `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(ref, expr)` overload accepts a `SemanticMeasure` witness (v0.1.1). |
 | `.withTransforms(transforms*)` | Per-row logic (e.g. `datediff`, `case when`) applied to source data at model-load. Mirrors the YAML `transforms:` block. |
-| `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces the source-only / pre-join semantic at load time. |
+| `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces pre-join column visibility (source + transforms; joined-side columns not visible) at load time. |
 | `.version(v: Int)` | Set the model's version (forward-compat hint for consumers). `table.version` reads the current value (0 = unversioned). |
 | `.join_one(other, on)` / `.join_many(other, on)` / `.join_cross(other)` | Joins. |
 | `.where(pred)` / `.having(pred)` | Filters (auto-routed WHERE/HAVING). |

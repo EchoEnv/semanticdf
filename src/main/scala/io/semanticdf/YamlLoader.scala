@@ -427,7 +427,11 @@ object YamlLoader {
 
     // Optional `filters:` block — row-level hygiene on this model's source table.
     // Each filter's `expr:` is validated against the source DataFrame's columns
-    // (pre-join semantics; see SparkFilterValidator).
+    // plus any transform outputs (transforms run before filters, so their output
+    // columns are visible at filter time). Joins have NOT run yet at filter
+    // time, so joined-side columns are not visible — see SparkFilterValidator.
+    // (Pre-join semantics is the defining property of `filters:` vs query-time
+    // `.where(...)`.)
     cfg.get("filters").foreach { filtersRaw =>
       val filters = asStringToAnyMap(filtersRaw, s"model '$name' filters")
       filters.foreach { case (fName, fCfgRaw) =>
@@ -459,7 +463,11 @@ object YamlLoader {
           case _ => Map.empty[String, String]
         }
         // Pre-join column visibility check — fails fast at model-load time.
-        SparkFilterValidator.validate(expr, df.columns.toSet, name, fName)
+        // Filters can reference SOURCE columns AND TRANSFORM outputs (transforms
+        // run before filters, so their output columns are visible). Joins have
+        // NOT run yet at filter time, so joined-side columns are NOT visible
+        // (that path is documented in the validator's error message).
+        SparkFilterValidator.validate(expr, transformOutputs, name, fName)
         model = model.withRowFilter(fName, expr, description, meta)
       }
     }

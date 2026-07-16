@@ -161,6 +161,45 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
     assert(models("mixed").filters.head.name == "require_origin_mixed")
   }
 
+  // --- 3b. SparkFilterValidator sees transform outputs (v0.1.1) -----
+  //
+  // Before v0.1.1, SparkFilterValidator only knew about the source DataFrame's
+  // columns. A filter that referenced a transform output (e.g. a derived
+  // timestamp column produced by a `transforms:` block) would be falsely
+  // rejected. The fix: the YamlLoader passes the cumulative column set
+  // (source + transforms) to the validator, so transform outputs are visible.
+
+  test("SparkFilterValidator accepts a filter that references a transform output") {
+    // Source has `ts`; transform adds `flight_year`; filter references `flight_year`.
+    val schema = org.apache.spark.sql.types.StructType(Seq(
+      org.apache.spark.sql.types.StructField("ts", org.apache.spark.sql.types.StringType, nullable = true),
+    ))
+    val rows: java.util.List[org.apache.spark.sql.Row] = new java.util.ArrayList[org.apache.spark.sql.Row]()
+    rows.add(org.apache.spark.sql.Row("2024-06-15"))
+    val df = spark.createDataFrame(rows, schema)
+    val tables = Map[String, DataFrame]("events_tbl" -> df)
+
+    val path = writeYaml(
+      """
+        |events:
+        |  table: events_tbl
+        |  transforms:
+        |    flight_year:
+        |      expr: "year(ts)"
+        |      description: "Year extracted from the timestamp string"
+        |  filters:
+        |    require_recent_year:
+        |      expr: "flight_year >= 2024"
+        |      description: "Only recent events"
+        |""".stripMargin)
+    // Should NOT throw — the filter's `flight_year` is a transform output, not a
+    // source column, but transforms run before filters, so it's visible.
+    val models = YamlLoader.load(path, tables)
+    assert(models.contains("events"))
+    assert(models("events").filters.length == 1)
+    assert(models("events").filters.head.name == "require_recent_year")
+  }
+
   // ---------------------------------------------------------------------------
   // 4. ExpressionValidator — dims/transforms/measures fail fast on typos
   // ---------------------------------------------------------------------------
