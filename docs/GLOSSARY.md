@@ -1,0 +1,140 @@
+# Glossary
+
+A reader's reference for terms-of-art used across the SemanticDF docs and
+README. The library has a vocabulary of its own — every term below is
+either a public API surface or a recurring concept you'll see in
+examples, MCP tool responses, and Stack Overflow searches.
+
+If you read something and it isn't here, file an issue. We add to this
+list as new concepts land.
+
+## Building blocks
+
+- **SemanticTable** — the immutable facade over a base table + dimensions +
+  measures. The thing you `toSemanticTable(df).withDimensions(...)` and
+  then query. *Not* a Spark `DataFrame`; it compiles to one.
+- **SemanticOp / op tree** — `SemanticTable` wraps a root `SemanticOp`
+  (sealed trait). Each operation (`groupBy`, `aggregate`, `join`) adds a
+  new node. Nothing runs until a terminal — `toDataFrame(spark)`,
+  `execute(spark)`, or `collectAs[T](spark)` — compiles the tree.
+- **Dimension** — a groupable / filterable attribute (carrier, region,
+  timestamp). `Dimension("carrier", t => t("carrier"))` or
+  `Dimension.time("ts", t => t("ts"))`. The `expr:` lambda maps the
+  base DataFrame to a Spark `Column`.
+- **Measure** — a numeric aggregate (`flight_count`,
+  `total_passengers`). Three kinds:
+  - *Base* — aggregates a column directly (`sum(t("distance"))`).
+  - *Calc* — derives from other measures (`t("total") / t("count")`).
+    References resolve by name against the aggregated DataFrame.
+  - *Calculated measure (YAML)* — written as a string in YAML models
+    (`total_passengers / flight_count`); compiled by `CalcExpr`.
+- **Filter / row filter** — a pre-join hygiene predicate on the model's
+  source DataFrame. Defined in YAML's `filters:` block.
+- **Where / having filter** — a query-time predicate; the framework
+  routes dimension refs to WHERE (pre-agg) and measure refs to HAVING
+  (post-agg).
+- **Pre-aggregation / post-aggregation** — the engine executes some
+  operations before a `groupBy().agg(...)`, others after. "Pre-agg"
+  means on the base DataFrame; "post-agg" means on the already-grouped
+  result.
+
+## Lambdas, scopes, and `t.`
+
+- **SemanticScope** — the proxy `t` passed to dimension and measure
+  lambdas. `t("carrier")` resolves a column; `t("flight_count")` resolves
+  a measure (during calc compilation); `t.all("revenue")` references the
+  percent-of-total row.
+- **BaseScope** — used for base measures; only resolves base columns.
+- **MeasureScope** — used for calc measures; resolves base columns
+  *and* other measures by name.
+- **`t.all(name)`** — the percent-of-total escape hatch. Returns the
+  cross-joined totals row's column for `name`. Implemented in the
+  compiler as `crossJoin(broadcast(totalsDf))` where `totalsDf` is the
+  same measures aggregated with no group-by.
+- **Expression-tree surgery** — the (rejected) approach of rewriting a
+  Catalyst `Column` expression to inject a totals column reference. We
+  sidestep this by resolving names at compile time instead of editing
+  parsed expressions.
+
+## Pipelines & joins
+
+- **Op tree terminal** — the operation that compiles the tree to a
+  `DataFrame` (or, in the future, a `StreamingQuery`). One model, one
+  tree, two terminals (DESIGN §4.5, ADR 0002).
+- **`join_one` / `join_many` / `join_cross`** — the three join
+  cardinalities. `join_many` pre-aggregates the "many" side to the join
+  grain before joining, so you don't double-count. This is what makes
+  multi-fact stars correct without trusting the SQL planner.
+- **Pre-aggregation for fan-out prevention** — `join_many` runs an
+  `agg` on the "many" side at the grain of the join keys before the
+  join. Without this, a 1000-row fact table joined against a customer
+  dimension would explode to ~customer_x_orders rows.
+
+## Type safety
+
+- **SemanticField[T] / SemanticDimension[T] / SemanticMeasure[T]** —
+  phantom types and typeclass instances that wrap column references
+  with their static role (`Dimension` vs `Measure`). The typed query
+  API (`groupByDimensions(D1, D2)` / `aggregateMeasures(M1, M2)`)
+  catches dimension-vs-measure confusion at compile time. Zero runtime
+  cost.
+- **ResultDecoder[T]** — the typeclass that decodes a Spark `Row` into
+  a typed value `T`. `collectAs[T]` plumbs a `Seq[T]` from the
+  DataFrame.
+- **ResultDecoder.derive[T]** — Scala 2 macro that auto-generates a
+  `ResultDecoder[Foo]` instance for case classes whose fields are
+  String/Int/Long/Double/Float/Boolean/Short/Byte/BigDecimal.
+  Compile-time error on unsupported field types.
+
+## Validation & error envelopes
+
+- **ExpressionValidator** — parses every `expr:` field in a YAML model
+  with Spark's `CatalystSqlParser` at model-load time. A typo fails
+  fast with a clear message naming the model, the field, the missing
+  identifier, and the visible column set.
+- **CalcExpr.validateReferences** — same idea for the
+  `calculated_measures:` block; checks every `Ref(name)` and `all(name)`
+  against the visible measure set at model-load time.
+- **SparkFilterValidator** — enforces that row filters in YAML's
+  `filters:` block reference pre-join columns only. Joins have not run
+  yet at filter time, so joined-side columns are not visible.
+- **Envelope / ErrorEnvelope** — the wire-format wrapper the MCP
+  server (and REST transport) returns on every tool call. Standard
+  shape: `{status, data, warnings, meta}` for success;
+  `{error: {code, message, ...}}` for failure.
+- **Error codes** — `MODEL_NOT_FOUND`, `INVALID_REQUEST`,
+  `EXECUTION_ERROR`, `RESULT_TOO_LARGE`, `QUERY_TIMEOUT`,
+  `AMBIGUOUS_DIMENSION` / `AMBIGUOUS_MEASURE`, and the wire codes used
+  by the REST surface. See `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/`
+  for the handler that maps domain errors to these codes.
+
+## YAML model & OKF
+
+- **OKF (Open Knowledge Format)** — the markdown knowledge bundle
+  under `docs/agents/reference/<example>/`. Generated by `okfgen`
+  from each example's `models/*.yml`. The bundle is the source of truth
+  for an LLM agent reading about a model.
+- **`okfgen`** — the CLI tool that regenerates OKF bundles. The
+  bundle is *checked in* (not generated at runtime) so the catalog is
+  reproducible. Regenerate it whenever you change a YAML.
+- **`introspect`** — the inverse of `okfgen`. Given a DataFrame path
+  (parquet / csv / json), produce a *starter* YAML model. Heuristics:
+  string columns become dimensions, numeric become measures,
+  timestamp-keyed columns become time dimensions, names matching
+  `_id` / `_key` become entity dimensions.
+
+## MCP / REST surfaces
+
+- **MCP** — Model Context Protocol. The wire protocol (JSON-RPC over
+  stdio or HTTP) the MCP server speaks to give LLM agents tool access
+  to the library. See `semanticdf-mcp/README.md`.
+- **REST transport** — same `Handlers` and `Introspect` are exposed
+  over JDK's `com.sun.net.httpserver` (no extra Spark dependency).
+  Wire shape is identical to MCP; `Envelope[Data]` is the body for
+  every endpoint.
+- **Tools** — the operations MCP exposes: `list_models`,
+  `describe_model`, `query`, `explain`, `introspect`. Per-tool request
+  and response shapes are in `docs/agents/mcp-contract.md`.
+- **`sdf`** — the standalone CLI consumer in `examples/cli-consumer/`.
+  Not part of the server, but exercises the REST API as a real client.
+  Useful as both an end-user tool and a regression witness.

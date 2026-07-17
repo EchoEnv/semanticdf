@@ -52,6 +52,8 @@ guarantee that they're asking for the right thing.
 ## Where to read next
 
 - [`DESIGN.md`](DESIGN.md) — architecture of record
+- [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
+- [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
 - [`RELEASE.md`](RELEASE.md) — version-by-version changelog
 - [`docs/known-limitations.md`](docs/known-limitations.md) — features that aren't yet in scope
@@ -89,6 +91,111 @@ val flights = toSemanticTable(flightsDf, name = Some("flights"))
 flights.groupBy("carrier").aggregate("avg_distance_per_flight").execute(spark)
 // {AA → 125, UA → 225, DL → 325}
 ```
+
+## CLI Tools
+
+Two tools live in `src/main/scala/io/semanticdf/tools/`, both runnable via `mvn exec:java`:
+
+### docsgen — YAML model → browsable HTML
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
+  -Dexec.args="docsgen --path examples/starter/models/ --out docs/index.html"
+# Open docs/index.html in a browser
+```
+
+Reads one YAML file or a directory of `.yml` files and emits a self-contained HTML page (sidebar nav, per-model cards, dimension/measure/join tables, time/entity/pii badges). No Spark needed; no external dependencies.
+
+### introspect — DataFrame → YAML model starter
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
+  -Dexec.args="introspect --path examples/starter/data/flights.csv --format csv --model flights"
+# Writes a starter YAML to stdout (or --out models/flights.yml to write to a file).
+```
+
+Reads a data file via Spark, infers dimensions (StringType → dim, NumericType → sum/avg, TimestampType → time dimension with `is_time_dimension: true`), and emits a starter YAML model. Edit the output to refine types, add descriptions, and customise expressions.
+
+**Note — JDK 17 + Spark needs `--add-opens` flags** for any command that touches Spark (which includes `introspect`). Without them, the JVM crashes with `sun.nio.ch.DirectBuffer` access errors. Either set `MAVEN_OPTS` to the full flag set (see [`docs/runtime-quickstart.md`](docs/runtime-quickstart.md#traps) trap #1) or, for project-local reproducibility, drop a `.mvn/jvm.config` with one flag per line. `docsgen` does not need Spark, so it works without the flags.
+
+### okfgen — YAML models → agent knowledge catalog (sidecar markdown)
+
+```bash
+mvn exec:java \
+  -Dexec.mainClass=io.semanticdf.tools.Main \
+  -Dexec.args="okfgen --path examples/starter/models/ --out docs/agents/reference/starter/"
+# Writes one Markdown concept doc per model under the --out directory.
+```
+
+Generates per-model **sidecar Markdown** (OKF — the agent knowledge format) for an
+external agent catalog. Each `models/foo.yml` becomes `agents/reference/<project>/foo.md`,
+with one-line dimensions/measures/joins/filters plus a row-by-row examples reference.
+The YAML stays the engine source of truth — OKF is a publishing layer, not a schema
+replacement. See [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md) for the
+mapping rules and output format. `make okfgen-check` is the CI drift check — it re-runs
+okfgen to a tempdir and `diff -ru`'s the result against the committed bundle.
+
+## MCP server (`semanticdf-mcp`)
+
+The `semanticdf-mcp/` sibling module is a Model Context Protocol server that
+exposes semanticdf to any MCP-compatible client (Claude Desktop, Cursor, Continue)
+over **stdio**. All five tools from [`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md)
+ship in v0.1:
+
+| Tool | Purpose |
+|---|---|
+| `list_models`    | Reports loaded models (name + description) |
+| `describe_model` | Full schema (dimensions, measures, joins, filters, version) + optional OKF sidecar |
+| `query`          | Runs a query, returns rows + columns |
+| `explain`        | Same request shape, no execution — emits the semantic plan |
+| `introspect`     | Auto-generate starter YAML from a DataFrame |
+
+### Run the server
+
+```bash
+mvn install -DskipTests                                # install parent library to local ~/.m2
+cd semanticdf-mcp && mvn package
+mvn exec:java -Dexec.mainClass=io.semanticdf.mcp.Main \
+  -Dexec.args="--models ../examples/starter/models/ \
+               --data ../examples/starter/data-config.yaml \
+               --okf-bundle /tmp/okf/"
+```
+
+All three flags are required:
+
+| Flag | What |
+|---|---|
+| `--models <dir>`     | directory of `*.yml` model files |
+| `--data <file>`      | data-config YAML (`data:` block per the contract) |
+| `--okf-bundle <dir>` | where OkfGen writes the OKF markdown; server reads it into memory at startup |
+
+### Wire up a client (Claude Desktop example)
+
+```json
+{
+  "mcpServers": {
+    "semanticdf": {
+      "command": "java",
+      "args": [
+        "-jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1.jar",
+        "--models",
+        "/path/to/your/models",
+        "--data",
+        "/path/to/your/data-config.yaml",
+        "--okf-bundle",
+        "/tmp/okf/"
+      ]
+    }
+  }
+}
+```
+
+The server source lives in [`semanticdf-mcp/`](semanticdf-mcp/README.md). See
+[`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md) v2 for the
+request/response schema of every tool.
 
 ## Capabilities
 
@@ -707,114 +814,9 @@ cd examples/window-analytics   # or any other template
 mvn scala:run -DmainClass=com.example.windowanalytics.Main
 ```
 
-## CLI Tools
-
-Two tools live in `src/main/scala/io/semanticdf/tools/`, both runnable via `mvn exec:java`:
-
-### docsgen — YAML model → browsable HTML
-
-```bash
-mvn exec:java \
-  -Dexec.mainClass=io.semanticdf.tools.Main \
-  -Dexec.args="docsgen --path examples/starter/models/ --out docs/index.html"
-# Open docs/index.html in a browser
-```
-
-Reads one YAML file or a directory of `.yml` files and emits a self-contained HTML page (sidebar nav, per-model cards, dimension/measure/join tables, time/entity/pii badges). No Spark needed; no external dependencies.
-
-### introspect — DataFrame → YAML model starter
-
-```bash
-mvn exec:java \
-  -Dexec.mainClass=io.semanticdf.tools.Main \
-  -Dexec.args="introspect --path examples/starter/data/flights.csv --format csv --model flights"
-# Writes a starter YAML to stdout (or --out models/flights.yml to write to a file).
-```
-
-Reads a data file via Spark, infers dimensions (StringType → dim, NumericType → sum/avg, TimestampType → time dimension with `is_time_dimension: true`), and emits a starter YAML model. Edit the output to refine types, add descriptions, and customise expressions.
-
-**Note — JDK 17 + Spark needs `--add-opens` flags** for any command that touches Spark (which includes `introspect`). Without them, the JVM crashes with `sun.nio.ch.DirectBuffer` access errors. Either set `MAVEN_OPTS` to the full flag set (see [`docs/runtime-quickstart.md`](docs/runtime-quickstart.md#traps) trap #1) or, for project-local reproducibility, drop a `.mvn/jvm.config` with one flag per line. `docsgen` does not need Spark, so it works without the flags.
-
-### okfgen — YAML models → agent knowledge catalog (sidecar markdown)
-
-```bash
-mvn exec:java \
-  -Dexec.mainClass=io.semanticdf.tools.Main \
-  -Dexec.args="okfgen --path examples/starter/models/ --out docs/agents/reference/starter/"
-# Writes one Markdown concept doc per model under the --out directory.
-```
-
-Generates per-model **sidecar Markdown** (OKF — the agent knowledge format) for an
-external agent catalog. Each `models/foo.yml` becomes `agents/reference/<project>/foo.md`,
-with one-line dimensions/measures/joins/filters plus a row-by-row examples reference.
-The YAML stays the engine source of truth — OKF is a publishing layer, not a schema
-replacement. See [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md) for the
-mapping rules and output format. `make okfgen-check` is the CI drift check — it re-runs
-okfgen to a tempdir and `diff -ru`'s the result against the committed bundle.
-
-## MCP server (`semanticdf-mcp`)
-
-The `semanticdf-mcp/` sibling module is a Model Context Protocol server that
-exposes semanticdf to any MCP-compatible client (Claude Desktop, Cursor, Continue)
-over **stdio**. All five tools from [`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md)
-ship in v0.1:
-
-| Tool | Purpose |
-|---|---|
-| `list_models`    | Reports loaded models (name + description) |
-| `describe_model` | Full schema (dimensions, measures, joins, filters, version) + optional OKF sidecar |
-| `query`          | Runs a query, returns rows + columns |
-| `explain`        | Same request shape, no execution — emits the semantic plan |
-| `introspect`     | Auto-generate starter YAML from a DataFrame |
-
-### Run the server
-
-```bash
-mvn install -DskipTests                                # install parent library to local ~/.m2
-cd semanticdf-mcp && mvn package
-mvn exec:java -Dexec.mainClass=io.semanticdf.mcp.Main \
-  -Dexec.args="--models ../examples/starter/models/ \
-               --data ../examples/starter/data-config.yaml \
-               --okf-bundle /tmp/okf/"
-```
-
-All three flags are required:
-
-| Flag | What |
-|---|---|
-| `--models <dir>`     | directory of `*.yml` model files |
-| `--data <file>`      | data-config YAML (`data:` block per the contract) |
-| `--okf-bundle <dir>` | where OkfGen writes the OKF markdown; server reads it into memory at startup |
-
-### Wire up a client (Claude Desktop example)
-
-```json
-{
-  "mcpServers": {
-    "semanticdf": {
-      "command": "java",
-      "args": [
-        "-jar",
-        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1.jar",
-        "--models",
-        "/path/to/your/models",
-        "--data",
-        "/path/to/your/data-config.yaml",
-        "--okf-bundle",
-        "/tmp/okf/"
-      ]
-    }
-  }
-}
-```
-
-The server source lives in [`semanticdf-mcp/`](semanticdf-mcp/README.md). See
-[`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md) v2 for the
-request/response schema of every tool.
-
 ## Cross-version compatibility
 
-Verified green on all three lines (329 library tests + 72 MCP tests on each — `main` head as of PR `#62`):
+Verified green on all three lines (335 library tests + 72 MCP tests on each — `main` head as of PR `#64`):
 
 | Spark | Scala | Status |
 |---|---|---|
