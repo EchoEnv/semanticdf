@@ -497,22 +497,29 @@ final case class OrderBy(field: String, direction: String)
 /** Parser for one `order_by` JSON entry. Lives outside `Query` so the SDK
   * adapter can reach it. */
 object OrderByParser {
-  def parse(json: Any): OrderBy = json match {
-    case m: java.util.Map[_, _] =>
-      // `asScala.toMap` loses the key/value types — cast back explicitly so
-      // Scala 2 can resolve `Option[String]` below.
-      val map: Map[String, Any] = m.asScala.toMap.asInstanceOf[Map[String, Any]]
-      val field = map.get("field") match {
-        case Some(s: String) => s
-        case _ => throw new IllegalArgumentException("order_by[].field is required (string)")
-      }
-      val direction = map.get("direction") match {
-        case Some("desc") => "desc"
-        case _            => "asc"
-      }
-      OrderBy(field, direction)
-    case other =>
-      throw new IllegalArgumentException(s"order_by entry must be a JSON object, got ${other.getClass.getSimpleName}")
+  def parse(json: Any): OrderBy = {
+    // Accept BOTH java.util.Map (legacy SDK adapter callers) AND Scala Map
+    // (Jackson-with-DefaultScalaModule callers — the REST transport, after
+    // PR #54). Before #54, nested JSON objects over REST deserialised as
+    // java.util.LinkedHashMap and matched the original branch; after #54
+    // they arrive as Scala Map2 (the Scala module's default for untyped
+    // nested objects). See the regression tests in `QuerySpec` for the
+    // exact JSON path that triggered this.
+    val map: Map[String, Any] = json match {
+      case m: java.util.Map[_, _] => m.asScala.toMap.asInstanceOf[Map[String, Any]]
+      case m: Map[_, _]          => m.asInstanceOf[Map[String, Any]]
+      case other =>
+        throw new IllegalArgumentException(s"order_by entry must be a JSON object, got ${other.getClass.getSimpleName}")
+    }
+    val field = map.get("field") match {
+      case Some(s: String) => s
+      case _ => throw new IllegalArgumentException("order_by[].field is required (string)")
+    }
+    val direction = map.get("direction") match {
+      case Some("desc") => "desc"
+      case _            => "asc"
+    }
+    OrderBy(field, direction)
   }
 }
 
