@@ -370,11 +370,17 @@ that omit the (potentially large) `okf_markdown` field.
 - `models(model).joins.map(buildJoinSummary)` for the one-liner — see [Join one-liner rule](#join-one-liner-rule) for the format
 - For `okf_markdown`: read from a server-local cache populated at startup by `OkfGen.generate(<models-dir>, <bundle-dir>)`
 
-> **Note on `expr`:** library stores `SemanticScope => Column` which serializes poorly.
-> The MCP layer emits `expr.toString` for the simple cases (string-literal YAML
-> dimensions/measures) and a placeholder `"<scalar>"` for the rare synthesized
-> case. The LLM only ever needs the **name** to construct queries; the `expr`
-> field is informational and shown for debugging.
+> **Note on `expr`:** since PR `#58` (`Dimension`/`Measure` carry
+> `exprString`) the MCP layer surfaces the original expression string
+> verbatim for YAML-loaded models:
+> `expr = d.exprString.getOrElse(d.expr.toString)`. Programmatic
+> constructions (e.g. `Dimension("foo", t => t("bar"))` without an
+> `exprString` hint) still fall back to `lambda.toString`, which prints
+> as opaque addresses like `io.semanticdf.YamlLoader$$$Lambda$.../1234`;
+> for those, callers should populate `exprString = Some("bar")` at
+> construction. In all cases, the LLM only ever needs the **name** to
+> construct queries; the `expr` field is informational and shown for
+> debugging.
 
 ---
 

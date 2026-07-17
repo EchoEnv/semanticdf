@@ -41,7 +41,7 @@ cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
-This puts `io.semanticdf:semanticdf_2.13:0.1.2` in `~/.m2/repository`.
+This puts `io.semanticdf:semanticdf_2.13:0.1.3` in `~/.m2/repository`.
 
 ### Step 2: run the starter
 

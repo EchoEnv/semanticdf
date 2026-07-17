@@ -2,6 +2,25 @@
 
 **Goal:** Surface real production gaps in semanticdf by running it against real data with a real workload. Bugs that only surface with messy data, real schemas, and real volumes. Not a production deployment — a structured soak test.
 
+> **Status (2026-07):** Plan served its purpose — first consumer landed in
+> `v0.1.3`. Specifically `examples/cli-consumer/` (`sdf` CLI, PR `#57`) is a
+> standalone Scala binary that exercises the MCP / REST surfaces as a real
+> client. Within its first round of probing it surfaced two issues, both
+> fixed:
+>
+> 1. `order_by` over REST was broken (regression from PR `#54`'s Jackson
+>    Scala module) — fixed in PR `#56`.
+> 2. `describe_model` `expr` field serialised as opaque lambda addresses
+>    (`io.semanticdf.YamlLoader$$$Lambda$...`) — fixed in PR `#58`; the
+>    library now carries `exprString` on `Dimension`/`Measure` and the
+>    handler prefers it.
+>
+> `sdf` continues to serve as a regression witness for the REST contract.
+> The structured 3-week soak (this plan's §2–§6) was abandoned in favour of
+> the lighter-weight "let `sdf` re-run whenever the contract changes"
+> approach. The plan is retained as historical context for why
+> `cli-consumer/` exists.
+
 ---
 
 ## 1. Selecting the First Consumer

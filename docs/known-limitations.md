@@ -1,6 +1,8 @@
 # Known Limitations
 
-This document lists features that do not work in v0.1.2. Read this before starting — it will save you from hitting obvious gaps without context.
+This document lists features that do not work as of v0.1.3 (with the
+post-`v0.1.3` fixes from PRs `#61` and `#62`). Read this before starting — it
+will save you from hitting obvious gaps without context.
 
 ---
 
@@ -174,12 +176,6 @@ joining.
 - Rename one side to a unique name before joining
 - Use the Scala DSL's `.alias(name)` (future feature)
 
-### orderBy with dotted dimension names
-
-`orderBy("carriers.name")` is parsed by Spark as `catalog.table.column`, not a literal
-dotted column name. Group-by and aggregation on dotted names work fine; only `orderBy`
-is affected. Sort results in Scala as a workaround.
-
 ---
 
-*This document is updated after each production soak cycle. Last updated: v0.1.2 (lazy `withTransforms` for join models; no `SparkSession.active` side effect).*
+*This document is updated after each production soak cycle. Last updated: v0.1.3 + post-tag fixes from PRs `#61` (wiring `# WARN:` warnings through `Introspect.handle()` + making `field_inventory.skipped` agree with `warnings`) and `#62` (clean entity placeholder names in `Introspector.toJoinYaml`).*

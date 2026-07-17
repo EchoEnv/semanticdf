@@ -9,9 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1.3 — Jackson Scala module wiring, REST test infra fixes, CLI consumer debut. **387/387 tests green** (319 library + 68 MCP) under Spark
-3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of
-record and [`docs/adr/`](docs/adr/) for recorded decisions.
+**Status:** v0.1.3 + post-tag fixes (`#54`–`#59` shipped in 0.1.3; `#61` and `#62` shipped after the tag, included on `main`). **401/401 tests green** (329 library + 72 MCP) under Spark 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
 ## Build
 
@@ -734,8 +732,7 @@ request/response schema of every tool.
 
 ## Cross-version compatibility
 
-Verified green on all three lines (294 tests each — Phase D + integration + YAML loader +
-type-safety + load-time validation regression suites):
+Verified green on all three lines (329 library tests + 72 MCP tests on each — `main` head as of PR `#62`):
 
 | Spark | Scala | Status |
 |---|---|---|
