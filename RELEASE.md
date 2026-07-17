@@ -1,5 +1,121 @@
 # Release notes
 
+## v0.1.4 — Introspect wiring, join-alias cleanup, ResultDecoder.derive, docs reorg
+
+A docs-and-tooling release. Twelve PRs since v0.1.3 (#61–#72): two library
+fixes (`Introspect` warnings end-to-end, clean `toJoinYaml` placeholder
+names), one new macro (`ResultDecoder.derive[T]`), and the rest is the
+four-tier documentation reorganization that produced `docs/guide.md`,
+`docs/GLOSSARY.md`, `docs/DOCS_MAP.md`, an examples index, and a reframed
+`docs/known-limitations.md`. Library, MCP server, and CLI are at
+`io.semanticdf:semanticdf_2.13:0.1.4`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.4`, and
+`io.semanticdf:semanticdf-cli_2.13:0.1.4`.
+
+### Library
+
+- **#61** — `Introspect.parseInventory.skipped` now derives from
+  `parseWarnings(yaml).length` instead of `totalCols - declared`, which
+  under-counted when an entity column appeared in multiple YAML sections.
+  New `IntrospectEndToEndSpec` (4 tests) drives a real CSV through
+  `Introspect.handle()` via `SparkFixture`; new `introspect-busy.csv`
+  fixture (12 cols).
+- **#62** — New `FieldInfo.joinAlias(name)` helper strips entity suffixes
+  (`_id`, `_key`, `_uuid`, `_code`, longest-first) + trailing underscore
+  from the placeholder names `Introspector.toJoinYaml` emits. Fixes:
+  `id` → `id_model` (was `_model`); `order_id` → `order_model` (was
+  `order__model`); `event_uuid` → `event_model` (was `event_u_model`).
+  +10 tests in `IntrospectorSpec`; new `join-alias-fixture.csv`.
+- **#64** — `ResultDecoder.derive[T]` Scala 2 blackbox macro. Generates a
+  decoder at compile time for case classes whose fields are all primitives
+  (`String`, `Int`, `Long`, `Double`, `Float`, `Boolean`, `Short`, `Byte`,
+  `java.math.BigDecimal`). Compile-time failure for non-case-classes and
+  unsupported field types. Closes the typeclass-derivation deferral noted
+  in `docs/phase-E-plan.md` §E1. New `ResultDecoderMacros.scala` (157
+  lines); +6 tests.
+
+### MCP server
+
+- **#63** — Docs refresh (version/test-count references; orderBy
+  limitation in `known-limitations.md` retired since fixed by #46).
+- **#65** — Surface `ResultDecoder.derive[T]` in README + DESIGN +
+  phase-E-plan + feature-roadmap docs.
+- (serverInfo version string now reports `0.1.4`.)
+
+### CLI consumer (`examples/cli-consumer/`)
+
+- **#59** — Close out the "What building this surfaced" section in the CLI
+  README: both findings (orderBy regression from #54, missing
+  `exprString`) are now fixed (#56, #58). Section reframed as a
+  regression-witness summary rather than an open findings list.
+- (CLI banner now reports `0.1.4`.)
+
+### Documentation reorg (four tiers)
+
+The big lift this release. Each tier was one or two focused PRs.
+
+**T1 — Glossary + Docs Map + README reorder (#67).** New
+`docs/GLOSSARY.md` (~50 terms in 7 categories). New `docs/DOCS_MAP.md`
+(3 wayfinding aids: by-journey table, doc-roles table, 3 reading paths
+by time budget). README reordered: CLI Tools + MCP server moved right
+after Quick start; Capabilities demoted to after the agent-facing
+surfaces.
+
+**T2 — examples index (#68).** New `examples/README.md` — central index
+for the 8 example templates with a "Start here" command, 6 recommended
+reading paths (evaluate/CRM/ops/messy-data/agent/telco), per-example
+one-liners, and prerequisites.
+
+**T3 — guide.md narrative + README trim (#69, #70).** New
+`docs/guide.md` — the narrative walkthrough companion to `DESIGN.md`.
+#69 landed the 11-section skeleton (~317 lines). #70 expanded every
+section with an in-depth worked example (→ ~685 lines) and trimmed
+README `## Capabilities` by relocating four tutorial-length subsections
+(Transforms, Filters pre-join, Notebook escape hatch, EXPLAIN — combined
+~400 lines) into `guide.md` as worked examples. README Capabilities went
+from ~530 to 310 lines; each subsection is now a scannable teaser with a
+link to its guide.md counterpart.
+
+**T4 — per-doc audit + known-limitations reframe (#71).** Project-wide
+staleness sweep across 24 hand-written docs: corrected Scala `2.13.14`
+→ `2.13.18`, fixed a self-contradictory Spark-version table in README
+(claimed `4.0.0` and `4.1.1` both via `-Pspark4`; actually default=
+3.5.8, `-Pspark4`=4.1.1), refreshed test counts (329/401 → 335/407),
+fixed 5 broken `examples/` links in `runtime-quickstart.md`. Reframed
+`docs/known-limitations.md` from "Known Limitations" to "Current scope
+& guardrails" — optimistic tone, "At a glance" summary table, each scope
+item now carries Workaround-today + Roadmap labels, new Roadmap summary
+closing section. All technical content (workarounds, code samples)
+preserved verbatim.
+
+### Repo hygiene
+
+- **#66** — README intro rewrite: status banner replaced with an
+  educational intro ("What problems SemanticDF solves" / "What you can
+  do with it" / "When to use it" / "Where to read next").
+- **#72** — Remove env-local `skills-lock.json` from the repo (was
+  committed by accident before the `.gitignore` entry existed).
+
+### Test count
+
+- **Grand total:** 407 tests (335 library + 72 MCP), all green on Spark
+  3.5.8 (default) and Spark 4.1.1 (`-Pspark4`). Up from 387 in v0.1.3
+  (+16 library tests from #61 `IntrospectEndToEndSpec`, #62
+  `IntrospectorSpec` join-alias, #64 `ResultDecoder.derive`; MCP
+  unchanged at 72).
+
+### Compatibility
+
+No breaking changes. All v0.1.4 work is additive:
+- `ResultDecoder.derive[T]` is a new macro alongside the existing manual
+  `ResultDecoder[T]` construction.
+- `FieldInfo.joinAlias` is a new helper; `Introspector.toJoinYaml`
+  output changes (cleaner placeholder names) but the YAML it produces is
+  consumed only by humans as a starter — no downstream code parses it.
+- `Introspect.parseInventory.skipped` semantics changed (now derived from
+  `parseWarnings(yaml).length`); the field's value is more accurate now,
+  not less.
+
 ## v0.1.3 — Jackson Scala module + REST test infra + CLI consumer
 
 A release that closes a regression from PR #54, fixes MCP-side test
