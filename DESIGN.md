@@ -349,14 +349,14 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
 - **Testing:** `scalatest` 3.2.x; an in-memory local `SparkSession` fixture; a `flights` test fixture mirroring BSL's so behavior parity is checkable.
 - **Publishing / binary compat:** deferred (ADR 0001) — no Maven Central deploy and no `mima-maven-plugin` until there is a downstream consumer to keep stable.
 
-**pom.xml (planned, abridged):**
+**pom.xml (planned, abridged; version is illustrative — current release is 0.1.3):**
 
 ```xml
 <project>
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf_2.13</artifactId>
-  <version>0.1.2</version>
+  <version>0.1.3</version>
   <packaging>jar</packaging>
 
   <properties>
