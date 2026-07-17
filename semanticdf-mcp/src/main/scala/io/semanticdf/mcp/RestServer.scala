@@ -1,7 +1,7 @@
 package io.semanticdf.mcp
 
 import com.sun.net.httpserver.{HttpExchange, HttpHandler, HttpServer => JdkHttpServer}
-import io.modelcontextprotocol.json.{McpJsonDefaults, McpJsonMapper}
+import io.modelcontextprotocol.json.McpJsonMapper
 import io.semanticdf.mcp.handlers.{DescribeModel, Introspect, ListModels, Query}
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
@@ -46,7 +46,7 @@ final class RestServer(
     spark: SparkSession,
     models: Models,
     okf: OkfCache,
-    mapper: McpJsonMapper = McpJsonDefaults.getMapper(),
+    mapper: McpJsonMapper = JsonSupport.scalaMapper(),
     port: Int = 8080,
     numThreads: Int = 4,
 ) {

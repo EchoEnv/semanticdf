@@ -42,6 +42,17 @@
             <version>${mcp.sdk.version}</version>
         </dependency>
 
+        <!-- Jackson implementation of McpJsonMapper. Wraps an ObjectMapper
+             with the Scala module registered for generic-case-class
+             serialization (Envelope[T], etc.). Pinned to a Jackson
+             version compatible with Spark 3.5.x's bundled Scala module
+             (2.15.2) — see the jackson-databind override below. -->
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-json-jackson2</artifactId>
+            <version>${mcp.sdk.version}</version>
+        </dependency>
+
         <!-- Spark SQL — required by semanticdf's runtime. The MCP server initializes
              a single SparkSession at startup to load the data-config block. -->
         <dependency>
@@ -56,6 +67,30 @@
             <groupId>org.scala-lang</groupId>
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
+        </dependency>
+
+        <!-- Jackson Databind - pinned to 2.15.2 to match Spark 3.5.x's bundled
+             jackson-module-scala 2.15.2. The MCP SDK's mcp-json-jackson2
+             declares jackson-databind 2.20.1 which is INCOMPATIBLE with
+             Spark's scala module (it does a strict version range check at
+             registerModule time and throws). Pinning to 2.15.x lets us use
+             the Scala module (for Envelope[T] serialization) without
+             crashing Spark's RDDOperationScope$ static initializer. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+
+        <!-- Jackson Scala Module - explicit compile-scope dep. Spark brings
+             this in transitively as 'provided' (for its own internal use),
+             but we need it at runtime to register on our ObjectMapper
+             (so generic case classes like Envelope[T] serialize correctly).
+             Version 2.15.2 matches the pinned jackson-databind. -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.module</groupId>
+            <artifactId>jackson-module-scala_2.13</artifactId>
+            <version>2.15.2</version>
         </dependency>
 
         <!-- YAML reader for the data-config file (data sources, formats, read options). -->

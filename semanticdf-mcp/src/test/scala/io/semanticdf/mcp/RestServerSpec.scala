@@ -1,7 +1,7 @@
 package io.semanticdf.mcp
 
 import com.sun.net.httpserver.{HttpServer => JdkHttpServer}
-import io.modelcontextprotocol.json.McpJsonDefaults
+// (McpJsonDefaults is no longer imported; we use JsonSupport.scalaMapper below)
 import io.semanticdf.{Dimension, Measure, toSemanticTable}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit}
@@ -65,7 +65,7 @@ class RestServerSpec extends AnyFunSuite with org.scalatest.BeforeAndAfterAll {
     .build()
 
   override protected def beforeAll(): Unit = {
-    val mapper = McpJsonDefaults.getMapper()
+    val mapper = JsonSupport.scalaMapper()
     val rest = new RestServer(spark, testModels, new OkfCache(Map.empty), mapper, port = 0)
     server = rest.start()
     port = server.getAddress.getPort
@@ -98,32 +98,43 @@ class RestServerSpec extends AnyFunSuite with org.scalatest.BeforeAndAfterAll {
   // Happy paths
   // ---------------------------------------------------------------------------
 
-  test("GET /models returns the loaded models") {
+  test("GET /models returns the loaded models with full JSON envelope") {
     val (status, body) = get("/models")
     assert(status == 200, s"expected 200, got $status: $body")
-    assert(body.contains("flights"),
-      s"expected body to contain 'flights', got: $body")
+    assert(body.contains("\"status\":\"ok\""), s"expected status:ok, got: $body")
+    assert(body.contains("\"models\""), s"expected models field, got: $body")
+    assert(body.contains("\"flights\""), s"expected flights model, got: $body")
   }
 
-  test("GET /models/{name} returns schema details for the model") {
+  test("GET /models/{name} returns schema details with full JSON envelope") {
     val (status, body) = get("/models/flights")
     assert(status == 200, s"expected 200, got $status: $body")
-    assert(body.contains("flights"),
-      s"expected body to contain 'flights', got: $body")
+    assert(body.contains("\"status\":\"ok\""), s"expected status:ok, got: $body")
+    assert(body.contains("\"flights\""), s"expected flights name, got: $body")
+    // Envelope[DescribeModel.Data] should serialize the dimensions/measures
+    assert(body.contains("dimensions") || body.contains("measures"),
+      s"expected dimensions/measures, got: $body")
   }
 
-  test("POST /query with valid request returns 200") {
+  test("POST /query with valid request returns rows as JSON") {
     val body = """{"model": "flights", "measures": ["score_sum"], "dimensions": ["carrier"]}"""
-    val (status, _) = postJson("/query", body)
-    assert(status == 200, s"expected 200, got $status")
+    val (status, resp) = postJson("/query", body)
+    assert(status == 200, s"expected 200, got $status: $resp")
+    assert(resp.contains("\"status\":\"ok\""), s"expected status:ok, got: $resp")
+    assert(resp.contains("\"columns\""), s"expected columns field, got: $resp")
+    assert(resp.contains("\"rows\""), s"expected rows field, got: $resp")
+    assert(resp.contains("AA") && resp.contains("UA") && resp.contains("DL"),
+      s"expected carrier values in rows, got: $resp")
   }
 
-  test("POST /explain returns the plan text") {
+  test("POST /explain returns the plan text as JSON") {
     val body = """{"model": "flights", "measures": ["score_sum"], "dimensions": ["carrier"]}"""
     val (status, resp) = postJson("/explain", body)
     assert(status == 200, s"expected 200, got $status")
-    assert(resp.contains("PLAN") || resp.contains("plan") || resp.contains("Error") || resp.length > 0,
-      s"expected non-empty response, got: ${resp.take(100)}")
+    assert(resp.contains("\"status\":\"ok\""), s"expected status:ok, got: $resp")
+    // The plan text is the `data` field — Query.explain returns Envelope[String]
+    assert(resp.contains("PLAN") || resp.contains("Error"),
+      s"expected PLAN/error in response, got: ${resp.take(200)}")
   }
 
   // ---------------------------------------------------------------------------
@@ -166,7 +177,7 @@ class RestServerSpec extends AnyFunSuite with org.scalatest.BeforeAndAfterAll {
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("n_sum", t => count(lit(1))))
     val models = new Models(Map("flights" -> table), DataConfig(Map.empty))
-    val mapper = McpJsonDefaults.getMapper()
+    val mapper = JsonSupport.scalaMapper()
     val tinyRest = new RestServer(spark, models, new OkfCache(Map.empty), mapper, port = 0, numThreads = 2)
     val tiny = tinyRest.start()
     try {
