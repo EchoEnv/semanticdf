@@ -1,6 +1,61 @@
 # Release notes
 
-## v0.1.2 — lazy compile contract for `withTransforms`
+## v0.1.3 — Jackson Scala module + REST test infra + CLI consumer
+
+A release that closes a regression from PR #54, fixes MCP-side test
+isolation, introduces a real CLI consumer for the REST API, and surfaces
+the original expression string in `describe_model`. Library, MCP server,
+and CLI are at `io.semanticdf:semanticdf_2.13:0.1.3`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.3`, and
+`io.semanticdf:semanticdf_2.13:0.1.3` (cli-consumer module).
+
+### What changed
+
+**1. Real CLI consumer for the REST API** (#57). New `examples/cli-consumer/`
+module — a standalone Scala binary (depends only on jackson-databind +
+scala-library, no Spark, no semanticdf, no MCP SDK). Subcommands:
+`list`, `describe`, `query`, `explain`. Parses responses via Jackson's
+`JsonNode` tree model. `bin/sdf` wrapper caches the classpath
+(`~0.5 s` startup after the first run). Proves the "any HTTP client can
+drive the REST API" promise of the REST transport.
+
+**2. Original expression string surfaces from `describe_model`** (#58).
+Before v0.1.3, `DescribeModel` serialised `Dimension`/`Measure` `expr`
+via the lambda's `toString`, producing opaque addresses like
+`io.semanticdf.YamlLoader$$$Lambda$.../1234567`. Now `Dimension` and
+`Measure` carry an optional `exprString` (defaults to `None`; populated
+by `YamlLoader` from the YAML `expr:` value). `DescribeModel` prefers
+the string. Joined dimensions surface the alias-prefixed user-facing
+name (e.g. `carriers.name`).
+
+**3. `OrderByParser` accepts both `java.util.Map` and Scala `Map`** (#56).
+Regression fix from PR #54: with the Jackson Scala module registered,
+nested objects deserialize as Scala `Map2`, but `OrderByParser.parse`
+still pattern-matched `java.util.Map[_, _]`. Now matches both; explicit
+error case for unsupported map types. 5 regression tests added.
+
+**4. Shared `SparkSession` across MCP specs** (#55). New `SparkFixture`
+trait in `semanticdf-mcp/src/test/scala/io/semanticdf/mcp/`. One
+`SparkSession` per test JVM (replaced per-spec `beforeAll`/`afterAll`
+patterns that raced on `SparkContext.stop`). All MCP specs (`QuerySpec`,
+`DescribeModelSpec`, `RestServerSpec`, `ListModelsSpec`) mix in.
+`RestServerSpec`'s pre-existing `RESULT_TOO_LARGE` flake (masked by the
+race) is now stable — 63/63 MCP tests pass deterministically.
+
+**5. Jackson Scala module wired into MCP** (#54). `jackson-databind` is
+pinned to `2.15.2` (Spark's bundled version); `jackson-module-scala_2.13`
+is added as compile-scope. `JsonSupport.scala` provides a private[mcp]
+mapper that registers `DefaultScalaModule` so `Envelope[T]` and all the
+entry case classes (`DimensionEntry`, `MeasureEntry`, `JoinEntry`,
+etc.) serialise as proper JSON objects instead of `{}`. Single consistent
+Jackson version across the server.
+
+**6. CLI README: "What building this surfaced" retired as a findings list**
+(#59). Both surfaced findings (order_by regression, lambda expr
+addresses) have been fixed in PRs #56 and #58. Section is now a 13-line
+summary naming both PRs and framing `sdf` as a standing **regression
+witness** for the REST contract. Section title kept so deep links don't
+break.
 
 A focused refactor that fixes a long-standing side effect in
 `SemanticTable.withTransforms` on join models. Library and MCP server
@@ -144,6 +199,117 @@ cd semanticdf-mcp && mvn -o test    # 35/35
 # OKF drift
 make okfgen-check                   # bundle in sync with YAMLs
 ```
+
+---
+
+### Public API: additive only, zero breaking changes
+
+- New `Dimension.exprString` and `Measure.exprString` fields are optional
+  with a default of `None`. Every existing `Dimension(...)` /
+  `Measure(...)` call site compiles unchanged.
+- New `examples/cli-consumer/` module is additive — it is *not* bundled
+  with `semanticdf` or `semanticdf-mcp`. Existing consumers are untouched.
+- `DescribeModel`'s JSON shape is unchanged (still `{dimensions: [...],
+  measures: [...], ...}` with `expr: String` per entry); only the
+  *value* of `expr` is now human-readable.
+- `OrderByParser` accepts both map shapes — every legacy `java.util.Map`
+  caller keeps working.
+
+### Files changed (cumulative across #54–#59)
+
+- `semanticdf-mcp/pom.xml` — Jackson version pin (`2.15.2`) +
+  `jackson-module-scala_2.13` dependency.
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/JsonSupport.scala`
+  *(new)* — `scalaMapper()` factory registering `DefaultScalaModule`.
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/Main.scala`,
+  `RestServer.scala` — use `JsonSupport.scalaMapper()`.
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/DescribeModel.scala`
+  — serialise `exprString.getOrElse(expr.toString)`.
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/Query.scala`
+  — `OrderByParser.parse` accepts Scala `Map` plus `java.util.Map`.
+- `semanticdf-mcp/src/test/scala/io/semanticdf/mcp/SparkFixture.scala`
+  *(new)* — shared trait with `@transient private lazy val _spark`.
+- `semanticdf-mcp/src/test/scala/io/semanticdf/mcp/{Query,DescribeModel,RestServer,ListModels}Spec.scala`
+  — mix in `SparkFixture`.
+- `src/main/scala/io/semanticdf/Model.scala` — `Dimension` /
+  `Measure` gain `exprString: Option[String]`; `Dimension.copy` /
+  `equals` / `hashCode` updated.
+- `src/main/scala/io/semanticdf/YamlLoader.scala` — populate
+  `exprString` from the YAML `expr:` value in three builder sites
+  (`buildDimension`, `buildBaseMeasure`, `buildCalcMeasure`) and the
+  join re-exposure site.
+- `src/test/scala/io/semanticdf/YamlLoaderSpec.scala` — 4 new tests
+  locking expr-string preservation through YAML load.
+- `semanticdf-mcp/src/test/scala/io/semanticdf/mcp/handlers/DescribeModelSpec.scala`
+  — 5 new tests (programmatic hint, back-compat fallback, complex
+  expressions, entity/time dims).
+- `examples/cli-consumer/` *(new module, all files new)* — pom.xml,
+  `Main.scala`, `bin/sdf`, `bin/semanticdf`, README.md, .gitignore.
+- `examples/cli-consumer/src/main/scala/com/example/sdfcli/Main.scala`
+  — `maskExpr` docstring clarified as graceful-degradation hook.
+- `examples/cli-consumer/README.md` — "What building this surfaced"
+  retired as a findings list; example output refreshed with real
+  expression strings.
+
+### Tests
+
+- **Library:** 319 (+4 for `exprString` preservation).
+- **MCP:** 68 (+5 `describe_model` expr tests, +5 `OrderByParser`
+  regression tests).
+- **Grand total:** 387 tests, all green on Spark 3.5.8 and Spark 4.1.1.
+
+### Migration
+
+None required. To consume v0.1.3:
+
+```scala
+// build.sbt
+"io.semanticdf" %% "semanticdf"     % "0.1.3",
+"io.semanticdf" %% "semanticdf-mcp" % "0.1.3"
+```
+
+If you also want the standalone CLI consumer as a separate JAR:
+
+```scala
+"io.semanticdf" %% "semanticdf" % "0.1.3" classifier "cli-consumer"
+// (or depend on `examples/cli-consumer/` directly from the source tree)
+```
+
+### Out of scope for v0.1.3 (deferred to v0.2+)
+
+- REST auth / streaming (currently local-only by design)
+- Case-class `ResultDecoder` macro derivation
+- Cross-`SparkSession` model sharing / remote warehouse federation
+- `Introspector` warning lines in emitted YAML (the suppression hook
+  on the MCP side is in place; the library just doesn't emit them yet)
+
+### Verifying the release
+
+```bash
+# Library
+mvn -o test                          # 319/319 on Spark 3.5.8
+mvn -o test -Dspark.version=4.1.1   # 319/319 on Spark 4.1.1
+
+# MCP server
+cd semanticdf-mcp && mvn -o test    # 68/68
+
+# CLI consumer (smoke)
+cd examples/cli-consumer
+./bin/sdf list --url http://localhost:8080
+./bin/sdf describe --url http://localhost:8080 <model-name>
+
+# OKF drift
+make okfgen-check                   # bundle in sync with YAML
+```
+
+### How this was built
+
+Six PRs landed between 2026-07-15 and 2026-07-17 (#54–#59). See
+`git log v0.1.2..v0.1.3` for the commit history. The cluster is split
+between infrastructure wiring (Jackson Scala module, shared test
+fixture), a regression fix (`OrderByParser`), and two surface additions
+that close out the CLI consumer's first round of friction-finding
+(real `expr` strings, and the CLI README itself).
 
 ---
 
