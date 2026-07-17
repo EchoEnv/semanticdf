@@ -279,50 +279,15 @@ keywords (`order`, `rows`, `range`, `between`, `unbounded`, `preceding`,
 
 ### Transforms (per-row computations, applied at model-load)
 
-Per-row logic — `datediff(...)`, `case when ...`, window functions —
-doesn't fit the measure's aggregate context. Use the new `transforms:`
-block (YAML) or `withTransforms(...)` (Scala DSL) to apply such logic
-to the source data at model-load time. Transforms correspond to
-[dbt staging models](https://docs.getdbt.com/docs/build/staging-models)
-and [LookML `derived_table`](https://cloud.google.com/looker/docs/derived-tables)
-— the canonical place for per-row data prep.
+Per-row logic — `datediff(...)`, `case when ...`, window functions — is
+applied to the source DataFrame at model-load time via the YAML `transforms:`
+block or Scala `withTransforms(...)`. Transformed columns become part of
+the source DataFrame and are visible to subsequent filters and measures.
+Order matters (no automatic topological sort).
 
-```yaml
-# YAML
-orders:
-  table: orders_csv
-  transforms:
-    ship_days:
-      expr: "datediff(shipped_at, order_date)"
-      description: "Days from order placement to shipment (per-row)"
-    on_time_flag:
-      expr: "case when datediff(shipped_at, order_date) <= 2 then 1 else 0 end"
-      description: "1 if shipped within 2 days, else 0 (per-row)"
-  measures:
-    total_ship_days: "sum(ship_days)"
-  calculated_measures:
-    avg_ship_days: "total_ship_days / count(1)"
-```
-
-```scala
-// Scala DSL — equivalent
-val orders = toSemanticTable(ordersCsv, name = Some("orders"))
-  .withTransforms(
-    Transform("ship_days",      t => datediff(t("shipped_at"), t("order_date"))),
-    Transform("on_time_flag",   t => when(datediff(t("shipped_at"), t("order_date")) <= 2, lit(1)).otherwise(lit(0))),
-  )
-  .withMeasures(Measure("total_ship_days", t => sum(t("ship_days"))))
-```
-
-**Single source of truth:** YAML `transforms:` and Scala `withTransforms(...)`
-produce equivalent results — the same per-row logic, expressed in either.
-Transformed columns become part of the source DataFrame; downstream
-measures see them as regular columns and aggregate them freely.
-
-**Order matters:** transforms apply in declaration order. If transform B
-references a column added by transform A, declare A first. There is
-no automatic topological sort (the user is responsible for ordering
-the dependencies correctly).
+For a worked example with the YAML + Scala equivalents, the model-load
+lifecycle, and what fields downstream measures see, see
+[`docs/guide.md` → Transforms](docs/guide.md#dimensions-measures-and-transforms).
 
 ### Filters (pre-join row-level hygiene, applied at model-load)
 
@@ -334,71 +299,23 @@ query returns. Declare it on the model via `filters:` (YAML) or
 against this model's source table only.
 
 ```yaml
-# YAML
 flights:
   table: flights_csv
-  # Pre-join row-level hygiene. Column references must resolve against
-  # flights_* — joined-side columns are rejected at load time.
   filters:
     require_origin_and_carrier:
       expr: "origin IS NOT NULL AND carrier IS NOT NULL"
-      description: "Drop rows with null origin or carrier — flagged in upstream QA rule."
-      metadata:
-        owner: data-platform-team
-        tags: [data-quality]
+      description: "Drop rows with null origin or carrier."
   dimensions:
-    carrier:
-      expr: carrier
+    carrier: carrier
 ```
 
-```scala
-// Scala DSL — equivalent
-val flights = toSemanticTable(flightsDf, name = Some("flights"))
-  .withRowFilter(
-    name        = "require_origin_and_carrier",
-    expr        = "origin IS NOT NULL AND carrier IS NOT NULL",
-    description = Some("Drop rows with null origin or carrier — flagged in upstream QA rule."),
-    metadata    = Map("owner" -> "data-platform-team", "tags" -> "[data-quality]"),
-  )
-```
+`SparkFilterValidator` enforces pre-join visibility at load time — a
+filter referencing a joined-side column is rejected. For the Scala DSL
+form, the visibility rules, and a worked example, see
+[`docs/guide.md` → Filters](docs/guide.md#filters-pre-join-hygiene-public-where-for-query-time).
 
-**Source-only / pre-join — enforced.** `SparkFilterValidator` runs at YAML
-load time and rejects any filter whose `expr` references a column that
-isn't on this model's source table or produced by a `transforms:` entry
-(transforms run before filters, so their outputs are visible at filter
-time). Joined-side columns are NOT visible — filters apply pre-join by
-design. The guarantee: a filter runs exactly once per row of source
-data, regardless of how the model is later joined, aggregated, or
-sliced.
-
-**Distinct from `.where(...)`.** Query-time `.where(predicate)` /
-`.query(where = ...)` compile to a `SemanticFilterOp` inside the op
-tree. Those are WHERE/HAVING clauses routed against the model's current
-grain — not pre-join model-load hygiene (see *Filters — WHERE/HAVING
-auto-routing* below for the query-time kind).
-
-**YAML expression validation (v0.1.1+).** `ExpressionValidator` parses
-every `dimensions:`, `transforms:`, and `measures:` `expr` at load time
-(via Spark's `CatalystSqlParser`) and checks that every column reference
-resolves against the visible columns at that point — source columns plus
-any previously-declared transforms (for `transforms:` and `measures:`)
-and previously-declared measures (for `measures:` referencing other
-measures, common in window-function ORDER BYs). A typo fails fast at
-load time with a clear error, not later at first query time as a
-cryptic Spark `UNRESOLVED_COLUMN.WITH_SUGGESTION`.
-
-`calculated_measures:` are validated separately by `CalcExpr.validateReferences`
-(the CalcExpr DSL is arithmetic over already-aggregated measures, with
-`all(name)` for percent-of-total — a different parser). Same fail-fast
-guarantee: a typo in a referenced measure name or `all()` arg throws
-`IllegalArgumentException` at `YamlLoader.load(...)` instead of surfacing
-as a cryptic `UnknownFieldError` at query time. Calc measures can
-reference base measures and earlier-declared calc measures (in
-declaration order).
-
-See [`ExpressionValidator`](src/main/scala/io/semanticdf/ExpressionValidator.scala)
-and [`CalcExpr`](src/main/scala/io/semanticdf/CalcExpr.scala) for the
-full visibility rules.
+Also see [`docs/calc-author-guide.md`](docs/calc-author-guide.md) for the
+detailed validator rules.
 
 ### Joins (`join_one` / `join_many` / `join_cross`)
 
@@ -454,152 +371,14 @@ flights.query(
 
 ### Querying from a notebook via `spark.sql(...)`
 
-For notebook users (Jupyter, Databricks, Zeppelin) and any SQL-first consumer
-(BI tools via Spark Thrift Server, dbt, etc.), a compiled semantic model can
-be registered as a Spark temp view and queried with plain SQL.
+For notebook / SQL-first consumers, a compiled `SemanticTable` can be registered
+as a Spark temp view and queried with plain SQL via
+`.createOrReplaceTempView("flights_view")` followed by `spark.sql(...)`. The view is the
+*compiled output* of the model — joins, pre-join filters, and pre-aggregation
+all happen *before* the SQL queries the view.
 
-```scala
-// One-time setup: register the model as a Spark temp view
-implicit val spark: SparkSession = ...
-val flights = YamlLoader.load("flights.yml", dataConfig)("flights")
-flights.createOrReplaceTempView("flights")   // session-scoped
-
-// Now any cell, any language, any tool can query the model:
-spark.sql("SELECT carrier, total_passengers FROM flights GROUP BY carrier")
-```
-
-The view is the **compiled output** of the model — joins, pre-join filters,
-dimensions, base measures, and calc measures are all baked in. SQL consumers
-see a clean relational view, not the raw source table.
-
-**"What can I query?" — discovery.** Before writing SQL, a consumer needs to
-know what dimensions and measures the model exposes. Use `schema(spark)`:
-
-```scala
-flights.schema(spark).show(false)
-// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
-// |model_name |model_description  |field_name |field_type|description                |metadata_keys       |...
-// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
-// |flights    |Flight facts:...   |carrier    |dimension |Airline carrier code       |owner,tags          |...
-// |flights    |Flight facts:...   |origin     |dimension |Origin airport code        |owner,tags          |...
-// |flights    |Flight facts:...   |flight_date|dimension |Scheduled flight date      |null                |...
-// |flights    |Flight facts:...   |total_passengers|measure|Total passengers across...|owner,unit,aggregation|...
-// |flights    |Flight facts:...   |flight_count   |measure|Number of flights (rows)...|owner,unit,aggregation|...
-// +-----------+-------------------+-----------+---------+-----------------------------+--------------------+...
-```
-
-The same metadata is also served by the MCP server's `describe_model` tool
-and rendered as Markdown via `okfgen` (see [`docs/agents/okf-mapping.md`](docs/agents/okf-mapping.md)).
-Pick the surface that fits your tool.
-
-**Temp view scope.** Three variants map to standard Spark conventions:
-
-| Method | Scope | Conflict policy |
-|---|---|---|
-| `createOrReplaceTempView(name)` | session | replaces if exists |
-| `createTempView(name)` | session | throws if exists |
-| `createOrReplaceGlobalTempView(name)` | cluster (across sessions) | replaces if exists |
-
-All three take `(implicit spark: SparkSession)` — call from inside a
-`SparkSession.builder()` block.
-
-**Limitations.** A registered view has a single fixed shape — the grain at
-which the model was compiled. SQL consumers can't switch grains in-band
-(`SELECT ... WHERE grain = 'monthly'`); use the typed `atTimeGrain(...)` API
-or build separate views for each grain you need.
-
-#### BI tools via Spark Thrift Server (Power BI, Tableau, Looker, Metabase, ...)
-
-The temp view pattern above is per-session. To expose semantic models to
-**external BI tools** that speak JDBC/ODBC, the standard path is
-**Spark Thrift Server** (a.k.a. Spark HiveServer2). Once running, a
-Power BI desktop / Tableau workbook / dbt project can connect with the
-standard Hive JDBC driver and query the models as if they were regular
-SQL tables.
-
-**Architecture:**
-
-```
-+--------------------+        +-----------------------+        +------------------+
-| Power BI / Tableau | JDBC   |  Spark Thrift Server  |  talks |  semanticdf      |
-| (your laptop)      | -----> |  (HiveServer2 on a   | -----> |  YAML model     |
-|                    |        |   long-lived box)     |        |  + temp view     |
-+--------------------+        +-----------------------+        +------------------+
-```
-
-**One-time setup** (a small launcher script that runs in a long-lived
-Spark process — not the same JVM as your notebook):
-
-```scala
-// Server.scala — run as a long-lived service
-import org.apache.spark.sql.SparkSession
-import io.semanticdf._
-
-object SemanticServer extends App {
-  // A long-lived Spark session
-  implicit val spark: SparkSession = SparkSession.builder()
-    .appName("semanticdf-bridge")
-    .enableHiveSupport()                  // required for Thrift Server
-    .getOrCreate()
-
-  // Load all your models and register them as global temp views
-  val models = YamlLoader.loadDir("models/", dataConfig)
-  models.values.foreach { st =>
-    // Global temp views are visible across all sessions connected to
-    // this Thrift Server, including the BI tool's session
-    st.createOrReplaceGlobalTempView(s"semantic_${st.name}")
-    // Optional: also expose schema metadata as a sidecar view for
-    // the BI tool's data catalog
-    st.schema(spark).createOrReplaceGlobalTempView(s"semantic_${st.name}__schema")
-  }
-
-  // Block forever — the Thrift Server is now serving SQL over your
-  // semantic models on the standard port (10000)
-  Thread.currentThread().join()
-}
-```
-
-**Start the Thrift Server** with your JAR on the classpath:
-
-```bash
-# Standard Spark distribution layout
-$SPARK_HOME/sbin/start-thriftserver.sh \
-  --master yarn \
-  --jars /path/to/semanticdf_2.13-0.1.3.jar,/path/to/your-models-loader.jar \
-  --conf spark.sql.hive.thriftServer.singleSession=false
-```
-
-The server exposes the standard HiveServer2 port (default `10000`).
-
-**Connect from Power BI / Tableau / etc.** — use the standard **Hive
-JDBC driver** with a JDBC URL like:
-
-```
-jdbc:hive2://thrift-server-host:10000/default;transportMode=http;httpPath=cliservice
-```
-
-In the BI tool:
-- The temp views appear as tables in the `default` database (or
-  `global_temp` if you registered them there). For Power BI: rename
-  `global_temp.semantic_flights` to `semantic_flights` for clarity.
-- Each view is the compiled model — joins, pre-join filters, calc
-  measures, all baked in.
-- Discovery: query `SELECT * FROM global_temp.semantic_flights__schema`
-  to see the dimension/measure list, or open the OKF Markdown at
-  `docs/agents/reference/<project>/<model>.md`.
-
-**Limitations vs the typed API:**
-
-- Single-grain views (same as notebook case above)
-- No typed compile-time checks — typos surface at query time as
-  `AnalysisException: cannot resolve 'foo'`
-- No access to `.explainSemantic(...)` — use the local library for
-  plan-level debugging
-
-For the full REST API path (JSON over HTTP, no JDBC driver needed,
-works with any HTTP-capable tool), see the v0.2 roadmap in
-[`docs/feature-roadmap.md`](docs/feature-roadmap.md) §3.1. Thrift Server
-is the pragmatic v0.1.1 path.
+See [`docs/guide.md` → Notebook escape hatch](docs/guide.md#notebook-escape-hatch-raw-sql-via-a-temp-view)
+for the worked example, scoping rules, and a multi-cell notebook workflow.
 
 ### Typed queries (compile-time safety)
 
@@ -720,14 +499,14 @@ st.query(
 Three flavours of plan inspection, each for a different debugging need:
 
 ```scala
-model.explain()           // op tree shape (no Spark compilation)
-model.explain(spark)      // Catalyst physical plan
-model.explainSemantic(spark)  // WHY: where each filter routed, transitively-pulled
-                              //      measures, join strategies, warnings, Spark plan
+model.explain()                // op tree shape (no Spark compilation)
+model.explain(spark)           // Catalyst physical plan
+model.explainSemantic(spark)   // WHY: filter routing, pulled measures, etc.
 ```
 
 `explainSemantic` is the one a developer usually wants. See
-[`docs/feature-roadmap.md`](docs/feature-roadmap.md) §1.5 for an example output.
+[`docs/guide.md` → How a query compiles](docs/guide.md#how-a-query-compiles)
+for the worked example with sample output.
 
 ## API reference
 
