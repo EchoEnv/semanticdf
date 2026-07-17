@@ -212,7 +212,7 @@ object Introspector {
     /** Render this field as a YAML join placeholder. */
     def toJoinYaml: String = {
       val sb = new StringBuilder
-      sb.append(s"    ${name.dropRight(3)}_model:  # ← adjust the alias and target\n")
+      sb.append(s"    ${Introspector.FieldInfo.joinAlias(name)}_model:  # ← adjust the alias and target\n")
       sb.append(s"      model: <target-model-name>\n")
       sb.append(s"      type: many\n")
       sb.append(s"      left_on: $name\n")
@@ -243,6 +243,41 @@ object Introspector {
       "(?i)^.*_uuid$".r,
       "(?i).*code$".r,
     )
+
+    /** Entity suffixes, longest-first, used by [[joinAlias]] to derive
+      * a clean placeholder alias from a column name. e.g. `customer_id`
+      * → `customer` (drops `_id`), `event_uuid` → `event` (drops `_uuid`).
+      * Kept in sync with [[EntityPatterns]]: every pattern that ends in
+      * `_xxx` should appear here. The bare `^id$` pattern has no suffix
+      * to drop (handled in [[joinAlias]]). */
+    private val EntitySuffixes: Seq[String] = Seq(
+      "_uuid",
+      "_code",
+      "_key",
+      "_id",
+    )
+
+    /** Derive a placeholder alias from a column name. Drops a recognised
+      * entity suffix (`_id`, `_key`, `_uuid`, `_code`) and any trailing
+      * underscore the suffix left behind. Falls back to the column name
+      * itself if no entity suffix is present (so bare `id` → `id`,
+      * `customer_id` → `customer`, `order_id` → `order`,
+      * `event_uuid` → `event`, `airline_code` → `airline`).
+      *
+      * The result is meant to be a readable placeholder; the user is
+      * expected to adjust it to match their target model name. */
+    def joinAlias(name: String): String = {
+      val lower = name.toLowerCase
+      EntitySuffixes.find(lower.endsWith) match {
+        case Some(suffix) =>
+          val stripped = name.dropRight(suffix.length)
+          if (stripped.endsWith("_")) stripped.dropRight(1) else stripped
+        case None =>
+          // Bare `id` (no underscore) — keep the column name as-is so the
+          // placeholder becomes `id_model`, not `_model`.
+          name
+      }
+    }
 
     /** Patterns for time-dimension columns. */
     val TimePatterns: Seq[Regex] = Seq(

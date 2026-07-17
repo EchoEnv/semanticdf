@@ -1,0 +1,4 @@
+id,customer_id,order_id,event_uuid,airline_code,order_key
+1,cust_1,order_a,evt_1,AA,key_x
+2,cust_2,order_b,evt_2,UA,key_y
+3,cust_3,order_c,evt_3,DL,key_z

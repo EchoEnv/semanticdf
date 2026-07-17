@@ -239,5 +239,84 @@ class IntrospectorSpec extends AnyFunSpec with SparkSessionFixture with Matchers
       val yaml = new io.semanticdf.tools.Introspector().toYaml(df, "test_model")
       yaml must not include "# WARN:"
     }
+
+    // (N+1) toJoinYaml — entity placeholder names from column names.
+    //
+    // Regression target: the original `name.dropRight(3)` heuristic only
+    // handled `*_id` and produced ugly output (`_model` for bare `id`,
+    // `order__model` for `order_id`, `event_u_model` for `event_uuid`,
+    // `airline__model` for `airline_code`). The new `FieldInfo.joinAlias`
+    // helper strips any entity suffix and any trailing underscore.
+
+    it("joinAlias returns 'id' unchanged for the bare 'id' column (no leading underscore)") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("id") mustEqual "id"
+    }
+
+    it("joinAlias strips '_id' suffix: 'customer_id' → 'customer'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("customer_id") mustEqual "customer"
+    }
+
+    it("joinAlias strips '_id' AND trailing underscore: 'order_id' → 'order' (no 'order__model')") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("order_id") mustEqual "order"
+    }
+
+    it("joinAlias strips '_uuid' suffix: 'event_uuid' → 'event'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("event_uuid") mustEqual "event"
+    }
+
+    it("joinAlias strips '_code' suffix: 'airline_code' → 'airline'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("airline_code") mustEqual "airline"
+    }
+
+    it("joinAlias strips '_key' suffix: 'order_key' → 'order'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("order_key") mustEqual "order"
+    }
+
+    it("joinAlias preserves case in the body: 'Customer_ID' → 'Customer'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("Customer_ID") mustEqual "Customer"
+    }
+
+    it("joinAlias is case-insensitive on the suffix: 'EVT_UUID' → 'EVT'") {
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("EVT_UUID") mustEqual "EVT"
+    }
+
+    it("joinAlias falls back to name when no entity suffix is present") {
+      // A column that doesn't end in an entity suffix (e.g. a string
+      // dim named 'category') isn't an entity, but if it ever made it
+      // into joinFields we still want a reasonable default rather than
+      // an empty placeholder. (joinAlias is conservative: without a
+      // suffix we just keep the name.)
+      io.semanticdf.tools.Introspector.FieldInfo.joinAlias("category") mustEqual "category"
+    }
+
+    it("toJoinYaml produces clean placeholder names end-to-end through EntityPatterns") {
+      // The fixture CSV has 6 entity columns that exercise every
+      // entity-suffix path. The output should NOT contain any of the
+      // cosmetically-broken placeholders the old dropRight(3) produced.
+      val csvPath = getClass.getResource("/join-alias-fixture.csv").getPath
+      val yaml = new io.semanticdf.tools.Introspector().fromFile(
+        spark, csvPath, format = "csv", modelName = "alias_test",
+      )
+
+      // Each entity column gets a `<alias>_model:` placeholder name.
+      // The old dropRight(3) produced `_model`, `customer_model`,
+      // `order__model`, `event_u_model`, `airline__model`, `order__model`.
+      // The new joinAlias strips properly:
+      yaml must include("id_model:")
+      yaml must include("customer_model:")
+      yaml must include("order_model:")
+      yaml must include("event_model:")
+      yaml must include("airline_model:")
+
+      // Regression markers — the specific malformed placeholders the
+      // old dropRight(3) heuristic produced. Anchored to the leading
+      // 4-space YAML indent so they don't accidentally match inside
+      // valid names like `id_model:` or `customer_model:` (which
+      // legitimately contain `_model:` as a sub-string).
+      yaml must not include "\n    _model:"        // bare `id` → was `_model`
+      yaml must not include "\n    order__model:"  // `order_id` → was `order__model`
+      yaml must not include "\n    event_u_model:" // `event_uuid` → was `event_u_model`
+      yaml must not include "\n    airline__model:" // `airline_code` → was `airline__model`
+    }
   }
 }
