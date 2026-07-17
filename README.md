@@ -9,7 +9,53 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1.3 + post-tag fixes (`#54`–`#59` shipped in 0.1.3; `#61` and `#62` shipped after the tag, included on `main`). **407/407 tests green** (335 library + 72 MCP) under Spark 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of record and [`docs/adr/`](docs/adr/) for recorded decisions.
+## What problems SemanticDF solves
+
+Modern data teams have a **plumbing problem**: every dashboard, notebook, or AI agent
+needs the same business metrics defined somewhere — usually duplicated across queries,
+spreadsheets, and tribal lore. When the metric changes (`"total_passengers"` now means
+deplanements not boarded-then-deplaned), every copy drifts. SemanticDF puts the metric
+definitions in **one checked-in source** — a small Scala DSL or a YAML model — and
+gives every consumer (your code, your tests, your LLM agent) the same compile-time
+guarantee that they're asking for the right thing.
+
+## What you can do with it
+
+- **Define a metric once, query it everywhere.** A `SemanticTable` is an immutable
+  description. Use it from `flights.query(...)` in code, from a YAML model in
+  `models/flights.yml`, or from an MCP agent that calls `query` / `describe_model`
+  over JSON.
+- **Calc + percent-of-total measures with no expression-tree surgery.** A measure that
+  references other measures (`t.total / t.flight_count`) resolves by name against the
+  aggregated DataFrame; a percent-of-total (`t.total / t.all(t.total)`) cross-joins a
+  broadcasted totals row.
+- **Compile-time typo safety on the query side.** The optional typeclass layer
+  (`SemanticField[T]` phantom types) catches dimension-vs-measure confusion at the
+  call site rather than at first execution. `ResultDecoder.derive[T]` does the same
+  for the *result* side of a query.
+- **One model across batch and (eventually) streaming.** The op tree is source-agnostic;
+  only the execution terminal differs (§4.5, ADR 0002).
+- **A models → agents bridge.** `okfgen` produces OKF markdown an LLM can read;
+  the MCP server exposes the tools (`list_models`, `describe_model`, `query`,
+  `introspect`) over stdio or REST.
+
+## When (and when not) to use it
+
+- **Good fit:** small-to-mid data teams with a stable set of business metrics,
+  already on Spark 3.5+ (or 4.x), who want one definition everyone shares — including
+  LLM agents.
+- **Not yet:** structured-streaming sources (the interface is shaped for it but the
+  streaming terminal ships later); heavy-numeric ML workloads without rollup needs;
+  sub-second interactive dashboards where another tool's tighter latency matters more
+  than metric consistency.
+
+## Where to read next
+
+- [`DESIGN.md`](DESIGN.md) — architecture of record
+- [`docs/adr/`](docs/adr/) — recorded decisions
+- [`RELEASE.md`](RELEASE.md) — version-by-version changelog
+- [`docs/known-limitations.md`](docs/known-limitations.md) — features that aren't yet in scope
+- [`examples/`](examples/) — runnable end-to-end examples
 
 ## Build
 
