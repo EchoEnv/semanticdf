@@ -1,6 +1,8 @@
 package io.semanticdf.mcp
 
-import io.modelcontextprotocol.json.McpJsonDefaults
+// (McpJsonDefaults no longer used; we use JsonSupport.scalaMapper which
+//  registers the Jackson Scala module so generic case classes
+//  like Envelope[T] serialize correctly.)
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
 
@@ -72,7 +74,7 @@ object Main {
       val dataConfig = DataConfig.fromFile(parsed.dataConfig)
       val models     = Models.load(parsed.modelsDir, dataConfig, spark)
       val okf        = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
-      val mapper     = McpJsonDefaults.getMapper()
+      val mapper     = JsonSupport.scalaMapper()
 
       parsed.transport match {
         case "stdio" =>
