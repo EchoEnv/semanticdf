@@ -46,7 +46,7 @@ object Main {
 
     val spark = SparkSession.builder()
       .master("local[*]")
-      .appName("semanticdf-mcp")
+      .appName(s"semanticdf-${parsed.transport}")
       .config("spark.ui.enabled", "false")
       .config("spark.sql.shuffle.partitions", "2")
       .config("spark.sql.ansi.enabled", "false")  // match library test baseline
@@ -57,15 +57,12 @@ object Main {
     // Without this, an exception during `DataConfig.fromFile` or
     // `Models.load` (e.g. malformed YAML) would leak the Spark session —
     // Spark's default cleanup only runs on JVM exit, not on early throws.
-    // The `server` field is a `var` so this hook can also call `server.close()`
-    // once it's been built inside the try block (see assignment below).
-    // SparkSession.stop() is idempotent so the hook is safe to invoke twice
-    // (once after the build, once on JVM exit) — but we guard with a flag
-    // to keep the intent explicit.
-    @volatile var server: io.modelcontextprotocol.server.McpSyncServer = null
+    @volatile var mcpServer: io.modelcontextprotocol.server.McpSyncServer = null
+    @volatile var restServer: com.sun.net.httpserver.HttpServer = null
     Runtime.getRuntime.addShutdownHook(new Thread(() => {
       try {
-        if (server != null) server.close()
+        if (mcpServer != null) mcpServer.close()
+        if (restServer != null) restServer.stop(0)
       } finally {
         try { spark.stop() } catch { case _: Throwable => /* best-effort */ }
       }
@@ -74,24 +71,25 @@ object Main {
     try {
       val dataConfig = DataConfig.fromFile(parsed.dataConfig)
       val models     = Models.load(parsed.modelsDir, dataConfig, spark)
+      val okf        = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
+      val mapper     = McpJsonDefaults.getMapper()
 
-      // Run OkfGen at startup, then read each *.md into memory. The server
-      // sees the cache as `Map[modelName, markdown]` with O(1) lookup at
-      // request time. See `OkfCache` scaladoc.
-      val okf = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
+      parsed.transport match {
+        case "stdio" =>
+          mcpServer = Server.build(models, okf, spark, mapper)
+          log.info("semanticdf-mcp listening on stdio. Press Ctrl-D to stop.")
+          Thread.currentThread().join()  // park until SIGINT / SIGTERM
 
-      val mapper = McpJsonDefaults.getMapper()
-      server = Server.build(models, okf, spark, mapper)
+        case "rest" =>
+          val rest = new RestServer(spark, models, okf, mapper, port = parsed.restPort)
+          restServer = rest.start()
+          log.info(s"semanticdf-rest listening on http://localhost:${parsed.restPort}")
+          Thread.currentThread().join()  // park until SIGINT / SIGTERM
 
-      // Block until stdio closes (parent process exits / sends EOF) or
-      // SIGINT/SIGTERM. The shutdown hook (registered above, BEFORE the try
-      // block, so it fires on early throws) is responsible for calling
-      // server.close() and spark.stop(). McpSyncServer's close() is idempotent.
-      log.info("semanticdf-mcp listening on stdio. Press Ctrl-D to stop.")
-
-      // Park the main thread — the SDK runs on a daemon thread pool and
-      // close() is invoked from the shutdown hook above.
-      Thread.currentThread().join()
+        case other =>
+          System.err.println(s"semanticdf-mcp: unknown transport: $other")
+          sys.exit(1)
+      }
     } catch {
       case e: IllegalArgumentException =>
         System.err.println(s"semanticdf-mcp: configuration error: ${e.getMessage}")
@@ -109,7 +107,13 @@ object Main {
   // dependency surface for three flags.
   // ---------------------------------------------------------------------------
 
-  private case class Config(modelsDir: String, dataConfig: String, okfBundleDir: String)
+  private case class Config(
+      modelsDir: String,
+      dataConfig: String,
+      okfBundleDir: String,
+      transport: String,
+      restPort: Int,
+  )
 
   private def parseArgs(args: Seq[String]): Either[String, Config] = {
     @scala.annotation.tailrec
@@ -118,26 +122,40 @@ object Main {
       case "--models"     :: v :: rest if v.nonEmpty => loop(rest, acc.copy(modelsDir = v))
       case "--data"       :: v :: rest if v.nonEmpty => loop(rest, acc.copy(dataConfig = v))
       case "--okf-bundle" :: v :: rest if v.nonEmpty => loop(rest, acc.copy(okfBundleDir = v))
+      case "--transport"  :: v :: rest if v.nonEmpty => loop(rest, acc.copy(transport = v))
+      case "--rest-port"  :: v :: rest if v.nonEmpty =>
+        v.toIntOption match {
+          case Some(n) if n > 0 && n < 65536 => loop(rest, acc.copy(restPort = n))
+          case _ => Left(s"--rest-port must be 1-65535, got '$v'")
+        }
       case "--models"     :: Nil => Left("--models requires a value")
       case "--data"       :: Nil => Left("--data requires a value")
       case "--okf-bundle" :: Nil => Left("--okf-bundle requires a value")
+      case "--transport"  :: Nil => Left("--transport requires a value")
+      case "--rest-port"  :: Nil => Left("--rest-port requires a value")
       case other :: _ => Left(s"unknown argument: $other")
     }
-    val init = Config(modelsDir = "", dataConfig = "", okfBundleDir = "")
+    val init = Config(modelsDir = "", dataConfig = "", okfBundleDir = "",
+                      transport = "stdio", restPort = 8080)
     loop(args.toList, init).flatMap { c =>
       if (c.modelsDir.isEmpty) Left("--models <dir> is required")
       else if (c.dataConfig.isEmpty) Left("--data <file> is required")
       else if (c.okfBundleDir.isEmpty) Left("--okf-bundle <dir> is required")
+      else if (c.transport != "stdio" && c.transport != "rest")
+        Left(s"--transport must be 'stdio' or 'rest', got '${c.transport}'")
       else Right(c)
     }
   }
 
   private val usage =
-    """usage: semanticdf-mcp --models <dir> --data <file> --okf-bundle <dir>
+    """usage: semanticdf-mcp --models <dir> --data <file> --okf-bundle <dir> [options]
       |
-      |  --models <dir>     directory of *.yml model files
-      |  --data <file>      data-config YAML (see docs/agents/mcp-contract.md §"Server lifecycle")
-      |  --okf-bundle <dir> directory for OkfGen output; server caches the .md files
-      |                     in memory at startup
+      |  --models <dir>      directory of *.yml model files
+      |  --data <file>       data-config YAML (see docs/agents/mcp-contract.md §"Server lifecycle")
+      |  --okf-bundle <dir>  directory for OkfGen output; server caches the .md files
+      |                      in memory at startup
+      |  --transport {stdio,rest}
+      |                      transport mode (default: stdio)
+      |  --rest-port <N>     port for REST transport (default: 8080)
       |""".stripMargin
 }

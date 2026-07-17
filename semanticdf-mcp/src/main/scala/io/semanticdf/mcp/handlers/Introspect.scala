@@ -234,8 +234,12 @@ object Introspect {
     )
   }
 
-  /** Parse the SDK's `Map[String, Object]` into a strongly-typed request. */
-  private[handlers] def parseRequest(args: java.util.Map[String, Object]): Request = {
+  /** Parse the SDK's `Map[String, Object]` into a strongly-typed request.
+    *
+    * `private[mcp]` so [[io.semanticdf.mcp.RestServer]] (which lives in
+    * the parent package) can call this — the REST transport needs the
+    * same DTO mapping the MCP SDK adapter uses, without re-parsing. */
+  private[mcp] def parseRequest(args: java.util.Map[String, Object]): Request = {
     import scala.jdk.CollectionConverters._
     val map = args.asScala.toMap.asInstanceOf[Map[String, Any]]
     def asString(name: String): Option[String] = map.get(name).collect { case s: String => s }
