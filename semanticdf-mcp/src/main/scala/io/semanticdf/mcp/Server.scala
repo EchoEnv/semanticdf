@@ -42,7 +42,7 @@ object Server {
     val queryHandler = new Query(spark)
 
     McpServer.sync(transport)
-      .serverInfo("semanticdf-mcp", "0.1.3")
+      .serverInfo("semanticdf-mcp", "0.1.4")
       .capabilities(
         ServerCapabilities.builder()
           .tools(true)

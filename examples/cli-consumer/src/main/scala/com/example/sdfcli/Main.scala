@@ -51,7 +51,7 @@ object Main {
     case Nil | ("-h" :: _) | ("--help" :: _) | ("help" :: _) =>
       printUsage(); 0
     case ("-v" :: _) | ("--version" :: _) =>
-      println("sdf 0.1.3 (semanticdf CLI client)"); 0
+      println("sdf 0.1.4 (semanticdf CLI client)"); 0
     case ("list" :: rest)       => withGlobalConfig(rest) { (cfg, rem) => cmdList(cfg);      0 }
     case ("describe" :: rest)   => withGlobalConfig(rest) { (cfg, rem) => cmdDescribe(cfg, rem) }
     case ("query" :: rest)      => withGlobalConfig(rest) { (cfg, rem) => cmdQuery(cfg, rem, explain = false) }
