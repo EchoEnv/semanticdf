@@ -137,23 +137,18 @@ PLAN SUMMARY
 
 ## What building this surfaced
 
-`sdf` was built to **probe the REST API as a real client would**. In doing so
-it found two issues that the unit tests had missed:
+`sdf` was built to **probe the REST API as a real client would**. As of v0.1.3
+it has fulfilled that purpose and surfaced two issues, now both fixed:
 
-1. **`order_by` over REST was broken** (regression from PR #54's Jackson Scala
-   module). Fixed in PR #56 — `OrderByParser.parse` now accepts both
-   `java.util.Map` (legacy SDK adapter callers) and Scala `Map` (Jackson-with-
-   Scala-module callers). 5 regression tests added.
+1. `order_by` over REST was broken (regression from PR #54's Jackson Scala
+   module) — fixed in PR #56.
+2. `describe_model` `expr` serialised as opaque lambda addresses — fixed in
+   PR #58; `Dimension`/`Measure` now carry `exprString`.
 
-2. **`describe_model` `expr` field serialises as opaque lambda addresses**
-   (`io.semanticdf.YamlLoader$$$Lambda$...`). Originally the server stored
-   `SemanticScope => Column` functions, with the source string discarded at
-   YAML-load time. The CLI masked these as `<inline fn>` for readability
-   pending a library fix. **Fixed in PR feat/describe-model-expr-string:**
-   `Dimension` and `Measure` now carry an optional `exprString` (populated
-   by the YamlLoader from the YAML `expr:` value); `DescribeModel` prefers
-   the string over the lambda fallback. The CLI's `maskExpr` is kept as a
-   graceful-degradation hook for old servers.
+`sdf` continues to serve as a **regression witness for the REST contract**:
+re-run it against the live server after any change to `RestServer.scala` or
+the `Envelope` schema. Its `maskExpr` heuristic is kept as a graceful-
+degradation hook for older server versions.
 
 ## Why a separate CLI module, not bundled in semanticdf-mcp
 
