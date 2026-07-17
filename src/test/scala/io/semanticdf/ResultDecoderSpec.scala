@@ -114,4 +114,75 @@ class ResultDecoderSpec extends AnyFunSuite with SparkSessionFixture with Flight
     val result = table.collectAs[CarrierCount](spark)
     result shouldBe Seq(CarrierCount("AA", 100L))
   }
+
+  // ---------------------------------------------------------------------------
+  // Macro derivation: ResultDecoder.derive[T] (PR feat/resultdecoder-derive-macro)
+  //
+  // The macro generates a `ResultDecoder[T]` instance at compile time for case
+  // classes whose fields are all primitive types (String, Int, Long, Double,
+  // Float, Boolean, Short, Byte, BigDecimal). Compile-time failure for
+  // non-case-classes and for unsupported field types.
+  // ---------------------------------------------------------------------------
+
+  test("derive[T] for a 2-field case class uses the right Row getters") {
+    case class CarrierCount(carrier: String, count: Long)
+    implicit val decoder: ResultDecoder[CarrierCount] = ResultDecoder.derive[CarrierCount]
+    val row = Row("AA", 100L)
+    decoder.decode(row) shouldBe CarrierCount("AA", 100L)
+  }
+
+  test("derive[T] covers every primitive field type") {
+    case class AllPrimitives(
+      s: String, i: Int, l: Long, d: Double, f: Float, b: Boolean, sh: Short, by: Byte
+    )
+    implicit val decoder: ResultDecoder[AllPrimitives] = ResultDecoder.derive[AllPrimitives]
+    val row = Row("hi", 42, 1234567890123L, 3.14, 2.5f, true, 7.toShort, 8.toByte)
+    decoder.decode(row) shouldBe AllPrimitives("hi", 42, 1234567890123L, 3.14, 2.5f, true, 7.toShort, 8.toByte)
+  }
+
+  test("derive[T] reads columns in declaration order (not field-name order)") {
+    // Field-order test: a row built in column order [col0, col1, col2] must
+    // decode into the case class whose constructor expects exactly that order,
+    // even if the case-class field names are different.
+    case class Foo(a: Long, b: String, c: Int)
+    implicit val decoder: ResultDecoder[Foo] = ResultDecoder.derive[Foo]
+    val row = Row(100L, "hello", 7)
+    decoder.decode(row) shouldBe Foo(100L, "hello", 7)
+  }
+
+  test("derive[T] works through collectAs[T] end-to-end on a SemanticTable") {
+    case class CarrierCount(carrier: String, count: Long)
+    val df = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(
+        Row("AA", 100L), Row("UA", 200L), Row("DL", 300L),
+      )),
+      StructType(Seq(
+        StructField("carrier", StringType),
+        StructField("count",   LongType),
+      )),
+    )
+    implicit val decoder: ResultDecoder[CarrierCount] = ResultDecoder.derive[CarrierCount]
+    val table = toSemanticTable(df, name = Some("flights"))
+    table.collectAs[CarrierCount](spark) shouldBe Seq(
+      CarrierCount("AA", 100L),
+      CarrierCount("UA", 200L),
+      CarrierCount("DL", 300L),
+    )
+  }
+
+  test("derive[T]: empty case class works (0-arg constructor)") {
+    case class Empty()
+    implicit val decoder: ResultDecoder[Empty] = ResultDecoder.derive[Empty]
+    val row = Row() // empty row
+    decoder.decode(row) shouldBe Empty()
+  }
+
+  test("derive[T]: BigDecimal field type works") {
+    import java.math.BigDecimal
+    case class Money(amount: BigDecimal, label: String)
+    implicit val decoder: ResultDecoder[Money] = ResultDecoder.derive[Money]
+    val bd = new BigDecimal("12345.67")
+    val row = Row(bd, "price")
+    decoder.decode(row) shouldBe Money(bd, "price")
+  }
 }
