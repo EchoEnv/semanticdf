@@ -352,4 +352,4 @@ For a real deployment:
 - [README](../../README.md) — main semanticdf documentation
 - [DESIGN](../../DESIGN.md) — architecture and design decisions
 - [runtime-quickstart](../../docs/runtime-quickstart.md) — JDK/Scala/Spark matrix, build & run commands, the four runtime traps
-- [known-limitations](../../docs/known-limitations.md) — what semanticdf does NOT support yet
+- [known-limitations](../../docs/known-limitations.md) — current scope & guardrails (what's in, what's deferred, with workarounds)

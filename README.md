@@ -57,7 +57,7 @@ guarantee that they're asking for the right thing.
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
 - [`RELEASE.md`](RELEASE.md) — version-by-version changelog
-- [`docs/known-limitations.md`](docs/known-limitations.md) — features that aren't yet in scope
+- [`docs/known-limitations.md`](docs/known-limitations.md) — current scope & guardrails (what's in, what's deferred, with workarounds)
 - [`examples/`](examples/) — runnable end-to-end examples
 
 ## Build
@@ -181,7 +181,7 @@ All three flags are required:
       "command": "java",
       "args": [
         "-jar",
-        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.1.jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.3.jar",
         "--models",
         "/path/to/your/models",
         "--data",
@@ -596,13 +596,13 @@ mvn scala:run -DmainClass=com.example.windowanalytics.Main
 
 ## Cross-version compatibility
 
-Verified green on all three lines (335 library tests + 72 MCP tests on each — `main` head as of PR `#64`):
+Verified green on both Spark lines (335 library tests + 72 MCP tests = 407 total,
+on each):
 
 | Spark | Scala | Status |
 |---|---|---|
-| 3.5.8 (default) | 2.13.14 | ✅ |
-| 4.0.0 (`-Pspark4`) | 2.13.14 | ✅ |
-| 4.1.1 (latest, profile default) | 2.13.14 | ✅ |
+| 3.5.8 (default) | 2.13.18 | ✅ |
+| 4.1.1 (`-Pspark4`) | 2.13.18 | ✅ |
 
 No code shims are needed — the codebase uses only Spark APIs stable across 3.5→4.x.
 
@@ -613,7 +613,7 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 - **[`docs/runtime-quickstart.md`](docs/runtime-quickstart.md)** — JDK/Scala/Spark/Maven
   matrix, build & test commands, CLI tools, the four runtime traps (Java-17
   module flags, `scala:run` arg leak, deprecated import, version files).
-- **[`docs/known-limitations.md`](docs/known-limitations.md)** — what doesn't work in v0.1 (streaming, metastore registration, multi-hop joins, etc.). Read before first consumer.
+- **[`docs/known-limitations.md`](docs/known-limitations.md)** — current scope & guardrails for v0.1.3 (batch-only, per-session security, symmetric join keys, etc.) with workarounds and roadmap hints. Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
 - **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
 - **[`docs/feature-roadmap.md`](docs/feature-roadmap.md)** — T1-T4 prioritized list of features and performance improvements. T1 ships next; T2-T4 gated on real consumer demand.
