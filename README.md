@@ -9,7 +9,7 @@ a `DataFrame` itself — it captures *what* you want (dimensions, measures, join
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
 reuse the same definition against a different sink (ADR 0002).
 
-**Status:** v0.1.3 + post-tag fixes (`#54`–`#59` shipped in 0.1.3; `#61` and `#62` shipped after the tag, included on `main`). **401/401 tests green** (329 library + 72 MCP) under Spark 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of record and [`docs/adr/`](docs/adr/) for recorded decisions.
+**Status:** v0.1.3 + post-tag fixes (`#54`–`#59` shipped in 0.1.3; `#61` and `#62` shipped after the tag, included on `main`). **407/407 tests green** (335 library + 72 MCP) under Spark 3.5.8 (default) and Spark 4.1.1. See [`DESIGN.md`](DESIGN.md) for the architecture of record and [`docs/adr/`](docs/adr/) for recorded decisions.
 
 ## Build
 
@@ -497,7 +497,43 @@ val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t(
   single runtime check for arity 5+ (rare in practice).
 - The `FieldRef[T]` carrier is a value class — no allocation on the hot path.
 - See [Phase E — type safety via typeclasses](docs/phase-E-plan.md) for the design rationale
-  and what's still deferred (notably `ResultDecoder[T]` / typed query results).
+  and what's still deferred (notably the `Dataset[T]`-shaped query variant — the
+  `ResultDecoder[T]` typeclass itself, including macro derivation for case classes,
+  is shipped as of PR `#64`; see the snippets below).
+
+### Typed query results — `ResultDecoder[T]`
+
+The same compile-time guarantee applies to the **output** side. `SemanticTable.collectAs[T]`
+returns a `Seq[T]` rather than untyped `Seq[Row]`, plumbed through a small
+typeclass:
+
+```scala
+// Built-in primitive decoders read column 0 of each row:
+val names: Seq[String] = table.collectAs[String](spark)
+val counts: Seq[Long]  = table.collectAs[Long](spark)
+
+// Case-class decoders — derive[T] generates the instance at compile time:
+case class CarrierCount(carrier: String, count: Long)
+implicit val decoder: ResultDecoder[CarrierCount] = ResultDecoder.derive[CarrierCount]
+val typed: Seq[CarrierCount] = table.collectAs[CarrierCount](spark)
+```
+
+The macro (`ResultDecoder.derive[T]`) is a Scala 2 blackbox macro that inspects the
+case class's primary constructor and emits one `row.getX(i)` call per field.
+Supported field types: `String`, `Int`, `Long`, `Double`, `Float`, `Boolean`,
+`Short`, `Byte`, `java.math.BigDecimal`. Unsupported field types
+(`java.time.Instant`, sealed traits, `Option[T]`, nested case classes, ...)
+produce a **compile-time error** pointing at the offending constructor parameter,
+so the user can either rename, restructure, or supply a manual
+`ResultDecoder[T]` instance via `implicit val`.
+
+For richer shapes that the macro doesn't support, the manual form is just as
+concise as a one-line `val`:
+```scala
+implicit val decoder: ResultDecoder[Foo] = new ResultDecoder[Foo] {
+  def decode(row: Row): Foo = Foo(row.getString(0), foo.bar(row))
+}
+```
 
 ### Time semantics
 

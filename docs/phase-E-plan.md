@@ -26,6 +26,13 @@ Scala's type system can catch these at compile time. The typeclass pattern adds 
 
 ### E1 — ResultDecoder: typed query results
 
+> **Status (2026-07):** `ResultDecoder[T]` typeclass and `collectAs[T]`
+> terminal shipped in PR `#52`. `ResultDecoder.derive[T]` Scala 2 macro
+> for case classes with primitive fields shipped in PR `#64`.
+> **Remaining:** the `SemanticTable.query[T]: Dataset[T]` shape
+> (Spark `Encoder`-flavored return) — the plan's `query[T]` block
+> below describes the still-deferred piece.
+
 **The highest-value, lowest-risk addition.** After building and executing the op tree, decode the `DataFrame` into a strongly-typed case class.
 
 ```scala
@@ -185,9 +192,13 @@ site (`st.groupBy("carierr")`), not at the declaration.
 
 ### What's NOT done from the original plan
 
-- **`E1 — ResultDecoder[T]`:** still deferred. The typed field refs already give the highest-
-  value safety (typo prevention at the call site). Case-class decoding adds a second layer
-  (typo prevention in the *result* type) which hasn't been requested yet.
+- **`E1 — ResultDecoder[T]`: mostly shipped, narrow piece still deferred.** The
+  typeclass + `collectAs[T]` terminal shipped in PR `#52`; macro derivation for
+  case classes with primitive fields shipped in PR `#64`. The narrow piece that
+  remains deferred is the `SemanticTable.query[T]: Dataset[T]` shape — a Spark
+  `Encoder`-flavored return type for typed inputs (the original plan's `query[T]`
+  block below). `Seq[T]` via `collectAs` is the current typed-result story; the
+  `Dataset[T]` variant is await-consumer-demand.
 - **E3 — typed arithmetic DSL** (`divide[N, D, R]` etc.): replaced by `ResultDecoder`-style
   result-typed calcs. Still deferred.
 
