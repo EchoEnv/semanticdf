@@ -285,4 +285,76 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
     }
     assert(ex.candidates.toSet == Set("score", "SCORE"))
   }
+
+  // ===========================================================================
+  // Regression: order_by over the REST transport (PR #54 Jackson Scala module)
+  // ===========================================================================
+  //
+  // PR #54 registered Jackson's DefaultScalaModule via `JsonSupport.scalaMapper()`.
+  // That change made the MCP server's REST JSON output correctly serialize
+  // generic case classes like `Envelope[T]` — but it also changed how the
+  // server *deserializes* incoming requests. Untyped nested JSON objects
+  // (inside arrays) now arrive as Scala `Map2` instead of `java.util.LinkedHashMap`.
+  //
+  // `OrderByParser.parse` only matched `java.util.Map[_, _]`, so requests
+  // with `order_by` started failing with:
+  //   "order_by entry must be a JSON object, got Map2"
+  //
+  // Caught by the new `sdf` CLI consumer (which sends real JSON over HTTP).
+  // No existing test exercised this path: the SDK adapter builds args as
+  // `java.util.Map` directly, bypassing Jackson. The fix needs to accept
+  // BOTH `java.util.Map` (legacy / SDK-direct callers) and Scala `Map`
+  // (Jackson-with-Scala-module callers).
+
+  test("parseRequest: order_by works through the Jackson-with-Scala-module path (REST)") {
+    // Replicate the EXACT deserialization the RestServer does:
+    //   mapper.readValue(body, classOf[java.util.Map[String, Object]])
+    // where `mapper` is the Scala-module-registered JsonSupport mapper.
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"order_by":[{"field":"carrier","direction":"asc"}]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.order_by == Seq(OrderBy("carrier", "asc")),
+      s"expected parsed order_by, got: ${req.order_by}")
+  }
+
+  test("parseRequest: order_by with desc direction works through the Scala-module path") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"order_by":[{"field":"x","direction":"desc"}]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+    val req = Query.parseRequest(args)
+    assert(req.order_by == Seq(OrderBy("x", "desc")))
+  }
+
+  test("parseRequest: multiple order_by entries work through the Scala-module path") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"order_by":[
+        |{"field":"a","direction":"asc"},
+        |{"field":"b","direction":"desc"}
+        |]}""".stripMargin
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+    val req = Query.parseRequest(args)
+    assert(req.order_by == Seq(OrderBy("a", "asc"), OrderBy("b", "desc")))
+  }
+
+  test("OrderByParser.parse: accepts java.util.Map (legacy SDK-direct callers)") {
+    // Backward compat: SDK adapter still constructs java.util.Map directly.
+    val m: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    m.put("field", "carrier"); m.put("direction", "asc")
+    val ob = OrderByParser.parse(m)
+    assert(ob == OrderBy("carrier", "asc"))
+  }
+
+  test("OrderByParser.parse: accepts Scala Map (Jackson-with-Scala-module callers)") {
+    // The regression: Jackson's Scala module deserialises nested objects
+    // as Scala Map2, not java.util.LinkedHashMap.
+    val m: Map[String, Any] = Map("field" -> "carrier", "direction" -> "desc")
+    val ob = OrderByParser.parse(m)
+    assert(ob == OrderBy("carrier", "desc"))
+  }
 }
