@@ -12,8 +12,8 @@ short and opinionated. If something here doesn't match what you see, file an iss
 | Component     | Version     | Notes |
 |---------------|-------------|-------|
 | **JDK**       | 17          | Required. JDK 11 misses some Spark internals; JDK 21 also works |
-| **Scala**     | 2.13.14     | Pinned. No 3.x support; no 2.12 support |
-| **Spark**     | 3.5.8 (default) · 4.1.1 (`-Pspark4`) | 4.0.0 also verified, profiles not needed |
+| **Scala**     | 2.13.18     | Pinned. No 3.x support; no 2.12 support |
+| **Spark**     | 3.5.8 (default) · 4.1.1 (`-Pspark4`) | Tests run green on both; no code shims needed |
 | **ScalaTest** | 3.2.19      | Pinned for test alignment |
 | **Maven**     | 3.9+        | Older versions may choke on `.mvn/jvm.config` parsing |
 
@@ -27,15 +27,15 @@ page first.** The most common failure modes are listed there.
 From the repo root:
 
 ```bash
-mvn test                    # runs 329 library tests on Spark 3.5.8
-mvn -Pspark4 test           # runs 329 library tests on Spark 4.1.1
+mvn test                    # runs 335 library tests on Spark 3.5.8
+mvn -Pspark4 test           # runs 335 library tests on Spark 4.1.1
 cd semanticdf-mcp && mvn test  # adds 72 MCP tests on top
 mvn install -DskipTests     # builds the jar so examples/pipeline/ can use it
 ```
 
 Both Spark profiles run the **same test suite** — the only difference is which
-Spark release is on the classpath. You should see `Tests: succeeded 329` in the
-library and `Tests: succeeded 72` in the MCP server (401 in total) either way.
+Spark release is on the classpath. You should see `Tests: succeeded 335` in the
+library and `Tests: succeeded 72` in the MCP server (407 in total) either way.
 
 ### Cross-version sanity check
 
@@ -123,11 +123,11 @@ the arg-leak; they all use Scala-managed `local[*]`).
 
 | Template | What it teaches |
 |---|---|
-| [`examples/hospital/`](examples/hospital/README.md) | Data **cleansing** (dedup, normalize, fill) before loading into semanticdf; ALOS, 30-day readmission rate |
-| [`examples/customer-analytics/`](examples/customer-analytics/README.md) | RFM segmentation + cohort activity — multi-step calc-of-calc composition |
-| [`examples/operations-analytics/`](examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (2σ z-score) |
-| [`examples/telco-analytics/`](examples/telco-analytics/README.md) | Telco: monthly ARPU per plan, promotion effectiveness, roaming revenue split |
-| [`examples/window-analytics/`](examples/window-analytics/README.md) | Window functions: top-N per group, period-over-period (MoM), running totals |
+| [`examples/hospital/`](../examples/hospital/README.md) | Data **cleansing** (dedup, normalize, fill) before loading into semanticdf; ALOS, 30-day readmission rate |
+| [`examples/customer-analytics/`](../examples/customer-analytics/README.md) | RFM segmentation + cohort activity — multi-step calc-of-calc composition |
+| [`examples/operations-analytics/`](../examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (2σ z-score) |
+| [`examples/telco-analytics/`](../examples/telco-analytics/README.md) | Telco: monthly ARPU per plan, promotion effectiveness, roaming revenue split |
+| [`examples/window-analytics/`](../examples/window-analytics/README.md) | Window functions: top-N per group, period-over-period (MoM), running totals |
 
 Each example has its own `README.md` with the exact run command for its package
 name.

@@ -16,7 +16,7 @@ trying to do.
 | Understand how a query compiles to a Spark plan | [`docs/guide.md`](../docs/guide.md) — narrative walkthrough, or [`DESIGN.md`](../DESIGN.md) §4 (architecture) for the formal version |
 | Learn why we made a particular design call | [`docs/adr/`](adr/) — three ADRs, each short |
 | Find an unfamiliar term | [`docs/GLOSSARY.md`](GLOSSARY.md) |
-| See what's planned but not yet shipped | [`docs/known-limitations.md`](known-limitations.md) (reframed as "things you might want but we don't have") |
+| See what's in scope and what's on the roadmap | [`docs/known-limitations.md`](known-limitations.md) (current scope + guardrails + roadmap hints) |
 | Look up a specific API method | [`README.md`](../README.md) → `## API reference` |
 | See what changed in the last release | [`RELEASE.md`](../RELEASE.md) — version-by-version |
 | Investigate a phantom-type compile error | [`docs/phase-E-plan.md`](phase-E-plan.md) (especially §E1-E3 status) |
@@ -34,7 +34,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `docs/DOCS_MAP.md` | This document. Wayfinding. | Everyone |
 | `docs/runtime-quickstart.md` | Toolchain reference: what runs on what, how to handle Java 17 + Spark, etc. | Contributors |
 | `docs/calc-author-guide.md` | How to define calc measures in Scala and YAML. | Calc authors |
-| `docs/known-limitations.md` | Features not yet implemented, with workarounds. | Readers evaluating fit |
+| `docs/known-limitations.md` | Current scope, guardrails, and roadmap hints. | Readers evaluating fit |
 | `docs/phase-E-plan.md` | The original plan for type-safety via typeclasses; status markers showing which parts shipped. | Historical / contributors |
 | `docs/feature-roadmap.md` | Top-level "what's shipped / what's next" summary. | Everyone |
 | `docs/adr/` | Recorded decisions. Date-stamped, terse. | Contributors |

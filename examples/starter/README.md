@@ -220,14 +220,14 @@ For a real deployment:
    spark-submit \
      --class com.example.starter.Main \
      --master yarn \
-     target/semanticdf-starter_2.13-0.1.2-jar-with-dependencies.jar
+     target/semanticdf-starter_2.13-0.1.3-jar-with-dependencies.jar
    ```
 
 ---
 
 ## What's next
 
-- Read [`docs/known-limitations.md`](../../docs/known-limitations.md) for what semanticdf does NOT support yet
+- Read [`docs/known-limitations.md`](../../docs/known-limitations.md) for current scope, guardrails, and roadmap hints
 - Read [`DESIGN.md`](../../DESIGN.md) for the architecture and design decisions
 - Try the existing [`src/main/scala/io/semanticdf/examples/`](../../src/main/scala/io/semanticdf/examples) for more advanced patterns (joins, time series, filters)
 - For compile-time safety on field references, see [the typed-queries section](../../README.md#typed-queries-compile-time-safety) in the main README and [Phase E](../../docs/phase-E-plan.md) for the rationale.

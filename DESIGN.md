@@ -360,7 +360,7 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
   <packaging>jar</packaging>
 
   <properties>
-    <scala.version>2.13.14</scala.version>
+    <scala.version>2.13.18</scala.version>
     <scala.binary.version>2.13</scala.binary.version>
     <spark.version>3.5.8</spark.version>          <!-- default profile -->
     <scalatest.version>3.2.19</scalatest.version>
@@ -402,7 +402,7 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
     <profile>
       <id>spark4</id>                               <!-- activate: mvn -Pspark4 -->
       <properties>
-        <spark.version>4.0.0</spark.version>
+        <spark.version>4.1.1</spark.version>
         <!-- bump scala.version here if Spark 4 pins a newer 2.13.x -->
       </properties>
     </profile>
@@ -429,7 +429,7 @@ Each phase ends green (`mvn test`) and cites the concrete BSL test file whose ou
 | **4 — Joins** ✅ | `join_one/join_many/join_cross`, **pre-agg fan-out prevention**, merged model with left-precedence collision resolution, per-side dim/measure probing, qualified-column-ref dedup | `join_one` (fact→dim), `join_many` (fan-out-safe pre-agg), `join_cross`, calc-of-calc on joined models. 5 join tests green. **DONE** |
 | **5 — Query API + filters** ✅ | `Predicate` AST (`Compare/In/IsNull/And/Or/Not`), fluent DSL, **WHERE/HAVING auto-routing** (dim→pre-agg, measure→post-agg, AND-split, OR-whole), `SemanticFilterOp` op node; **`orderBy`/`limit`** deferred op nodes + `SortKey` DSL (bare string=asc, `SortKey.desc`); **`query()`** one-shot bundler (where→groupBy→aggregate[having]→orderBy→limit) | `where()` auto-routes; `having()`; AND-split; OR-whole; top-N via orderBy+limit; `query()`. 10 query/filter tests green. **DONE** (offset + time params in `query()` deferred to Phase 6) |
 | **6 — Time semantics** ✅ | `Dimension.time(...)` factory, `TimeGrain` (normalize/order/validate), `atTimeGrain(dim,grain)` via dim-expr override + `date_trunc`, **group keys now resolve via dimension expr** (makes dim exprs load-bearing), `query(timeGrain=, timeGrains=, timeRange=)`, `withDimensions`/`withMeasures` traverse passthrough ops (filter/orderBy/limit) | truncated month grouping (3 buckets); `TIME_GRAIN_MONTH` alias; grain-too-fine raises; non-time-dim raises; query() timeGrain + timeRange (raw-col filter pre-truncation). 6 tests green. **DONE** (derived parts year/month/day, point-in-time joins, compare_periods deferred) |
-| **7 — Spark 4 leg** ✅ | `-Pspark4` profile green on the Phase 0–6 suite | full suite (34 tests) passes under Spark **3.5.8** (default), **4.0.0**, and **4.1.1** (latest). No code shims — uses only APIs stable across 3.5→4.x. **DONE** |
+| **7 — Spark 4 leg** ✅ | `-Pspark4` profile green on the Phase 0–6 suite | full suite passes under Spark **3.5.8** (default) and **4.1.1** (`-Pspark4`). No code shims — uses only APIs stable across 3.5→4.x. **DONE** |
 | **8 — Polish** ✅ | README rewrite (v0.1, all capabilities with runnable examples, API reference, cross-version table), ADR cross-links | publishable v0.1 (publishing itself still deferred pending a consumer). **DONE** |
 | **D — First-consumer hardening** ✅ | Metastore integration, catalog accessors, typed result schema, error message audit, benchmark harness, onboarding docs, **integration tests (real CSV I/O + 10K-row perf baseline)** | `createOrReplaceTempView` / `createTempView` / `createOrReplaceGlobalTempView`; `dimensions` / `measures` / `findDimension` / `findMeasure`; `previewSchema(spark)`; improved error messages with actionable hints; `Benchmark.scala`; `IntegrationSpec` (6 tests, real file reads + metastore + 10K perf baseline 282ms); `docs/known-limitations.md`, `docs/calc-author-guide.md`, `docs/first-consumer-plan.md`. 59 tests green (6 new integration). **DONE** (data catalog metadata, named queries deferred) |
 | **E — Type safety via typeclasses** (partial) | Phantom-typed `SemanticField[T]` typeclass with `SemanticDimension[T]` / `SemanticMeasure[T]` subtypes; typed `groupByDimensions[D1..D4]` / `aggregateMeasures[M1..M4]` (plus `…All(refs)` runtime-kinded overloads for arity 5+); typed `Predicate.Eq/Ne/Gt/Ge/Lt/Le/in/notIn/isNull/isNotNull` factories. Sealed `Predicate.Compare` ADT (`Compare.Gt(...)` vs legacy `Compare("gt", ...)`) with compile-time operator kind checking. All additive — zero breaking API changes; string-based API fully preserved. `ResultDecoder[T]` typeclass + `collectAs[T]` shipped in PR `#52`; `ResultDecoder.derive[T]` macro for case classes shipped in PR `#64`. The narrow `query[T]: Dataset[T]` shape (Spark `Encoder`-shaped return) remains deferred — `Seq[T]` via `collectAs` is the current typed-result story. | See `docs/phase-E-plan.md` for what was built, what remains, and the rationale. **PARTIAL** |
