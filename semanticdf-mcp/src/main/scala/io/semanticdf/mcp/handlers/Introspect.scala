@@ -128,15 +128,25 @@ object Introspect {
 
   /** Parse the YAML to count dimensions, measures, and the remaining
     * (skipped) fields. Recognises the YAML shape that `Introspector`
-    * emits — see `src/main/scala/io/semanticdf/tools/Introspector.scala`. */
+    * emits — see `src/main/scala/io/semanticdf/tools/Introspector.scala`.
+    *
+    * Single source of truth: `skipped` is derived from the same
+    * `# WARN:` lines that [[parseWarnings]] extracts — not from
+    * `total - declared`. The old formula could under-count because a
+    * numeric entity column can appear in BOTH the `measures:` section
+    * (numeric measure) AND the `joins:` section (entity placeholder),
+    * inflating `declared` past the real column count and clamping
+    * `skipped` to a smaller value than the truth. */
   def parseInventory(yaml: String): Introspect.FieldInventory = {
     val dimRe   = """(?m)^  dimensions:""".r
     val meaRe   = """(?m)^  measures:""".r
-    val joinsRe = """(?m)^  joins:""".r
     val nRowsRe = """(?m)^# (\d+) rows, (\d+) columns\.""".r
 
     // Total columns: from the `# N rows, M columns.` header line.
-    val totalCols = nRowsRe.findFirstMatchIn(yaml).map(_.group(2).toInt).getOrElse(0)
+    // (Currently unused for the skipped count — the header line can
+    // be absent (malformed YAML) and we don't want skipped to clamp
+    // to 0 in that case when warnings clearly exist. Kept for
+    // potential future use / observability.)
 
     // Count top-level entries under each section. We look for lines that
     // begin with `    <name>:` (4-space indent, a YAML mapping key).
@@ -160,15 +170,23 @@ object Introspect {
 
     val dims   = countSection(dimRe.findFirstMatchIn(yaml))
     val meas   = countSection(meaRe.findFirstMatchIn(yaml))
-    val joinsN = countSection(joinsRe.findFirstMatchIn(yaml))
-    // The YAML has 3 section kinds: dimensions, measures, joins (entity
-    // columns). Each one declares those fields. Anything NOT in any section
-    // is "skipped" (couldn't be classified by the inspector).
-    val declared = dims + meas + joinsN
+    // Joins section isn't counted separately as a 4th inventory bucket
+    // (the MCP contract has only dimensions/measures/skipped). It's
+    // folded in implicitly: a column that ends up only in `joins:` is
+    // not classified as a dim nor a measure, but `parseWarnings` would
+    // still surface it if it were skipped. In practice entity columns
+    // get SOMETHING (dim or measure) in the same model, so the joins
+    // section is decoration that doesn't change the inventory totals.
+    //
+    // Skipped: count the `# WARN:` lines. This agrees with `parseWarnings`
+    // by construction — single source of truth — and avoids the
+    // over-count of `total - declared`.
+    val skipped = parseWarnings(yaml).length
+
     FieldInventory(
       dimensions = dims,
       measures   = meas,
-      skipped    = math.max(0, totalCols - declared),
+      skipped    = skipped,
     )
   }
 
