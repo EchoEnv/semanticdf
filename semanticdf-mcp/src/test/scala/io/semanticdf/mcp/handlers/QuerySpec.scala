@@ -19,21 +19,12 @@ import org.scalatest.{BeforeAndAfterAll, Suite}
   * exceeds the cap, the server must reject with `RESULT_TOO_LARGE` and
   * include `suggested_limit` in `error.details`. If the request includes
   * `limit`, the result is trusted (the user asked for that many rows). */
-class QuerySpec extends AnyFunSuite with BeforeAndAfterAll {
+class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
 
-  private val spark: SparkSession = {
-    val s = SparkSession.builder()
-      .master("local[2]")
-      .appName("query-spec")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.ansi.enabled", "false")
-      .getOrCreate()
-    s
-  }
-
-  override protected def afterAll(): Unit = {
-    if (spark != null) spark.stop()
-  }
+  // (SparkSession comes from the shared SparkFixture trait; no
+  // per-spec construction/stop. This avoids the "Cannot call methods on
+  // a stopped SparkContext" error that hit sibling specs when each spec
+  // used to manage its own session lifecycle.)
 
   // ---------------------------------------------------------------------------
   // Fixtures
