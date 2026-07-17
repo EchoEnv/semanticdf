@@ -1,0 +1,102 @@
+# SemanticDF examples
+
+Every example below is a runnable Maven project under `examples/`. Each
+one demonstrates a real workload on top of SemanticDF; the descriptions
+below say which to open first based on what you're trying to do.
+
+## Start here
+
+The [`starter/`](starter/) example is intentionally the smallest. Read
+its README end-to-end, then run it:
+
+```bash
+cd examples/starter
+mvn scala:run -DmainClass=com.example.starter.Main
+```
+
+After `starter/`, pick your next example from the journeys below. None
+of them require reading every other example first — each is
+self-contained once you've done `starter/`.
+
+## By journey — recommended order
+
+### "I want to evaluate SemanticDF quickly"
+1. [`starter/`](starter/) — YAML model, fastest eval
+2. [`pipeline/`](pipeline/) — full ETL lifecycle (raw CSV → parquet → semantic)
+3. [`window-analytics/`](window-analytics/) — top-N, period-over-period, running total
+
+### "I'm building analytics for CRM / marketing"
+1. `starter/`
+2. [`customer-analytics/`](customer-analytics/) — RFM (recency / frequency / monetary), cohort activity
+
+### "I'm building ops / supply-chain analytics"
+1. `starter/`
+2. [`operations-analytics/`](operations-analytics/) — fulfillment time, on-time rate, anomaly detection
+
+### "I have messy source data"
+1. `starter/`
+2. [`hospital/`](hospital/) — the **cleansing step**. Most examples load clean data; this one starts dirty and cleans in Scala before loading.
+
+### "I'm building an LLM agent or external client"
+1. `starter/`
+2. [`cli-consumer/`](cli-consumer/) — `sdf` CLI on top of the REST API. Lightweight, no Spark, no SemanticDF dependencies of its own.
+3. (`semanticdf-mcp/`) — the MCP server itself, for MCP-protocol-aware clients (Claude Desktop, Cursor, Continue).
+
+### "Telco-specific patterns"
+1. `starter/`
+2. [`telco-analytics/`](telco-analytics/) — carriers, plans, promotions
+
+## What each example shows
+
+| Example | Demonstrates |
+|---|---|
+| [`starter/`](starter/) | Simplest YAML model + typed queries |
+| [`pipeline/`](pipeline/) | ETL + semantic lifecycle: raw CSV → parquet → declarative queries |
+| [`window-analytics/`](window-analytics/) | Top-N per group, period-over-period, running total |
+| [`customer-analytics/`](customer-analytics/) | RFM (recency / frequency / monetary), cohort activity |
+| [`operations-analytics/`](operations-analytics/) | Fulfillment time, on-time rate, anomaly detection |
+| [`hospital/`](hospital/) | Data-quality workflow: messy source → clean schema (with sidecar OKF docs in `hospital-ok/`) |
+| [`telco-analytics/`](telco-analytics/) | Telco domain: carriers, plans, promotions |
+| [`cli-consumer/`](cli-consumer/) | Standalone CLI client (`sdf`) for the REST API — uses no Spark, no SemanticDF dep |
+
+## Prerequisites
+
+For any example to run:
+
+- **JDK 17** and **Maven 3.9+**.
+- The parent library installed locally before the first run of any example:
+  ```bash
+  # from the repo root
+  mvn install -DskipTests
+  ```
+- **Spark is `provided`** — every example starts a local `SparkSession`
+  for you when you `mvn scala:run`, so you don't need a Spark cluster.
+
+## Running an example
+
+Each example is a self-contained Maven project. The typical workflow:
+
+```bash
+cd examples/<name>
+mvn scala:run -DmainClass=<Main class name, listed in that example's README>
+```
+
+The exact main class name and command are in each example's own README.
+Some examples (like `cli-consumer/`) use `bin/sdf` or a custom
+executable — read the example README first.
+
+## When the YAML files aren't enough
+
+If you're building a real product and the `*.yml` models from these
+examples are too simple for your data, see:
+
+- [`DESIGN.md`](../DESIGN.md) §4 (architecture) and §6 (the hard problems) for what the library guarantees
+- [`docs/runtime-quickstart.md`](../docs/runtime-quickstart.md) for the toolchain quirks
+- [`examples/hospital/hospital-ok/`](../examples/hospital/hospital-ok/) for a richer real-world model surface (encounters + diagnoses + patients with joins, time dims, and OKF)
+
+## What "complementary" means
+
+Every example README ends with a *complements* note pointing at the
+other examples that fill in adjacent concerns. They form a graph, not a
+hierarchy — pick the entry point above that matches your goal, then
+follow those cross-links.

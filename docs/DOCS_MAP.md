@@ -8,7 +8,7 @@ trying to do.
 | If you want to... | Start here |
 |---|---|
 | Get a feel for SemanticDF in 5 minutes | [`README.md`](../README.md) — the new four-section intro |
-| Run the example models and see real output | [`examples/quickstart.md`](../examples/quickstart.md) (NEW — see below) |
+| Run the example models and see real output | [`examples/README.md`](../examples/README.md) — central index with a recommended order for each reader type |
 | Use SemanticDF from Scala code in your own project | [`README.md`](../README.md) → `## Build` → `## Quick start` → `## Capabilities` |
 | Define a model in YAML instead of Scala | [`examples/starter/`](../examples/starter/) (simplest YAML model) and [`docs/runtime-quickstart.md`](runtime-quickstart.md) |
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
