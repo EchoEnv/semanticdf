@@ -82,27 +82,3 @@ class ListModelsSpec extends AnyFunSuite with BeforeAndAfterAll with SparkFixtur
     )
   }
 }
-
-/** Local SparkSession lifecycle — mirrors `io.semanticdf.SparkSessionFixture`
-  * (the library's test fixture), kept local because test-source dependencies
-  * don't flow between sibling Maven projects. */
-trait SparkFixture extends BeforeAndAfterAll { this: Suite =>
-  @transient private var _spark: SparkSession = _
-
-  protected def spark: SparkSession = _spark
-
-  override protected def beforeAll(): Unit = {
-    super.beforeAll()
-    _spark = SparkSession.builder()
-      .master("local[2]")
-      .appName("semanticdf-mcp-tests")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.shuffle.partitions", "2")
-      .config("spark.sql.ansi.enabled", "false")
-      .getOrCreate()
-  }
-
-  override protected def afterAll(): Unit = {
-    try { if (_spark != null) _spark.stop() } finally { _spark = null; super.afterAll() }
-  }
-}

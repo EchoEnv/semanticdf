@@ -1,36 +1,21 @@
 package io.semanticdf.mcp.handlers
 
 import io.semanticdf.{Dimension, JoinInfo, Measure, SemanticFilter, SemanticTable}
-import io.semanticdf.mcp.{Models, OkfCache}
+import io.semanticdf.mcp.{Models, OkfCache, SparkFixture}
 import io.semanticdf.tools.{OkfGen}
-import org.apache.spark.sql.SparkSession
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
-import org.scalatest.{BeforeAndAfterAll, Suite}
 
 /** Tests for the `describe_model` handler — the second MCP tool shipped
   * (MCP-1b). The handler is a thin adapter over `SemanticTable`'s public
   * accessors (joins / measureKind / sourceTable / filters / dimensions /
   * measures / version / name / description — all from PR #6 and PR #17).
   *
-  * Like `ListModelsSpec`, we stub the `Models` registry directly — no YAML,
-  * no SparkSession required beyond constructing the stubs. The OkfCache is
-  * stubbed directly via the package-private constructor. */
-class DescribeModelSpec extends AnyFunSuite with BeforeAndAfterAll {
-
-  private val stubSpark: SparkSession = {
-    val s = SparkSession.builder()
-      .master("local[2]")
-      .appName("describe-model-spec")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.ansi.enabled", "false")
-      .getOrCreate()
-    s
-  }
-
-  override protected def afterAll(): Unit = {
-    if (stubSpark != null) stubSpark.stop()
-  }
+  * Like `ListModelsSpec`, we stub the `Models` registry directly — no YAML
+  * needed. The OkfCache is stubbed directly via the package-private
+  * constructor. Uses the shared `SparkFixture` so all MCP specs share one
+  * SparkSession per JVM run. */
+class DescribeModelSpec extends AnyFunSuite with SparkFixture {
 
   // ===========================================================================
   // (1) Schema walk — version, source_table, description, dimensions, measures,
@@ -179,7 +164,7 @@ class DescribeModelSpec extends AnyFunSuite with BeforeAndAfterAll {
     // the accessors — but `toSemanticTable` requires a non-empty df. The
     // minimal valid df below has the field-count matching the dimension/measure
     // names we surface, so any future accessor that reads it will not blow up.
-    val s = stubSpark
+    val s = spark
     import s.implicits._
     val empty = Seq.empty[(String, String)].toDF("k", "v")
     val table = io.semanticdf.toSemanticTable(
