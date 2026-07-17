@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>semanticdf-cli_2.13</artifactId>
+    <version>0.1.2</version>
+    <packaging>jar</packaging>
+
+    <name>semanticdf-cli</name>
+    <description>A command-line client (`sdf`) for the semanticdf REST API. No Spark, no semanticdf deps — pure HTTP + JSON, exactly like any external client.</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <scala.version>2.13.14</scala.version>
+        <scala.binary.version>2.13</scala.binary.version>
+        <semanticdf.version>0.1.2</semanticdf.version>
+    </properties>
+
+    <dependencies>
+        <!-- Jackson for JSON tree parsing. Deliberately a STANDALONE client:
+             no semanticdf-mcp dep, no Spark — proving any HTTP+JSON client
+             can drive the REST API. A plain ObjectMapper is enough since
+             we walk the response via the JsonNode tree model (no Scala
+             case-class deserialization needed). -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.15.2</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src/main/scala</sourceDirectory>
+
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>4.9.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <scalaVersion>${scala.version}</scalaVersion>
+                    <args>
+                        <arg>-deprecation</arg>
+                    </args>
+                </configuration>
+            </plugin>
+
+            <!-- `mvn exec:java` is the documented way to run the CLI during
+                 development (matches the other examples). The bin/sdf wrapper
+                 shells out to it. A fat-jar assembly is intentionally not
+                 configured here to keep the dependency surface minimal; if
+                 you want a standalone jar, add maven-assembly-plugin. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <mainClass>com.example.sdfcli.Main</mainClass>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

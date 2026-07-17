@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# semanticdf — long-form alias for `sdf`. See bin/sdf for the real entry point.
+# This file exists so `ln -s bin/semanticdf /usr/local/bin/` gives both names.
+exec "$(dirname "${BASH_SOURCE[0]}")/sdf" "$@"
