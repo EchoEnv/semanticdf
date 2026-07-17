@@ -51,7 +51,8 @@ guarantee that they're asking for the right thing.
 
 ## Where to read next
 
-- [`DESIGN.md`](DESIGN.md) — architecture of record
+- [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
+- [`docs/guide.md`](docs/guide.md) — narrative walkthrough: how SemanticDF works, in plain English
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
