@@ -47,10 +47,11 @@ final class DescribeModel {
 
   final case class DimensionEntry(
       name: String,
-      // `expr` is a SemanticScope => Column function. The library stores
-      // it as a thunk for evaluation; we serialise via `toString` (per
-      // contract note: "The LLM only ever needs the **name** to construct
-      // queries; the expr field is informational").
+      // `expr` is the original expression string when known (YAML `expr:` value
+      // or programmatic hint). Falls back to the lambda's `toString` for
+      // backwards compatibility with consumers that build dimensions via bare
+      // lambdas with no hint — the result is opaque `Lambda$...` addresses
+      // in that case. Prefer carrying the source string for human-readable output.
       expr: String,
       description: String,
       metadata: Map[String, String],
@@ -101,7 +102,7 @@ final class DescribeModel {
       dimensions   = t.dimensions.toList.sortBy(_._1).map { case (_, d) =>
         DimensionEntry(
           name = d.name,
-          expr = d.expr.toString,
+          expr = d.exprString.getOrElse(d.expr.toString),
           description = d.description.getOrElse(""),
           metadata = d.metadata,
           is_entity = d.isEntity,
@@ -113,7 +114,7 @@ final class DescribeModel {
         MeasureEntry(
           name = name,
           kind = describeKind(t.measureKind(name)),
-          expr = m.expr.toString,
+          expr = m.exprString.getOrElse(m.expr.toString),
           description = m.description.getOrElse(""),
           metadata = m.metadata,
         )

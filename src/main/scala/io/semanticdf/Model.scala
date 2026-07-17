@@ -29,6 +29,12 @@ final class Dimension(
     val isTimeDimension: Boolean = false,
     val isEventTimestamp: Boolean = false,
     val smallestTimeGrain: Option[String] = None,
+    /** Original expression string (e.g. the YAML `expr:` value or the
+      * programmatic hint). Carried so consumers like `DescribeModel` can
+      * surface a human-readable expression instead of the lambda's
+      * opaque `toString`. `None` for dimensions built from a bare lambda
+      * with no hint; the DescribeModel fallback then shows the lambda. */
+    val exprString: Option[String] = None,
 ) extends Serializable {
 
   def copy(
@@ -40,7 +46,8 @@ final class Dimension(
       isTimeDimension: Boolean = this.isTimeDimension,
       isEventTimestamp: Boolean = this.isEventTimestamp,
       smallestTimeGrain: Option[String] = this.smallestTimeGrain,
-  ): Dimension = new Dimension(name, expr, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain)
+      exprString: Option[String] = this.exprString,
+  ): Dimension = new Dimension(name, expr, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain, exprString)
 
   override def equals(that: Any): Boolean = that match {
     case d: Dimension =>
@@ -51,10 +58,11 @@ final class Dimension(
       isTimeDimension == d.isTimeDimension &&
       isEventTimestamp == d.isEventTimestamp &&
       smallestTimeGrain == d.smallestTimeGrain &&
+      exprString == d.exprString &&
       expr.toString == d.expr.toString  // functions have no value equality; compare source
     case _ => false
   }
-  override def hashCode(): Int = (name, expr, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain).##
+  override def hashCode(): Int = (name, expr, exprString, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain).##
   override def toString: String = s"Dimension($name,${if (description.isDefined) description.get else "_"})$$"
 }
 
@@ -101,6 +109,11 @@ final case class Measure(
     expr: SemanticScope => Column,
     description: Option[String] = None,
     metadata: Map[String, String] = Map.empty,
+    /** Original expression string (e.g. the YAML `expr:` value or the
+      * programmatic hint). See [[Dimension.exprString]] for the full
+      * rationale. `None` for measures built from a bare lambda with
+      * no hint; the DescribeModel fallback then shows the lambda. */
+    exprString: Option[String] = None,
 )
 
 /** A per-row transformation applied to the source data at model-load time.

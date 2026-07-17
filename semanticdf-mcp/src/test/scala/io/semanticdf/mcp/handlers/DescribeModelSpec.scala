@@ -203,6 +203,7 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
       isTime: Boolean = false,
       smallestGrain: Option[String] = None,
       metadata: Map[String, String] = Map.empty,
+      exprString: Option[String] = None,
   ): Dimension = new Dimension(
     name = name,
     expr = (scope: io.semanticdf.SemanticScope) => scope(name),
@@ -212,6 +213,7 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
     isTimeDimension = isTime,
     isEventTimestamp = false,
     smallestTimeGrain = smallestGrain,
+    exprString = exprString,
   )
 
   private def stubMeasure(
@@ -225,11 +227,12 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
       // ignores the reference and the measure stays Base.
       kind: String = "base",
       siblingMeasureName: String = "sibling_measure",
+      exprString: Option[String] = None,
   ): Measure = {
     val expr: io.semanticdf.SemanticScope => org.apache.spark.sql.Column =
       if (kind == "calc") (scope) => scope(siblingMeasureName)
       else                  (scope) => scope(name)
-    Measure(name = name, expr = expr, description = description, metadata = metadata)
+    Measure(name = name, expr = expr, description = description, metadata = metadata, exprString = exprString)
   }
 
   private def stubJoin(
@@ -247,4 +250,79 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
     extraDimensions = extraDims,
     extraMeasures = extraMeasures,
   )
+
+  // ===========================================================================
+  // (7) expr field surfaces the original expression string when available
+  // ===========================================================================
+  //
+  // Regression: before PR (feat/describe-model-expr-string), Dimension/Measure
+  // stored only a `SemanticScope => Column` lambda, so DescribeModel serialised
+  // `expr` via `expr.toString` and produced opaque lambda addresses
+  // (`io.semanticdf.YamlLoader$$$Lambda$...`). The fix: Dimension and Measure
+  // now carry an optional `exprString` (populated by the YamlLoader from the
+  // YAML `expr:` value; can also be set programmatically). DescribeModel
+  // prefers the string when present and falls back to `toString` otherwise
+  // (back-compat for consumers that build dims/measures with bare lambdas).
+
+  test("describe_model surfaces Dimension.exprString when set (the new field)") {
+    val stub = stubModel(
+      key = "flights", name = "flights",
+      dimensions = Seq(
+        stubDimension("carrier", exprString = Some("carrier")),
+      ),
+      measures = Seq.empty,
+    )
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.data.dimensions.head.expr shouldBe "carrier"
+  }
+
+  test("describe_model surfaces Measure.exprString when set (the new field)") {
+    val stub = stubModel(
+      key = "flights", name = "flights",
+      dimensions = Seq.empty,
+      measures = Seq(stubMeasure("flight_count", exprString = Some("count(*)"))),
+    )
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.data.measures.head.expr shouldBe "count(*)"
+  }
+
+  test("describe_model falls back to lambda toString when exprString is absent (back-compat)") {
+    // Programmatic consumers that build dims/measures with bare lambdas get
+    // the old opaque output. This is intentional — we don't have a source
+    // string to surface. New consumers can opt in by passing exprString.
+    val stub = stubModel(
+      key = "flights", name = "flights",
+      dimensions = Seq(stubDimension("carrier")), // no exprString
+      measures = Seq(stubMeasure("flight_count")), // no exprString
+    )
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    val dExpr = env.data.dimensions.head.expr
+    val mExpr = env.data.measures.head.expr
+    // The lambda toString contains the anonymous-class marker or @hash;
+    // either way it's clearly NOT the original 'carrier' / 'flight_count'.
+    assert(dExpr != "carrier",  s"expected lambda fallback, got: $dExpr")
+    assert(mExpr != "flight_count", s"expected lambda fallback, got: $mExpr")
+  }
+
+  test("describe_model: dim exprString with simple identifier (column reference)") {
+    val stub = stubModel(
+      key = "flights", name = "flights",
+      dimensions = Seq(stubDimension("origin", exprString = Some("origin"))),
+      measures = Seq.empty,
+    )
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.data.dimensions.head.expr shouldBe "origin"
+  }
+
+  test("describe_model: measure exprString with a complex expression") {
+    // YAML example: `expr: \"sum(distance) / count(*)\"`.
+    val complexExpr = "sum(distance) / count(*)"
+    val stub = stubModel(
+      key = "flights", name = "flights",
+      dimensions = Seq.empty,
+      measures = Seq(stubMeasure("avg_distance", kind = "calc", exprString = Some(complexExpr))),
+    )
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.data.measures.head.expr shouldBe complexExpr
+  }
 }

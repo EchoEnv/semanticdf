@@ -513,11 +513,11 @@ object YamlLoader {
 
     if (isTimeDim)
       Dimension.time(name, dimensionExpr(exprStr), smallestTimeGrain = smallestGrain,
-        description = description, metadata = metadata)
+        description = description, metadata = metadata).copy(exprString = Some(exprStr))
     else if (isEntity)
-      Dimension.entity(name, dimensionExpr(exprStr), description, metadata)
+      Dimension.entity(name, dimensionExpr(exprStr), description, metadata).copy(exprString = Some(exprStr))
     else
-      Dimension(name, dimensionExpr(exprStr), description, metadata)
+      Dimension(name, dimensionExpr(exprStr), description, metadata).copy(exprString = Some(exprStr))
   }
 
   /** A dimension lambda: simple identifiers go through the scope (for clean
@@ -576,7 +576,7 @@ object YamlLoader {
     Measure(name, t => {
       colRefs.foreach(c => t(c))  // throws UnknownFieldError if a column is missing
       expr(exprStr)
-    }, description, metadata)
+    }, description, metadata).copy(exprString = Some(exprStr))
   }
 
   /** Extract probable column-reference identifiers from a Spark SQL expression string,
@@ -635,7 +635,7 @@ object YamlLoader {
     val (exprStr, description, extra) = parseMetricConfig(cfg, "calculated measure", name)
     CalcExpr.validateReferences(exprStr, knownMeasures, modelName, name)
     val metadata = metadataFromYaml(extra.get("metadata"))
-    Measure(name, t => CalcExpr(t, exprStr), description, metadata)
+    Measure(name, t => CalcExpr(t, exprStr), description, metadata).copy(exprString = Some(exprStr))
   }
 
   // -------------------------------------------------------------------------
@@ -696,7 +696,11 @@ object YamlLoader {
           // (which survives the join), only the dimension NAME is prefixed.
           val rightDims = right.dimensions.values.toSeq.collect {
             case d if d.name != leftOn =>
-              Dimension(s"$alias.${d.name}", d.expr, d.description)
+              // Re-expose the joined model's dimension under the alias prefix
+              // (e.g. `carriers.name`) so describe_model surfaces the
+              // user-facing name; the expr lambda survives the join
+              // unchanged (it resolves the bare column via the scope).
+              d.copy(name = s"$alias.${d.name}", exprString = Some(s"$alias.${d.name}"))
           }
           if (rightDims.nonEmpty) result = result.withDimensions(rightDims: _*)
         case other =>
