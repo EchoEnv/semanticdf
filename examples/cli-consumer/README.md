@@ -82,18 +82,24 @@ Version:      0
 
 Dimensions:
 NAME           EXPR
--------------  -----------
-carrier        <inline fn>
-flight_date    <inline fn>
-origin         <inline fn>
-...
+-------------  -------------
+carrier        carrier
+carriers.hub   carriers.hub
+carriers.name  carriers.name
+flight_date    flight_date
+hub            hub
+name           name
+origin         origin
 
 Measures:
 NAME              KIND  EXPR
-----------------  ----  -----------
-flight_count      base  <inline fn>
-total_distance    base  <inline fn>
-...
+----------------  ----  ----------------------------------------
+avg_distance      calc  total_distance / flight_count
+avg_passengers    calc  total_passengers / flight_count
+flight_count      base  count(1)
+pct_of_total      calc  total_passengers / all(total_passengers)
+total_distance    base  sum(distance)
+total_passengers  base  sum(passengers)
 
 Joins:
 NAME                  LEFT     RIGHT     KEYS
@@ -140,11 +146,14 @@ it found two issues that the unit tests had missed:
    Scala-module callers). 5 regression tests added.
 
 2. **`describe_model` `expr` field serialises as opaque lambda addresses**
-   (`io.semanticdf.YamlLoader$$$Lambda$...`). The server stores
-   `SemanticScope => Column` functions, not source strings. The CLI masks
-   these as `<inline fn>` for readability. The proper fix is a library change
-   to surface the original expression string (see
-   [issue tracker](https://github.com/EchoEnv/semanticdf/issues) — TODO).
+   (`io.semanticdf.YamlLoader$$$Lambda$...`). Originally the server stored
+   `SemanticScope => Column` functions, with the source string discarded at
+   YAML-load time. The CLI masked these as `<inline fn>` for readability
+   pending a library fix. **Fixed in PR feat/describe-model-expr-string:**
+   `Dimension` and `Measure` now carry an optional `exprString` (populated
+   by the YamlLoader from the YAML `expr:` value); `DescribeModel` prefers
+   the string over the lambda fallback. The CLI's `maskExpr` is kept as a
+   graceful-degradation hook for old servers.
 
 ## Why a separate CLI module, not bundled in semanticdf-mcp
 

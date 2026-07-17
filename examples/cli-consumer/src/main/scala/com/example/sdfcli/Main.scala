@@ -210,12 +210,13 @@ object Main {
     else if (n.isBoolean) n.asText()
     else n.asText()
 
-  /** The server serialises dimension/measure/filter `expr` (a
-    * `SemanticScope => Column` function) via `toString`, which yields
-    * opaque lambda addresses like `io.semanticdf.YamlLoader$$$Lambda$...`.
-    * That's useless to a human. Mask it client-side so the `describe`
-    * table stays readable. (A future library change should surface the
-    * original expression string; until then, the name is what matters.) */
+  /** Mask opaque lambda `toString` addresses for graceful degradation against
+    * older server versions that don't carry the `exprString` field. Newer
+    * servers (≥ PR feat/describe-model-expr-string) emit the original YAML
+    * expression string verbatim, so this is a no-op in the common case —
+    * we keep it for safety. e.g. `io.semanticdf.YamlLoader$$$Lambda$...`
+    * is human-unreadable; masking it keeps the table legible when run
+    * against a pre-PR server. */
   private def maskExpr(s: String): String =
     if (s != null && (s.contains("$") && s.contains("Lambda"))) "<inline fn>"
     else if (s != null && s.contains("@") && s.matches(".*@[0-9a-fA-F]+")) "<inline fn>"

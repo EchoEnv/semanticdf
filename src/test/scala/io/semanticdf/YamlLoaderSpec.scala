@@ -1093,4 +1093,86 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     assert(expanded.filters.length == 1,
       s"Filters should survive .withMeasures, got ${expanded.filters}")
   }
+
+  // -------------------------------------------------------------------------
+  // exprString preservation (PR: feat/describe-model-expr-string)
+  //
+  // Regression: DescribeModel previously serialised Dimension/Measure `expr`
+  // via the lambda's `toString`, producing opaque Lambda$... addresses. The
+  // library fix: YamlLoader populates `exprString` from the YAML `expr:`
+  // value for each dimension, base measure, and calc measure. DescribeModel
+  // then prefers this string over the lambda fallback (back-compat).
+  // -------------------------------------------------------------------------
+
+  test("YamlLoader: dimension `expr:` value is preserved as exprString") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |    distance_km: "distance * 1.6"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    val dims = flights.dimensions
+
+    // Simple identifier \u2014 scope lookup
+    dims("carrier").exprString shouldBe Some("carrier")
+    // Complex expression \u2014 functions.expr
+    dims("distance_km").exprString shouldBe Some("distance * 1.6")
+  }
+
+  test("YamlLoader: base measure `expr:` value is preserved as exprString") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_distance: "sum(distance)"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    flights.measures("flight_count").exprString shouldBe Some("count(1)")
+    flights.measures("total_distance").exprString shouldBe Some("sum(distance)")
+  }
+
+  test("YamlLoader: calc measure `expr:` value is preserved as exprString") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |    total_distance: "sum(distance)"
+        |  calculated_measures:
+        |    avg_distance: "total_distance / flight_count"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    flights.measures("avg_distance").exprString shouldBe Some("total_distance / flight_count")
+  }
+
+  test("YamlLoader: entity and time dimensions also carry exprString") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier:
+        |      expr: carrier
+        |      is_entity: true
+        |    origin:
+        |      expr: origin
+        |      is_time_dimension: true
+        |      smallest_time_grain: day
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    flights.dimensions("carrier").exprString       shouldBe Some("carrier")
+    flights.dimensions("carrier").isEntity         shouldBe true
+    flights.dimensions("origin").exprString        shouldBe Some("origin")
+    flights.dimensions("origin").isTimeDimension   shouldBe true
+  }
 }
