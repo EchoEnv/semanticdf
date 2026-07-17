@@ -278,7 +278,6 @@ If you also want the standalone CLI consumer as a separate JAR:
 ### Out of scope for v0.1.3 (deferred to v0.2+)
 
 - REST auth / streaming (currently local-only by design)
-- Case-class `ResultDecoder` macro derivation
 - Cross-`SparkSession` model sharing / remote warehouse federation
 - `Introspector` warning lines in emitted YAML (the suppression hook
   on the MCP side is in place; the library just doesn't emit them yet)
@@ -382,7 +381,9 @@ load-time validation pass (PRs #25–#27). Library and MCP server are at
   multi-hop joins will need them)
 - `Introspector` warning lines in the generated YAML (the hook is in
   place; the library just doesn't emit them yet)
-- `ResultDecoder[T]` (typed query *results*, not just inputs)
+- `ResultDecoder[T]` `Dataset[T]`-flavored `query[T]` shape
+  (the `Seq[T]` via `collectAs[T]` path shipped in #52; the
+  `Dataset[T]`-shaped variant is await-consumer-demand)
 
 All of these are additive — they widen the contract without breaking
 any existing agent.
