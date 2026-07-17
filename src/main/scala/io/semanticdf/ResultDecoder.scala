@@ -1,5 +1,6 @@
 package io.semanticdf
 
+import scala.language.experimental.macros
 import org.apache.spark.sql.Row
 
 /** Typeclass for decoding a single Spark `Row` into a typed value `T`.
@@ -24,12 +25,12 @@ import org.apache.spark.sql.Row
   *   def decode(row: Row): (String, Long) = (row.getString(0), row.getLong(1))
   * }
   * val pairs: Seq[(String, Long)] = table.execute(spark).collectAs[(String, Long)]
-  * }}}
   *
-  * Case classes are out of scope for the built-in instances (Scala 2.13
-  * has no native deriving — would need shapeless or runtime reflection).
-  * For case-class results, use Spark's built-in `df.as[MyCaseClass]` with
-  * an `org.apache.spark.sql.Encoder` — it's the right tool there.
+  * // Auto-derived for a case class (since PR feat/resultdecoder-derive-macro).
+  * case class CarrierCount(carrier: String, count: Long)
+  * implicit val decoder: ResultDecoder[CarrierCount] = ResultDecoder.derive[CarrierCount]
+  * val rows: Seq[CarrierCount] = table.collectAs[CarrierCount](spark)
+  * }}}
   *
   * Why a typeclass and not a method on `DataFrame`? Because the decoder
   * is a *policy* the caller chooses, not a property of the DataFrame.
@@ -52,7 +53,8 @@ object ResultDecoder {
   //
   // These cover the most common case: a single-column query (e.g.
   // `t.groupBy("carrier").aggregate("flight_count")` where you only want
-  // the measure column). For multi-column queries, write a custom decoder.
+  // the measure column). For multi-column queries, write a custom decoder
+  // or use `derive[T]` (below) for case classes with primitive fields.
   // ---------------------------------------------------------------------------
 
   implicit val stringDecoder: ResultDecoder[String]   = _.getString(0)
@@ -61,4 +63,23 @@ object ResultDecoder {
   implicit val doubleDecoder: ResultDecoder[Double]   = _.getDouble(0)
   implicit val floatDecoder: ResultDecoder[Float]     = _.getFloat(0)
   implicit val booleanDecoder: ResultDecoder[Boolean] = _.getBoolean(0)
+
+  // ---------------------------------------------------------------------------
+  // Macro derivation (Scala 2 blackbox macro).
+  //
+  // `ResultDecoder.derive[Foo]` generates a `ResultDecoder[Foo]` instance at
+  // compile time for case classes whose fields are all in the supported
+  // primitive set (String / Int / Long / Double / Float / Boolean / Short /
+  // Byte / java.math.BigDecimal). The generated instance reads each field
+  // from the right column index using `row.getX(i)`. Compile-time failure
+  // for non-case-class types and for unsupported field types — callers get
+  // a clear error pointing at the offending constructor parameter.
+  //
+  // Implementation lives in [[ResultDecoderMacros]] (separate object so the
+  // Scala 2 macro plumbing doesn't leak into the public surface). See that
+  // file for the field-type \u2192 Row-getter mapping.
+  // ---------------------------------------------------------------------------
+
+  /** Compile-time derivation for case classes. See class scaladoc. */
+  def derive[T]: ResultDecoder[T] = macro ResultDecoderMacros.deriveImpl[T]
 }
