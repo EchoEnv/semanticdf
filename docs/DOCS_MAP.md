@@ -20,6 +20,7 @@ trying to do.
 | Look up a specific API method | [`README.md`](../README.md) → `## API reference` |
 | See what changed in the last release | [`RELEASE.md`](../RELEASE.md) — version-by-version |
 | Investigate a phantom-type compile error | [`docs/phase-E-plan.md`](phase-E-plan.md) (especially §E1-E3 status) |
+| Write or improve a Scaladoc block | [`docs/scaladoc-style.md`](scaladoc-style.md) — the bar, with rules and a pre-commit checklist |
 
 ## Doc roles
 
@@ -36,6 +37,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `docs/calc-author-guide.md` | How to define calc measures in Scala and YAML. | Calc authors |
 | `docs/known-limitations.md` | Current scope, guardrails, and roadmap hints. | Readers evaluating fit |
 | `docs/phase-E-plan.md` | The original plan for type-safety via typeclasses; status markers showing which parts shipped. | Historical / contributors |
+| `docs/scaladoc-style.md` | The bar for Scaladoc in `io.semanticdf.*`. Seven rules + a pre-commit checklist + a do/don't section. The canonical example is `src/main/scala/io/semanticdf/Model.scala`. | Contributors writing or reviewing docs |
 | `docs/feature-roadmap.md` | Top-level "what's shipped / what's next" summary. | Everyone |
 | `docs/adr/` | Recorded decisions. Date-stamped, terse. | Contributors |
 | `docs/agents/` | LLM-agent integration — MCP contract, OKF mapping, maintenance workflow. | Agent builders |
