@@ -32,6 +32,30 @@ import org.apache.spark.sql.functions._
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.windowanalytics.Main
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.windowanalytics")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -87,9 +111,9 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println("Window-function analytics template — top-N, MoM, running total")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("Window-function analytics template — top-N, MoM, running total")
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 2. Add window-function measures in Scala (not in YAML)
@@ -117,7 +141,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 3. Q1: Top-5 origins per carrier by total passengers
       // ---------------------------------------------------------------------
-      println("\n--- Q1: Top-5 origins per carrier by total passengers (window + filter) ---")
+      Logger.info("--- Q1: Top-5 origins per carrier by total passengers (window + filter) ---")
       flightsWithWindows
         .groupByDimensions(carrier, origin)
         .aggregateMeasures(totalPassengers, flightCount, rankWithinCarrier)
@@ -129,7 +153,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 4. Q2: Monthly passengers with MoM % change (lag window)
       // ---------------------------------------------------------------------
-      println("\n--- Q2: Monthly passengers with MoM % change (lag) ---")
+      Logger.info("--- Q2: Monthly passengers with MoM % change (lag) ---")
       // pct_change is added BEFORE the aggregate (must be a model measure,
       // not something composed after aggregation). withMeasures() does not
       // accept SemanticAggregateOp as root.
@@ -147,19 +171,19 @@ object Main {
         .orderBy(SortKey.asc(flightDate))
         .execute(spark)
         .show(false)
-      println("  (first row's pct_change is 0.0 because there's no prior month — safeDivide default)")
+      Logger.info("  (first row's pct_change is 0.0 because there's no prior month — safeDivide default)")
 
       // ---------------------------------------------------------------------
       // 5. Q3: Running total of passengers over time
       // ---------------------------------------------------------------------
-      println("\n--- Q3: Running total of passengers over time ---")
+      Logger.info("--- Q3: Running total of passengers over time ---")
       flightsWithWindows
         .groupByDimensions(flightDate)
         .aggregateMeasures(totalPassengers, runningTotal)
         .orderBy(SortKey.asc(flightDate))
         .execute(spark)
         .show(10, false)
-      println("  (running_total is partition-sensitive; the order shown may not")
+      Logger.info("  (running_total is partition-sensitive; the order shown may not")
     } finally spark.stop()
   }
 }

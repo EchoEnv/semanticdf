@@ -33,6 +33,30 @@ import org.apache.spark.sql.functions._
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.operationsanalytics.Main
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.operationsanalytics")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -100,9 +124,9 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println("Operations analytics template — fulfillment time + anomaly detection")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("Operations analytics template — fulfillment time + anomaly detection")
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 2. Q1: Order fulfillment time + on-time rate (from YAML calc measures)
@@ -114,13 +138,13 @@ object Main {
       // Q1 aggregates over all rows (no group-by). The typed groupByDimensions
       // requires at least one dim ref, so we use the string-based groupBy()
       // for this case. The aggregate measures are still typed.
-      println("\n--- Q1: Order fulfillment (avg ship_days + on-time rate) ---")
+      Logger.info("--- Q1: Order fulfillment (avg ship_days + on-time rate) ---")
       orders
         .groupBy()
         .aggregateMeasures(avgShipDays, onTimeRate, orderCount)
         .execute(spark)
         .show(false)
-      println("  (avg_ship_days and on_time_rate are calc measures in the YAML model)")
+      Logger.info("  (avg_ship_days and on_time_rate are calc measures in the YAML model)")
 
       // ---------------------------------------------------------------------
       // 3. Q2: Anomaly detection (z-score) — 2-step pattern
@@ -130,7 +154,7 @@ object Main {
       //
       //   Step 1: aggregate the entire dataset to get global mean + variance
       //   Step 2: filter orders using the computed threshold (mean + 2*stddev)
-      println("\n--- Q2: Anomaly detection (2-step) — orders > 2σ from mean ---")
+      Logger.info("--- Q2: Anomaly detection (2-step) — orders > 2σ from mean ---")
 
       // Step 1: global stats. The two temporary measures (mean_amount,
       // var_amount) are added in Scala via withMeasures. Typed refs mean the
@@ -149,7 +173,7 @@ object Main {
       val mean = stats.getAs[Double]("mean_amount")
       val stddev = math.sqrt(stats.getAs[Double]("var_amount"))
       val threshold = mean + 2 * stddev
-      println(f"  mean=$mean%.2f  stddev=$stddev%.2f  threshold(2σ)=$threshold%.2f")
+      Logger.info(f"  mean=$mean%.2f  stddev=$stddev%.2f  threshold(2σ)=$threshold%.2f")
 
       // Step 2: per-order classification using the global threshold.
       // Predicate.Gt is the typed predicate factory — accepts a typed ref.

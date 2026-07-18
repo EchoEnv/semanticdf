@@ -31,6 +31,30 @@ import org.apache.spark.sql.functions._
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.customeranalytics.Main
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.customeranalytics")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -87,9 +111,9 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println("Customer-segmentation analytics template — RFM + cohort activity")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("Customer-segmentation analytics template — RFM + cohort activity")
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 2. Q1: RFM per customer
@@ -102,7 +126,7 @@ object Main {
       // measure name from the SemanticMeasure witness — no string duplicated
       // at the call site. Recency is added as a new measure; segment is a
       // calc measure that references recency + the existing base measures.
-      println("\n--- Q1: RFM per customer (Recency, Frequency, Monetary) ---")
+      Logger.info("\n--- Q1: RFM per customer (Recency, Frequency, Monetary) ---")
       orders
         .withMeasures(
           // R: days since last order. Fixed cutoff ("2024-04-01") so the
@@ -137,7 +161,7 @@ object Main {
       // Note: the resulting DataFrame has a column literally named
       // `customers.signup_date`. The typed SortKey backtick-quotes names
       // containing dots, so the join-prefixed dimension sorts correctly.
-      println("\n--- Q2: Customer activity by signup-day cohort ---")
+      Logger.info("--- Q2: Customer activity by signup-day cohort ---")
       orders
         .groupByDimensions(signupDate)
         .aggregateMeasures(orderCount, orderAmount)

@@ -32,6 +32,31 @@ import org.apache.spark.sql.functions._
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.hospital.Main
   */
+
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.hospital")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -94,11 +119,11 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println(
+      Logger.info("=" * 70)
+      Logger.info(
         "Hospital data management + cleansing — full ETL → semantic workflow"
       )
-      println("=" * 70)
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 1. INGEST — load raw data (with intentional quality issues)
@@ -118,16 +143,16 @@ object Main {
         .option("header", "true")
         .option("inferSchema", "true")
         .csv("data/diagnoses.csv")
-      println(s"  raw patients:    ${rawPatients.count()} rows")
-      println(s"  raw encounters:  ${rawEncounters.count()} rows")
-      println(s"  diagnoses:        ${diagnoses.count()} rows")
+      Logger.info(s"  raw patients:    ${rawPatients.count()} rows")
+      Logger.info(s"  raw encounters:  ${rawEncounters.count()} rows")
+      Logger.info(s"  diagnoses:        ${diagnoses.count()} rows")
 
       // ---------------------------------------------------------------------
       // 2. QUALITY REPORT — surface the data quality issues
       // ---------------------------------------------------------------------
-      println("\n" + "=" * 70)
-      println("STEP 2: Data quality report")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 2: Data quality report")
+      Logger.info("=" * 70)
 
       // Duplicate patients by (first_name, last_name, dob) — case-insensitive.
       // These use raw Spark DataFrame APIs (groupBy, count) — they're
@@ -151,16 +176,16 @@ object Main {
         .filter(col("count") > 1)
         .count()
 
-      println(s"  duplicate patients (same name+dob): $dupByNameDob")
-      println(s"  rows with missing/empty MRN:        $missingMrn")
-      println(s"  duplicate MRN values:                $dupMrn")
+      Logger.info(s"  duplicate patients (same name+dob): $dupByNameDob")
+      Logger.info(s"  rows with missing/empty MRN:        $missingMrn")
+      Logger.info(s"  duplicate MRN values:                $dupMrn")
 
       // ---------------------------------------------------------------------
       // 3. CLEANSE — produce cleansed DataFrames
       // ---------------------------------------------------------------------
-      println("\n" + "=" * 70)
-      println("STEP 3: Cleanse")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 3: Cleanse")
+      Logger.info("=" * 70)
 
       // 3a. Normalize names to Title Case, then deduplicate by (name, dob).
       val normalizedPatients = rawPatients
@@ -186,18 +211,18 @@ object Main {
       //     consistent with our dedup (P003, P004, P011 → P001, etc.).
       val cleansedEncounters = rawEncounters
 
-      println(s"  raw patients:        ${rawPatients.count()} rows")
-      println(
+      Logger.info(s"  raw patients:        ${rawPatients.count()} rows")
+      Logger.info(
         s"  cleansed patients:   ${cleansedPatients.count()} rows (after dedup)"
       )
-      println(s"  encounters:          ${cleansedEncounters.count()} rows")
+      Logger.info(s"  encounters:          ${cleansedEncounters.count()} rows")
 
       // ---------------------------------------------------------------------
       // 4. SEMANTIC — load YAML models on the cleansed DataFrames
       // ---------------------------------------------------------------------
-      println("\n" + "=" * 70)
-      println("STEP 4: Build semantic models on the cleansed data")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 4: Build semantic models on the cleansed data")
+      Logger.info("=" * 70)
 
       val tables = Map(
         "patients_clean_csv" -> cleansedPatients,
@@ -207,17 +232,17 @@ object Main {
       val models = YamlLoader.loadDir("models/", tables)
       val patients = models("patients")
       val encounters = models("encounters")
-      println(s"  loaded models: ${models.keys.mkString(", ")}")
+      Logger.info(s"  loaded models: ${models.keys.mkString(", ")}")
 
       // ---------------------------------------------------------------------
       // 5. QUERIES
       // ---------------------------------------------------------------------
-      println("\n" + "=" * 70)
-      println("STEP 5: Queries on the cleansed data")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 5: Queries on the cleansed data")
+      Logger.info("=" * 70)
 
       // Q1: Patient demographics — by gender + by insurance.
-      println("\n--- Q1: Patient demographics (by gender, by insurance) ---")
+      Logger.info("--- Q1: Patient demographics (by gender, by insurance) ---")
       patients
         .groupByDimensions(gender)
         .aggregateMeasures(patientCount)
@@ -232,7 +257,7 @@ object Main {
         .show(false)
 
       // Q2: ALOS by department.
-      println("\n--- Q2: Average length of stay (ALOS) by department ---")
+      Logger.info("--- Q2: Average length of stay (ALOS) by department ---")
       encounters
         .groupByDimensions(department)
         .aggregateMeasures(avgLos, encounterCount)
@@ -248,7 +273,7 @@ object Main {
       //     computed in Scala (a simple ratio of two DataFrame counts) —
       //     this is a reasonable pattern when the final aggregation
       //     crosses group boundaries.
-      println("\n--- Q3: 30-day readmission rate ---")
+      Logger.info("--- Q3: 30-day readmission rate ---")
       val encountersDf = encounters
         .toDataFrame(spark)
         .withColumn(
@@ -288,14 +313,14 @@ object Main {
         if (multiEncounter.count() > 0)
           readmitted.count().toDouble / multiEncounter.count().toDouble
         else 0.0
-      println(s"  patients with multiple encounters: ${multiEncounter.count()}")
-      println(s"  of which had a 30-day readmission:    ${readmitted.count()}")
-      println(f"  30-day readmission rate:             $rate%.2f")
+      Logger.info(s"  patients with multiple encounters: ${multiEncounter.count()}")
+      Logger.info(s"  of which had a 30-day readmission:    ${readmitted.count()}")
+      Logger.info(f"  30-day readmission rate:             $rate%.2f")
 
-      println("\n" + "=" * 70)
-      println("All steps complete. The data quality issues from STEP 2 are now")
-      println("resolved — the queries above run on the cleansed data.")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("All steps complete. The data quality issues from STEP 2 are now")
+      Logger.info("resolved — the queries above run on the cleansed data.")
+      Logger.info("=" * 70)
     } finally spark.stop()
   }
 }

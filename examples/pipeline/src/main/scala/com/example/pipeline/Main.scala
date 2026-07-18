@@ -37,6 +37,30 @@ import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
   *
   * Output (parquet tables and temp views) goes to ./output/
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.pipeline")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -78,9 +102,9 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println("STEP 1: INGEST raw CSV")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 1: INGEST raw CSV")
+      Logger.info("=" * 70)
 
       // Read raw data with EVERYTHING as strings first. We cast types after cleaning.
       // In real pipelines you'd often use inferSchema=false + permissive mode.
@@ -93,37 +117,37 @@ object Main {
         .option("mode", "PERMISSIVE")
         .csv("raw/customers_raw.csv")
 
-      println(s"  raw orders:    ${rawOrders.count()} rows")
-      println(s"  raw customers: ${rawCustomers.count()} rows")
+      Logger.info(s"  raw orders:    ${rawOrders.count()} rows")
+      Logger.info(s"  raw customers: ${rawCustomers.count()} rows")
 
-      println("\n" + "=" * 70)
-      println("STEP 2: CLEAN (drop nulls, dedupe, cast, normalize)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 2: CLEAN (drop nulls, dedupe, cast, normalize)")
+      Logger.info("=" * 70)
 
       val cleanOrders = cleanOrdersDf(rawOrders)
       val cleanCustomers = cleanCustomersDf(rawCustomers)
 
-      println(s"  clean orders:    ${cleanOrders.count()} rows (was ${rawOrders.count()})")
-      println(s"  clean customers: ${cleanCustomers.count()} rows (was ${rawCustomers.count()})")
+      Logger.info(s"  clean orders:    ${cleanOrders.count()} rows (was ${rawOrders.count()})")
+      Logger.info(s"  clean customers: ${cleanCustomers.count()} rows (was ${rawCustomers.count()})")
 
-      println("\n" + "=" * 70)
-      println("STEP 3: ENRICH (derive business columns)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 3: ENRICH (derive business columns)")
+      Logger.info("=" * 70)
 
       val enrichedOrders = enrichOrdersDf(cleanOrders)
       enrichedOrders.select("order_id", "qty", "price_usd", "total_amount", "order_year")
         .show(10, false)
 
-      println("\n" + "=" * 70)
-      println("STEP 4: VALIDATE (enforce business rules)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 4: VALIDATE (enforce business rules)")
+      Logger.info("=" * 70)
 
       val validOrders = validateOrdersDf(enrichedOrders)
-      println(s"  valid orders after validation: ${validOrders.count()} rows")
+      Logger.info(s"  valid orders after validation: ${validOrders.count()} rows")
 
-      println("\n" + "=" * 70)
-      println("STEP 5: WRITE parquet (partitioned by year)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 5: WRITE parquet (partitioned by year)")
+      Logger.info("=" * 70)
 
       val ordersPath = "output/orders"
       val customersPath = "output/customers"
@@ -140,12 +164,12 @@ object Main {
         .mode(SaveMode.Overwrite)
         .parquet(customersPath)
 
-      println(s"  wrote parquet: $ordersPath")
-      println(s"  wrote parquet: $customersPath")
+      Logger.info(s"  wrote parquet: $ordersPath")
+      Logger.info(s"  wrote parquet: $customersPath")
 
-      println("\n" + "=" * 70)
-      println("STEP 6: CATALOG (register as temp views for downstream use)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 6: CATALOG (register as temp views for downstream use)")
+      Logger.info("=" * 70)
 
       // Re-read the parquet (proves the round-trip) and register as temp views.
       // In production you'd use a Hive metastore or Unity Catalog here.
@@ -154,12 +178,12 @@ object Main {
       savedOrders.createOrReplaceTempView("orders")
       savedCustomers.createOrReplaceTempView("customers")
 
-      println(s"  temp views: orders (${savedOrders.count()} rows), customers (${savedCustomers.count()} rows)")
-      println(s"  sample query: ${spark.sql("SELECT country, COUNT(*) FROM customers GROUP BY country").count()} countries")
+      Logger.info(s"  temp views: orders (${savedOrders.count()} rows), customers (${savedCustomers.count()} rows)")
+      Logger.info(s"  sample query: ${spark.sql("SELECT country, COUNT(*) FROM customers GROUP BY country").count()} countries")
 
-      println("\n" + "=" * 70)
-      println("STEP 7: SEMANTIC MODELS on the parquet (the gold layer)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 7: SEMANTIC MODELS on the parquet (the gold layer)")
+      Logger.info("=" * 70)
 
       // The semantic models point to the parquet-backed temp views.
       // This is the bridge: parquet on disk → temp view → SemanticTable.
@@ -171,12 +195,12 @@ object Main {
       val models = YamlLoader.loadDir("models/", tables)
       val orders = models("orders")
 
-      println(s"  loaded ${models.size} semantic models: ${models.keys.mkString(", ")}")
+      Logger.info(s"  loaded ${models.size} semantic models: ${models.keys.mkString(", ")}")
 
       // Query 1: Revenue per customer (joined orders + customers).
       // groupByDimensions takes dimension refs only — the compiler rejects
       // measure refs here. aggregateMeasures takes measure refs only.
-      println("\n--- Q1: Revenue per customer (joined orders + customers) ---")
+      Logger.info("--- Q1: Revenue per customer (joined orders + customers) ---")
       orders
         .groupByDimensions(name, city, country)
         .aggregateMeasures(totalRevenue, orderCount, totalUnits)
@@ -185,7 +209,7 @@ object Main {
         .show(10, false)
 
       // Query 2: Revenue per country
-      println("\n--- Q2: Revenue per country ---")
+      Logger.info("--- Q2: Revenue per country ---")
       orders
         .groupByDimensions(country)
         .aggregateMeasures(totalRevenue, orderCount)
@@ -194,7 +218,7 @@ object Main {
         .show(false)
 
       // Query 3: Monthly trend
-      println("\n--- Q3: Monthly revenue trend ---")
+      Logger.info("--- Q3: Monthly revenue trend ---")
       orders
         .atTimeGrain(orderDate.name, "month")
         .groupByDimensions(orderDate)
@@ -206,13 +230,13 @@ object Main {
       // Schema introspection — every field from every model as a DataFrame.
       // schema(spark) is a SemanticTable method that returns the catalog
       // schema (one row per field, with type/description/metadata).
-      println("\n--- Model schema (every field, full metadata) ---")
+      Logger.info("--- Model schema (every field, full metadata) ---")
       val schema = orders.schema(spark)
       schema.show(50, false)
 
-      println("\n" + "=" * 70)
-      println("STEP 8: PERSIST schema as catalog table (gold layer metadata)")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("STEP 8: PERSIST schema as catalog table (gold layer metadata)")
+      Logger.info("=" * 70)
 
       // The YAML model is the gold layer's *definition*. Persisting the schema
       // as a catalog table makes it *queryable* — anyone in the org can ask
@@ -231,27 +255,27 @@ object Main {
         .write
         .mode(SaveMode.Overwrite)
         .parquet(catalogPath)
-      println(s"  wrote catalog: $catalogPath")
-      println("  query example:")
-      println("    spark.read.parquet(\"output/_semanticdf_catalog\")")
-      println("      .filter(col(\"metadata_owner\") === \"finance-team\")")
-      println("      .select(\"model_name\", \"field_name\", \"metadata_values\")")
-      println("      .show(false)")
+      Logger.info(s"  wrote catalog: $catalogPath")
+      Logger.info("  query example:")
+      Logger.info("    spark.read.parquet(\"output/_semanticdf_catalog\")")
+      Logger.info("      .filter(col(\"metadata_owner\") === \"finance-team\")")
+      Logger.info("      .select(\"model_name\", \"field_name\", \"metadata_values\")")
+      Logger.info("      .show(false)")
 
       // Verify by re-reading the catalog
       val catalog = spark.read.parquet(catalogPath)
-      println(s"\n  re-read catalog: ${catalog.count()} rows")
+      Logger.info(s"  re-read catalog: ${catalog.count()} rows")
       catalog.filter(col("metadata_values").contains("finance-team"))
         .select("model_name", "field_name", "metadata_values")
         .show(false)
 
-      println("\n" + "=" * 70)
-      println("Pipeline complete.")
-      println("  Parquet output:   output/orders/, output/customers/")
-      println("  Semantic models:  models/orders.yml, models/customers.yml")
-      println("  Schema catalog:   output/_semanticdf_catalog/")
-      println("  Edit raw/*.csv and re-run to test the pipeline with new data.")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("Pipeline complete.")
+      Logger.info("  Parquet output:   output/orders/, output/customers/")
+      Logger.info("  Semantic models:  models/orders.yml, models/customers.yml")
+      Logger.info("  Schema catalog:   output/_semanticdf_catalog/")
+      Logger.info("  Edit raw/*.csv and re-run to test the pipeline with new data.")
+      Logger.info("=" * 70)
     } finally spark.stop()
   }
 

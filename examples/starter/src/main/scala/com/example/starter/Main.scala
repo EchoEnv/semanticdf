@@ -25,6 +25,30 @@ import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_num
   *   1. `mvn install` the parent semanticdf project (so the local jar is available)
   *   2. From this directory: `mvn scala:run -DmainClass=com.example.starter.Main`
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.starter")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   def main(args: Array[String]): Unit = {
@@ -56,14 +80,14 @@ object Main {
       val flights = models("flights")
       val carriers = models("carriers")
 
-      println("=" * 70)
-      println(s"Loaded ${models.size} models: ${models.keys.mkString(", ")}")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info(s"Loaded ${models.size} models: ${models.keys.mkString(", ")}")
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 3. Query 1: Top carriers by total passengers
       // ---------------------------------------------------------------------
-      println("\n--- Q1: Top carriers by total passengers ---")
+      Logger.info("--- Q1: Top carriers by total passengers ---")
       flights
         .groupBy("carrier")
         .aggregate("total_passengers", "flight_count", "avg_passengers")
@@ -74,7 +98,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 4. Query 2: Percent of total passengers per carrier
       // ---------------------------------------------------------------------
-      println("\n--- Q2: Percent of total passengers (correctly avoids pct=100% trap) ---")
+      Logger.info("--- Q2: Percent of total passengers (correctly avoids pct=100% trap) ---")
       flights
         .groupBy("carrier")
         .aggregate("total_passengers", "pct_of_total")
@@ -85,7 +109,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 5. Query 3: Joined query — carrier names + passengers
       // ---------------------------------------------------------------------
-      println("\n--- Q3: Joined query (flights ⨝ carriers) — carrier names with stats ---")
+      Logger.info("--- Q3: Joined query (flights ⨝ carriers) — carrier names with stats ---")
       flights
         .groupBy("carrier", "name", "hub")
         .aggregate("total_passengers", "avg_distance")
@@ -96,7 +120,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 6. Query 4: Time-grain aggregation (monthly)
       // ---------------------------------------------------------------------
-      println("\n--- Q4: Monthly aggregation using the time-grain API ---")
+      Logger.info("--- Q4: Monthly aggregation using the time-grain API ---")
       flights
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date")
@@ -108,7 +132,7 @@ object Main {
       // ---------------------------------------------------------------------
       // 7. Query 5: Filter + aggregate
       // ---------------------------------------------------------------------
-      println("\n--- Q5: Filter to a specific carrier, then aggregate ---")
+      Logger.info("--- Q5: Filter to a specific carrier, then aggregate ---")
       import Predicate._
       flights
         .where("carrier" === "AA")
@@ -160,7 +184,7 @@ object Main {
       // (no string duplicated at the call site). All consumers
       // (groupByDimensions, aggregateMeasures, where, orderBy) are
       // type-checked — a measure-into-groupByDimensions is a compile error.
-      println("\n--- Q6: Top-5 origins per carrier (typed row_number window + filter) ---")
+      Logger.info("--- Q6: Top-5 origins per carrier (typed row_number window + filter) ---")
       val flightsWithWindow = flights.withMeasures(
         rank,
         t => row_number().over(
@@ -188,7 +212,7 @@ object Main {
       // references other measures by name (not via a typed ref), and the
       // typed overload requires a SemanticMeasure witness, so calc measures
       // use the string varargs form. This query shows BOTH overloads.
-      println("\n--- Q7: Monthly passengers with MoM % change (typed lag window) ---")
+      Logger.info("--- Q7: Monthly passengers with MoM % change (typed lag window) ---")
       // Typed withMeasures(prev, expr) for the lag window measure. The calc
       // measure `pct_change` has no SemanticMeasure witness (it references
       // other measures by name, not via a typed ref), so it uses the string
@@ -215,7 +239,7 @@ object Main {
         .orderBy("flight_date")                  // flight_date isn't in the typed Refs above
         .toDataFrame(spark)
         .show(false)
-      println("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
+      Logger.info("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
 
       // ---------------------------------------------------------------------
       // 8. Typed queries (compile-time safety)
@@ -228,7 +252,7 @@ object Main {
       // every dimension/measure is a typed handle. See README and
       // docs/phase-E-plan.md for the full story.
 
-      println("\n--- Q8 (typed): Top carriers (parallel to Q1 with compile-time ref safety) ---")
+      Logger.info("--- Q8 (typed): Top carriers (parallel to Q1 with compile-time ref safety) ---")
       flights
         .groupByDimensions(carrier)                         // dimension-only — measure refs are a compile error
         .aggregateMeasures(pax, count, avg)                  // measure-only  — dimension refs are a compile error
@@ -238,7 +262,7 @@ object Main {
 
       // Typed predicate factory: `Predicate.Gt(pax, 500)` produces a `Compare.Gt`
       // predicate internally — operator kind is in the type, not a runtime string.
-      println("\n--- Q9 (typed predicate): Total-passengers threshold via Predicate.Gt ---")
+      Logger.info("--- Q9 (typed predicate): Total-passengers threshold via Predicate.Gt ---")
       flights
         .where(Predicate.Gt(pax, 500))                       // typed: `pax: FieldRef[TotalPassengers]`
         .groupByDimensions(carrier)
@@ -250,10 +274,10 @@ object Main {
       // ---------------------------------------------------------------------
       // 9. Schema introspection — every dimension and measure as a DataFrame
       // ---------------------------------------------------------------------
-      println("\n--- Model schema (every field, every model) ---")
+      Logger.info("--- Model schema (every field, every model) ---")
       val schema = flights.schema(spark)
       schema.show(false)
-      println(s"Total fields in schema: ${schema.count()}")
+      Logger.info(s"Total fields in schema: ${schema.count()}")
 
       // ---------------------------------------------------------------------
       // 9. Optional: export schema as a Delta/Iceberg/Parquet catalog table
@@ -266,11 +290,11 @@ object Main {
       //     .write.mode("append").parquet("catalog/model_schema.parquet")
       //
       // Then: SELECT * FROM <lake>._semanticdf.model_schema WHERE model_name = 'flights'
-      println("\n--- Schema exported (commented out — see source) ---")
+      Logger.info("--- Schema exported (commented out — see source) ---")
 
-      println("\n" + "=" * 70)
-      println("All queries ran. Edit models/*.yml and re-run to modify the semantic layer.")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("All queries ran. Edit models/*.yml and re-run to modify the semantic layer.")
+      Logger.info("=" * 70)
     } finally spark.stop()
   }
 }
