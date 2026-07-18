@@ -40,7 +40,7 @@ object TimeSeries {
         )
 
       // Group by month (truncate day → month)
-      println("\n=== Flights by month ===")
+      SemanticLogger.info("=== Flights by month ===")
       model
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date", "carrier")
@@ -49,7 +49,7 @@ object TimeSeries {
         .show(truncate = false)
 
       // Filter Jan–Feb, then group by quarter
-      println("\n=== Jan–Feb flights by quarter (should show only Q1) ===")
+      SemanticLogger.info("=== Jan–Feb flights by quarter (should show only Q1) ===")
       model
         .where(
           Predicate.Compare("ge", "flight_date", "2024-01-01") and
@@ -62,7 +62,7 @@ object TimeSeries {
         .show(truncate = false)
 
       // Query API: one-shot bundle
-      println("\n=== query() one-shot: by month, top 10 ===")
+      SemanticLogger.info("=== query() one-shot: by month, top 10 ===")
       model
         .query(
           measures    = Seq("total_passengers"),
@@ -74,17 +74,17 @@ object TimeSeries {
         .execute(spark)
         .show(truncate = false)
 
-      println("\n=== SemanticDF plan for by-month query ===")
+      SemanticLogger.info("=== SemanticDF plan for by-month query ===")
       println(model
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date", "carrier")
         .aggregate("total_passengers")
         .explain())
 
-      println("\n=== Key concepts ===")
-      println("flight_date timestamps truncated: 2024-01-15 → 2024-01, 2024-02-03 → 2024-02, etc.")
-      println("time_range filter applied to RAW column before truncation")
-      println("Valid grains: year, quarter, month, week, day, hour, minute")
+      SemanticLogger.info("=== Key concepts ===")
+      SemanticLogger.info("flight_date timestamps truncated: 2024-01-15 → 2024-01, 2024-02-03 → 2024-02, etc.")
+      SemanticLogger.info("time_range filter applied to RAW column before truncation")
+      SemanticLogger.info("Valid grains: year, quarter, month, week, day, hour, minute")
 
     } finally {
       spark.stop()

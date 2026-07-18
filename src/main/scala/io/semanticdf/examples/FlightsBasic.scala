@@ -40,7 +40,7 @@ object FlightsBasic {
         .groupBy("carrier")
         .aggregate("total_passengers", "flight_count", "avg_passengers")
 
-      println("\n=== Flights by carrier ===")
+      SemanticLogger.info("=== Flights by carrier ===")
       byCarrier.execute(spark).show(truncate = false)
 
       // Query B: group by carrier and origin
@@ -48,7 +48,7 @@ object FlightsBasic {
         .groupBy("carrier", "origin")
         .aggregate("total_passengers", "avg_distance")
 
-      println("\n=== Flights by carrier and origin ===")
+      SemanticLogger.info("=== Flights by carrier and origin ===")
       byCarrierAndOrigin.execute(spark).show(truncate = false)
 
       // Query C: totals across all carriers (no group key)
@@ -56,11 +56,11 @@ object FlightsBasic {
         .groupBy()
         .aggregate("total_passengers", "flight_count", "total_distance")
 
-      println("\n=== Totals across all flights ===")
+      SemanticLogger.info("=== Totals across all flights ===")
       totals.execute(spark).show(truncate = false)
 
       // Also show the semanticdf plan (no Spark compile)
-      println("\n=== SemanticDF plan (explain) ===")
+      SemanticLogger.info("=== SemanticDF plan (explain) ===")
       println(byCarrier.explain())
 
     } finally {

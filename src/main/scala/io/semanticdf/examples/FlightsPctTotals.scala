@@ -45,19 +45,19 @@ object FlightsPctTotals {
         "total_passengers", "avg_passengers", "pct_of_passengers", "pct_of_avg"
       )
 
-      println("\n=== Percent-of-total ===")
+      SemanticLogger.info("=== Percent-of-total ===")
       result.execute(spark).show(truncate = false)
 
       // Verify: pcts sum to 1.0
-      println("\n=== SemanticDF plan ===")
+      SemanticLogger.info("=== SemanticDF plan ===")
       println(result.explain())
 
-      println("\n=== Expected values ===")
-      println("AA total=550, pct=550/2375=0.2316, avg=550/7=78.6, pct_avg=78.6/103.3=0.761")
-      println("UA total=275, pct=275/2375=0.1158, avg=275/5=55.0,  pct_avg=55.0/103.3=0.532")
-      println("DL total=550, pct=550/2375=0.2316, avg=550/9=61.1,  pct_avg=61.1/103.3=0.592")
-      println("Note: pct_of_passengers sums to 1.0 by construction (pct + pct_UA + pct_DL = 1.0)")
-      println("Note: pct_of_avg does NOT sum to 1.0 (it's ratio-to-grand-avg, not pct-of-sum)")
+      SemanticLogger.info("=== Expected values ===")
+      SemanticLogger.info("AA total=550, pct=550/2375=0.2316, avg=550/7=78.6, pct_avg=78.6/103.3=0.761")
+      SemanticLogger.info("UA total=275, pct=275/2375=0.1158, avg=275/5=55.0,  pct_avg=55.0/103.3=0.532")
+      SemanticLogger.info("DL total=550, pct=550/2375=0.2316, avg=550/9=61.1,  pct_avg=61.1/103.3=0.592")
+      SemanticLogger.info("Note: pct_of_passengers sums to 1.0 by construction (pct + pct_UA + pct_DL = 1.0)")
+      SemanticLogger.info("Note: pct_of_avg does NOT sum to 1.0 (it's ratio-to-grand-avg, not pct-of-sum)")
 
     } finally {
       spark.stop()
