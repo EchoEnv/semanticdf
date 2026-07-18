@@ -7,11 +7,44 @@ import scala.util.DynamicVariable
 
 /** Root of the immutable semantic op tree (DESIGN §4.1).
   *
-  * Invariants (DESIGN §4.4): nodes are pure case classes; the compiled DataFrame is
-  * never stored in a node; the tree holds no SparkSession; every terminal recompiles
-  * against the passed session.
+  * Every operation on a `SemanticTable` — `groupBy`, `aggregate`, `join`, `where`,
+  * `orderBy`, `limit`, `withMeasures`, `withTransforms` — produces a new node in
+  * this tree and returns a new `SemanticTable` pointing at it. Nothing executes
+  * until a terminal (e.g. `toDataFrame(spark)`) walks the tree and calls
+  * [[compile]] on the root.
+  *
+  * Three properties the tree shape buys us (each maps to a feature):
+  *   - '''Deferred compilation''' — one model serves many queries
+  *   - '''Introspection'''        — `dimensions` / `measures` / `joins` read straight off the tree
+  *   - '''Join re-planning'''      — `join_many` can pre-aggregate the "many" side before joining
+  *
+  * Design invariants (DESIGN §4.4):
+  *   - Nodes are pure case classes — no `var`, no captured `SparkSession`.
+  *   - The compiled DataFrame is never stored in a node (would break re-compile).
+  *   - Every terminal recompiles against the session it's handed — no implicit global.
   */
 sealed trait SemanticOp extends Serializable with Product {
+
+  /** Walk this op tree in dependency order and produce the final Spark
+    * [[DataFrame]].
+    *
+    * This is the central contract of every op node. Each subtype's `compile`
+    * calls `source.compile(spark)` first (the left-most child), then layers
+    * its own transformation on top:
+    * {{{
+    * // SemanticLimitOp.compile(spark) ≈
+    * //   source.compile(spark).limit(n)
+    * }}}
+    *
+    * The same op tree can be compiled many times against many sessions; nothing
+    * about the tree is mutated by a compile. Side effects (logs, plan cache)
+    * are external to the node.
+    *
+    * @param spark the Spark session to compile against. Every op accepts it
+    *             explicitly so the tree never has to reach for an implicit
+    *             global (which would break tests and concurrent compiles).
+    * @return the compiled DataFrame — never cached, never `null`
+    */
   def compile(spark: SparkSession): DataFrame
 }
 
@@ -213,6 +246,16 @@ final case class SemanticJoinOp(
   private[semanticdf] val _staticGrainCols: Seq[String] =
     JoinKeyProbe.captureKeys(on)
 
+  /** Compile this join to a Spark DataFrame.
+    *
+    * - `Cross` → straightforward `left.crossJoin(right)`.
+    * - `One`   → standard left-outer equi-join (no fan-out risk).
+    * - `Many`  → equi-join with [[preAggregateAtGrain]] applied to both sides
+    *            first, preventing fact-row multiplication.
+    *
+    * Captured join-key column names are written into a per-thread
+    * [[_grainColsDyn]] slot so subsequent `grainCols` reads on the same
+    * thread see them. Other threads are unaffected. */
   override def compile(spark: SparkSession): DataFrame = {
     val leftDf  = left.compile(spark)
     val rightDf = right.compile(spark)
@@ -544,6 +587,11 @@ private[semanticdf] final case class MergedSemanticModel(
 // Aggregate op (handles single-table and Phase 4 joined sources)
 // ---------------------------------------------------------------------------
 
+/** Per-measure classification produced by [[SemanticAggregateOp.classifyOne]].
+  * `deps`   = known-measure names the lambda references (non-empty → calc).
+  * `totals` = measure names referenced via `t.all(...)` (Phase 3 percent-of-total). */
+private case class Classification(deps: Set[String], totals: Set[String])
+
 /** Group-by + aggregate. Resolves measure expressions from the root model and compiles
   * them in two passes (DESIGN §6.1, updated §7 for joined models):
   *
@@ -553,11 +601,6 @@ private[semanticdf] final case class MergedSemanticModel(
   * For joined sources (Phase 4), the model is [[SemanticJoinOp.mergedModel]] so that
   * prefixed names (`"orders.total_amount"`) resolve correctly.
   */
-/** Per-measure classification produced by [[SemanticAggregateOp.classifyOne]].
-  * `deps` = known-measure names the lambda references (non-empty → calc).
-  * `totals` = measure names referenced via `t.all(...)` (Phase 3 percent-of-total). */
-private case class Classification(deps: Set[String], totals: Set[String])
-
 final case class SemanticAggregateOp(
     source: SemanticOp,
     keys: Seq[String],
@@ -567,10 +610,22 @@ final case class SemanticAggregateOp(
   /** Prefix for grand-total columns cross-joined in for percent-of-total (Phase 3). */
   private val TotalColPrefix = "__total__"
 
+  /** Compile this aggregate to a Spark DataFrame in two passes:
+    *
+    *   1. '''base measures''' (reference source columns) → compiled into
+    *      `groupBy(keys).agg(...)`, each aliased to its measure name.
+    *   2. '''calc measures''' (reference other measures by name) → compiled
+    *      as one `select` per topological layer on top of the aggregated
+    *      result. Calc measures using `t.all("x")` for percent-of-total
+    *      trigger an intermediate grand-total cross-join (Phase 3).
+    *
+    * For joined sources (Phase 4), the model is [[SemanticJoinOp.mergedModel]]
+    * so that prefixed names (`"orders.total_amount"`) resolve correctly.
+    */
   override def compile(spark: SparkSession): DataFrame =
     compileWithBase(spark, source.compile(spark), keys, computeTotals = true)
 
-  /** Core compilation, parameterized so the percent-of-total totals table can be built
+  /** Core compilation, parameterised so the percent-of-total totals table can be built
     * by re-running the SAME aggregation at zero grain over the SAME already-compiled
     * `base` (no double source-compile). `computeTotals = false` suppresses totals-building
     * to avoid infinite recursion when computing the totals table itself.
