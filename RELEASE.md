@@ -1,5 +1,62 @@
 # Release notes
 
+## v0.1.5 — Scaladoc production-bar pass + style guide
+
+A docs-only release. One PR since v0.1.4 (`#74`) that brings two
+library files up to a higher Scaladoc bar and adds a contributor
+style guide so the bar stays consistent going forward. No source
+changes, no new tests, no behavior changes.
+
+Library, MCP server, and CLI are at
+`io.semanticdf:semanticdf_2.13:0.1.5`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.5`, and
+`io.semanticdf:semanticdf-cli_2.13:0.1.5`.
+
+### Library
+
+- **#74** — Scaladoc rewrite on `src/main/scala/io/semanticdf/Model.scala`
+  and `src/main/scala/io/semanticdf/SemanticOp.scala`. The public API
+  Scaladoc on `Dimension` / `Measure` / `Transform` / `MeasureExtra`
+  was adequate but assumed the reader already knew the framework.
+  Rewritten to a production bar with:
+    - plain-language category openers ("A grouping field on a semantic
+      model — the columns you `groupBy` on or filter against.")
+    - copy-pasteable `{{{...}}}` examples on every factory, with all
+      imports shown explicitly
+    - actual exception types named, not "raises a clear error"
+    - future / unshipped features qualified ("Reserved for the future
+      streaming terminal (ADR 0002); no effect in batch today.")
+    - a behaviour-accuracy fix on `Transform` — the old Scaladoc
+      claimed transforms are "topologically sorted" (wrong). The
+      implementation in `SemanticOp.scala:527` uses
+      `transforms.foldLeft(base)(...)` — declaration order, no sort.
+      README and `docs/guide.md` already said no sort; this brings
+      `Model.scala` into line.
+
+### MCP / CLI
+
+No source changes — serverInfo / banner now report `0.1.5`.
+
+### Docs
+
+- **#74** — New `docs/scaladoc-style.md` (195 lines). The seven-rule
+  guide for Scaladoc in `io.semanticdf.*`, with a do/don't section, a
+  pre-commit checklist, and a "when NOT to update" section listing
+  the three categories that should not get Scaladoc (examples, CLI
+  tools, private members). `Model.scala` is the canonical example
+  referenced throughout. `docs/DOCS_MAP.md` cross-links the new
+  style guide from the by-journey and doc-roles tables.
+
+### Test count
+
+No test changes. **407 tests** (335 library + 72 MCP), all green on
+Spark 3.5.8 (default) and Spark 4.1.1 (`-Pspark4`). Same as v0.1.4.
+
+### Compatibility
+
+No breaking changes. v0.1.5 is identical to v0.1.4 in compiled
+behavior — only the Scaladoc strings changed.
+
 ## v0.1.4 — Introspect wiring, join-alias cleanup, ResultDecoder.derive, docs reorg
 
 A docs-and-tooling release. Twelve PRs since v0.1.3 (#61–#72): two library
