@@ -51,28 +51,28 @@ object YamlFlightsExample {
 
       val flights = models("flights")
 
-      println("=" * 60)
-      println("YAML-loaded model — dimensions & measures")
-      println("=" * 60)
-      println(s"  dimensions: ${flights.dimensions.keys.mkString(", ")}")
-      println(s"  measures:    ${flights.measures.keys.mkString(", ")}")
+      SemanticLogger.info("=" * 60)
+      SemanticLogger.info("YAML-loaded model — dimensions & measures")
+      SemanticLogger.info("=" * 60)
+      SemanticLogger.info(s"  dimensions: ${flights.dimensions.keys.mkString(", ")}")
+      SemanticLogger.info(s"  measures:    ${flights.measures.keys.mkString(", ")}")
 
       // --- Query: group-by + base measures ---
-      println("\n--- groupBy carrier → total_passengers, flight_count ---")
+      SemanticLogger.info("--- groupBy carrier → total_passengers, flight_count ---")
       flights.groupBy("carrier")
         .aggregate("total_passengers", "flight_count")
         .orderBy("carrier")
         .execute(spark).show()
 
       // --- Query: calc measures ---
-      println("\n--- groupBy carrier → avg_passengers, avg_distance ---")
+      SemanticLogger.info("--- groupBy carrier → avg_passengers, avg_distance ---")
       flights.groupBy("carrier")
         .aggregate("avg_passengers", "avg_distance")
         .orderBy("carrier")
         .execute(spark).show()
 
       // --- Query: percent-of-total ---
-      println("\n--- groupBy carrier → pct_of_total (percent-of-total) ---")
+      SemanticLogger.info("--- groupBy carrier → pct_of_total (percent-of-total) ---")
       flights.groupBy("carrier")
         .aggregate("total_passengers", "pct_of_total")
         .orderBy("carrier")

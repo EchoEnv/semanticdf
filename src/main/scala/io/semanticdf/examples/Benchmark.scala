@@ -22,17 +22,17 @@ object Benchmark {
       .config("spark.sql.ansi.enabled", "false")
       .getOrCreate()
     try {
-      println("\n" + "=" * 60)
-      println("semanticdf benchmark — establishing baseline")
-      println("=" * 60)
+      SemanticLogger.info("\n" + "=" * 60)
+      SemanticLogger.info("semanticdf benchmark — establishing baseline")
+      SemanticLogger.info("=" * 60)
 
       val flights =
         if (args.nonEmpty && args.head != "--small") {
           // Read from a CSV path supplied as the first argument (e.g. src/test/resources/flights_large.csv)
-          println(s"Reading from $args head: ${args.head}")
+          SemanticLogger.info(s"Reading from $args head: ${args.head}")
           spark.read.option("header", "true").option("inferSchema", "true").csv(args.head)
         } else {
-          println("Using 5-row in-memory fixture (pass a CSV path arg for larger data)")
+          SemanticLogger.info("Using 5-row in-memory fixture (pass a CSV path arg for larger data)")
           spark.createDataFrame(Seq(
             ("AA", "LAX", "JFK", 100, 5),
             ("AA", "JFK", "LAX", 120, 4),
@@ -94,11 +94,11 @@ object Benchmark {
         model.groupBy("carrier").aggregate("avg_passengers").compiledSchema(spark)
       }
 
-      println("\n" + "=" * 60)
-      println("Benchmark complete.")
-      println("Establish a baseline BEFORE making performance changes.")
-      println("Run on your target data size (not this 5-row fixture).")
-      println("=" * 60)
+      SemanticLogger.info("\n" + "=" * 60)
+      SemanticLogger.info("Benchmark complete.")
+      SemanticLogger.info("Establish a baseline BEFORE making performance changes.")
+      SemanticLogger.info("Run on your target data size (not this 5-row fixture).")
+      SemanticLogger.info("=" * 60)
 
     } finally {
       spark.stop()

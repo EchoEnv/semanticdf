@@ -59,20 +59,20 @@ object OrdersJoinMany {
         .groupBy("customer_id")
         .aggregate("total_order_amount", "total_items")
 
-      println("\n=== Revenue by customer (join_many) ===")
+      SemanticLogger.info("=== Revenue by customer (join_many) ===")
       byCustomer.execute(spark).show(truncate = false)
 
-      println("\n=== SemanticDF plan ===")
+      SemanticLogger.info("=== SemanticDF plan ===")
       println(byCustomer.explain())
 
-      println("\n=== What happened ===")
-      println("orders pre-agg at customer_id: 101→12500, 102→4000, 103→2000")
-      println("items pre-agg at order_id:     each order → item_count")
-      println("join on order_id: one row per ORDER (50K), not cartesian explosion")
-      println("groupBy customer_id: correctly aggregates to customer level")
-      println("")
-      println("WITHOUT fan-out prevention:")
-      println("  Each line item would multiply every order row → wrong sums")
+      SemanticLogger.info("=== What happened ===")
+      SemanticLogger.info("orders pre-agg at customer_id: 101→12500, 102→4000, 103→2000")
+      SemanticLogger.info("items pre-agg at order_id:     each order → item_count")
+      SemanticLogger.info("join on order_id: one row per ORDER (50K), not cartesian explosion")
+      SemanticLogger.info("groupBy customer_id: correctly aggregates to customer level")
+      SemanticLogger.info("")
+      SemanticLogger.info("WITHOUT fan-out prevention:")
+      SemanticLogger.info("  Each line item would multiply every order row → wrong sums")
 
     } finally {
       spark.stop()
