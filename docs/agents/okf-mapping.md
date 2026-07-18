@@ -1,6 +1,6 @@
 # OKF Mapping for semanticdf
 
-**Status:** v0.1.4 (current) — this spec is the per-field reference for the OKF bundle shipped by `okfgen` (see [`docs/agents/maintenance.md`](maintenance.md) for the regeneration workflow). The post-v0.1.3 library fixes (PRs `#61`, `#62`) do not change OKF output.
+**Status:** v0.1.5 (current) — this spec is the per-field reference for the OKF bundle shipped by `okfgen` (see [`docs/agents/maintenance.md`](maintenance.md) for the regeneration workflow). The post-v0.1.3 library fixes (PRs `#61`, `#62`) do not change OKF output.
 **Audience:** anyone editing YAML model fields and wanting to know exactly how each one is rendered into OKF Markdown.
 
 This document is the **per-field spec** for how semanticdf YAML model files become
