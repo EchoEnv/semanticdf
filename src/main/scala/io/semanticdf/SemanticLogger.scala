@@ -16,6 +16,11 @@ import org.apache.spark.sql.SparkSession
   * Log messages are intentionally terse and structured so they can be piped to
   * a log aggregator. Every message carries a `what` field and relevant identifiers.
   *
+  * `private[semanticdf]` — this is the library's INTERNAL compile-time logger,
+  * not a general-purpose consumer logger. Consumers of semanticdf should use
+  * their own logger (java.util.logging, SLF4J, etc.) for application-level
+  * narrative. See the examples folder under templates for the local-Logger pattern.
+  *
   * Log levels used:
   *   DEBUG — detailed classification breakdown, routing decisions, op-tree shape
   *   INFO  — milestones (compile start/end, summary of decisions)

@@ -29,6 +29,30 @@ import org.apache.spark.sql.functions._
   *   1. mvn install the parent semanticdf project
   *   2. mvn scala:run -DmainClass=com.example.telcoanalytics.Main
   */
+/** Narrative logger for this template.
+  *
+  * Uses java.util.logging.Logger (JDK built-in). The public API
+  * (`info` / `warn` / `error` / `debug`) is logger-agnostic — swap the
+  * underlying implementation for SLF4J / log4j2 in production by
+  * changing only the body of these four methods. Callsites stay stable.
+  *
+  * For spark-heavy projects that want logging routed through Spark's
+  * log4j infrastructure, `io.semanticdf.SemanticLogger` is available —
+  * but using it from a consumer template couples the template to a
+  * library internal; this template-local logger is the recommended
+  * pattern.
+  */
+object Logger {
+  import java.util.logging.{Level, Logger => JulLogger}
+  private val jul: JulLogger = JulLogger.getLogger("com.example.telcoanalytics")
+  jul.setLevel(Level.INFO)
+
+  def info(msg: => String): Unit  = jul.info(msg)
+  def warn(msg: => String): Unit  = jul.warning(msg)
+  def error(msg: => String): Unit = jul.severe(msg)
+  def debug(msg: => String): Unit = jul.fine(msg)
+}
+
 object Main {
 
   // -----------------------------------------------------------------------
@@ -103,9 +127,9 @@ object Main {
       // Bring the typed refs into scope
       import Refs._
 
-      println("=" * 70)
-      println("Telco analytics template — ARPU, promotion effectiveness, roaming")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("Telco analytics template — ARPU, promotion effectiveness, roaming")
+      Logger.info("=" * 70)
 
       // ---------------------------------------------------------------------
       // 2. Q1: Monthly ARPU per plan
@@ -113,7 +137,7 @@ object Main {
       // ARPU = total revenue / distinct active customers in the period.
       // countDistinct isn't in the YAML keyword blocklist, so the measure
       // is added in Scala via withMeasures (typed ref → no string duplicate).
-      println("\n--- Q1: Monthly ARPU per plan (Average Revenue Per User) ---")
+      Logger.info("--- Q1: Monthly ARPU per plan (Average Revenue Per User) ---")
       val usageWithArpu = usage.withMeasures(
         Measure(activeCustomers.name, t => countDistinct(t("customer_id"))),
         Measure(arpu.name,
@@ -127,7 +151,7 @@ object Main {
         .orderBy(SortKey.asc(arpu), SortKey.asc(planName))
         .execute(spark)
         .show(false)
-      println("  (ARPU = total_revenue / active_customers; active = countDistinct customer_id)")
+      Logger.info("  (ARPU = total_revenue / active_customers; active = countDistinct customer_id)")
 
       // ---------------------------------------------------------------------
       // 3. Q2: Promotion effectiveness
@@ -137,7 +161,7 @@ object Main {
       // (pct_of_revenue, customers_on_promo) are added in two separate
       // withMeasures calls so each typed ref's name is sourced from the
       // witness.
-      println("\n--- Q2: Promotion effectiveness (revenue + customer count per promo) ---")
+      Logger.info("--- Q2: Promotion effectiveness (revenue + customer count per promo) ---")
       val usageWithPromoPct = usage.withMeasures(
         Measure(pctOfRevenue.name,
           t => t("total_revenue") / t.all("total_revenue")),
@@ -151,7 +175,7 @@ object Main {
         .orderBy(SortKey.desc(totalRevenue))
         .execute(spark)
         .show(false)
-      println("  (pct_of_revenue uses t.all() to re-evaluate total_revenue at zero grain)")
+      Logger.info("  (pct_of_revenue uses t.all() to re-evaluate total_revenue at zero grain)")
 
       // ---------------------------------------------------------------------
       // 4. Q3: Roaming revenue contribution
@@ -162,7 +186,7 @@ object Main {
       // Q3 aggregates over all rows (no groupBy), so we use string-based
       // groupBy() since the typed groupByDimensions requires at least one
       // dim ref.
-      println("\n--- Q3: Roaming revenue contribution (% of total) ---")
+      Logger.info("--- Q3: Roaming revenue contribution (% of total) ---")
       val usageWithRoamingPct = usage.withMeasures(
         Measure(pctRoaming.name,
           t => t("total_roaming_revenue") / t.all("total_revenue")),
@@ -172,11 +196,11 @@ object Main {
         .aggregateMeasures(totalRevenue, totalRoamingRevenue, pctRoaming)
         .execute(spark)
         .show(false)
-      println("  (pct_roaming shows what fraction of all revenue is from roaming events)")
+      Logger.info("  (pct_roaming shows what fraction of all revenue is from roaming events)")
 
-      println("\n" + "=" * 70)
-      println("All queries ran. Edit models/*.yml and re-run to modify the semantic layer.")
-      println("=" * 70)
+      Logger.info("=" * 70)
+      Logger.info("All queries ran. Edit models/*.yml and re-run to modify the semantic layer.")
+      Logger.info("=" * 70)
     } finally spark.stop()
   }
 }
