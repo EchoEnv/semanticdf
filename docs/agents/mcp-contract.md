@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v2 — pre-implementation contract; surface locked. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
+**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.6 with 72 MCP tests. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -33,7 +33,8 @@ missing here, that's a gap to close.
 
 ```
 # Start (stdio transport, single user)
-semanticdf-mcp --models ./models/ --data ./data-config.yaml
+# All three arguments are required.
+semanticdf-mcp --models ./models/ --data ./data-config.yaml --okf-bundle /tmp/okf/
 ```
 
 Where `--data` is a YAML file like:
@@ -627,7 +628,7 @@ None blocking. Two minor follow-ups tracked separately:
   anything? Change it here, not in the code.
 - **After code lands:** any change to a tool is a breaking change for every
   agent already pointing at it. Document breaking changes in
-  `docs/agents/CHANGELOG.md` and bump the contract version.
+  [`RELEASE.md`](../../RELEASE.md) and bump the contract version.
 - **Schema versioning:** when the JSON shape changes incompatibly, copy to
   `mcp-contract-v3.md` (etc.) and start version negotiation server-side. The
   same library jar must remain source-compatible with both versions during the

@@ -383,7 +383,7 @@ class OkfGen {
       sb.append(s"""{"model": "${m.name}", "dimensions": ["carrier"], "measures": ["flight_count"], "order_by": [{"field": "flight_count", "direction": "desc"}], "limit": 10}""").append("\n")
       sb.append("```\n\n")
     }
-    sb.append("> Run via an MCP client pointed at this catalog. See [mcp-contract.md](./mcp-contract.md) for the full schema.\n")
+    sb.append("> Run via an MCP client pointed at this catalog. See [mcp-contract.md](../../mcp-contract.md) for the full schema.\n")
     sb.toString
   }
 

@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Encounters
 description: "Patient hospital encounters (admissions)"
-resource: file:///home/emilio/app/projects/semanticdf/examples/hospital/models/encounters.yml
-timestamp: "2026-07-13T20:23:26+00:00"
+resource: file://examples/hospital/models/encounters.yml
+timestamp: 2026-07-14T19:42:54Z
 tags: [semantic-table]
 ---
 
@@ -44,7 +44,7 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 {"model": "encounters", "dimensions": ["carrier"], "measures": ["flight_count"], "order_by": [{"field": "flight_count", "direction": "desc"}], "limit": 10}
 ```
 
-> Run via an MCP client pointed at this catalog. See [mcp-contract.md](./mcp-contract.md) for the full schema.
+> Run via an MCP client pointed at this catalog. See [mcp-contract.md](../../mcp-contract.md) for the full schema.
 
 # Citations
 

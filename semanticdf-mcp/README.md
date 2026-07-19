@@ -7,11 +7,11 @@ stdio.
 
 ## Status
 
-**MCP-1a**: server skeleton + `list_models`. The other 4 tools
-(`describe_model`, `query`, `explain`, `introspect`) ship in subsequent PRs.
-
-The contract is the source of truth — this server implements against it
-incrementally.
+**All five tools ship as of v0.1.6** (`list_models`, `describe_model`,
+`query`, `explain`, `introspect`). 72 MCP tests cover the handler
+logic; the JSON-RPC transport is covered by the upstream MCP SDK. The
+wire contract is the source of truth — this server implements against
+[`docs/agents/mcp-contract.md`](../docs/agents/mcp-contract.md).
 
 ## Build
 
@@ -64,9 +64,11 @@ your `*.yml` files.
 mvn test
 ```
 
-The current test suite covers the `list_models` handler (unit test only —
-the JSON-RPC transport is covered by the upstream MCP SDK; the wire
-contract is documented in `docs/agents/mcp-contract.md`).
+72 tests cover the handler logic (`list_models`, `describe_model`,
+`query`, `explain`, `introspect`) and the JSON-RPC transport contract
+([`RestServerSpec`](src/test/scala/io/semanticdf/mcp/RestServerSpec.scala)).
+The wire contract is the source of truth —
+[`docs/agents/mcp-contract.md`](../docs/agents/mcp-contract.md).
 
 ## Architecture
 
