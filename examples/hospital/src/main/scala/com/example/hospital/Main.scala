@@ -108,7 +108,10 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit `.execute(spark)`
+    // still works (PR #81).
+    implicit val spark = SparkSession
       .builder()
       .master("local[*]")
       .appName("semanticdf-hospital")
@@ -247,13 +250,13 @@ object Main {
         .groupByDimensions(gender)
         .aggregateMeasures(patientCount)
         .orderBy(SortKey.asc(gender))
-        .execute(spark)
+        .execute
         .show(false)
       patients
         .groupByDimensions(insurance)
         .aggregateMeasures(patientCount)
         .orderBy(SortKey.desc(patientCount))
-        .execute(spark)
+        .execute
         .show(false)
 
       // Q2: ALOS by department.
@@ -262,7 +265,7 @@ object Main {
         .groupByDimensions(department)
         .aggregateMeasures(avgLos, encounterCount)
         .orderBy(SortKey.asc(department))
-        .execute(spark)
+        .execute
         .show(false)
 
       // Q3: 30-day readmission rate. Per-encounter `days_since_prev` and
@@ -275,7 +278,7 @@ object Main {
       //     crosses group boundaries.
       Logger.info("--- Q3: 30-day readmission rate ---")
       val encountersDf = encounters
-        .toDataFrame(spark)
+        .toDataFrame
         .withColumn(
           daysSincePrev.name,
           datediff(
@@ -304,7 +307,7 @@ object Main {
       val perPatient = encountersWithReadmission
         .groupByDimensions(patientId)
         .aggregateMeasures(encounterCount, anyReadmission)
-        .execute(spark)
+        .execute
       // Final ratio is computed in Scala because it crosses group boundaries
       // (we need a count across all patients, not per-patient).
       val multiEncounter = perPatient.filter(col(encounterCount.name) > 1)
