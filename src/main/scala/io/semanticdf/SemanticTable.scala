@@ -116,12 +116,17 @@ final class SemanticTable private[semanticdf] (
     *
     * Compiles the op tree against `spark` and returns the resulting `DataFrame`.
     * Recompiles on every call; never caches the result internally (DESIGN §4.4).
+    *
+    * `spark` is an implicit parameter so callers with an
+    * `implicit val spark: SparkSession` in scope can write `.toDataFrame()`
+    * (no argument). Explicit `.toDataFrame(spark)` is fully backward-compatible.
     */
-  def toDataFrame(spark: SparkSession): DataFrame =
+  def toDataFrame(implicit spark: SparkSession): DataFrame =
     root.compile(spark)
 
-  /** Fluent-chain alias for [[toDataFrame]]. */
-  def execute(spark: SparkSession): DataFrame = toDataFrame(spark)
+  /** Fluent-chain alias for [[toDataFrame]]. `spark` is implicit; see [[toDataFrame]].
+    */
+  def execute(implicit spark: SparkSession): DataFrame = toDataFrame(spark)
 
   /** Typed terminal — compile the op tree, collect the rows, decode each
     * into `T` via the implicit [[ResultDecoder]]. The decoder is the
@@ -234,7 +239,7 @@ final class SemanticTable private[semanticdf] (
     * @param spark the active SparkSession
     * @return Spark's explain output string
     */
-  def explain(spark: SparkSession): String = {
+  def explain(implicit spark: SparkSession): String = {
     val df = toDataFrame(spark)
     df.queryExecution.explainString(
       org.apache.spark.sql.execution.ExplainMode.fromString("simple")
@@ -254,7 +259,7 @@ final class SemanticTable private[semanticdf] (
     * @param spark the active SparkSession
     * @return Spark's extended explain output string
     */
-  def explainExtended(spark: SparkSession): String = {
+  def explainExtended(implicit spark: SparkSession): String = {
     val df = toDataFrame(spark)
     df.queryExecution.explainString(
       org.apache.spark.sql.execution.ExplainMode.fromString("extended")
@@ -292,7 +297,7 @@ final class SemanticTable private[semanticdf] (
 
   /** Convenience overload: pass a SparkSession directly (or null to skip the
     * Spark plan section). Equivalent to `explainSemantic(Option(spark))`. */
-  def explainSemantic(spark: SparkSession): String =
+  def explainSemantic(implicit spark: SparkSession): String =
     explainSemantic(Option(spark))
 
   /** Scope selector for field inventory sections (DIMENSIONS, MEASURES).
@@ -308,7 +313,7 @@ final class SemanticTable private[semanticdf] (
     *   model.groupBy("carrier").aggregate("avg_passengers")
     *     .explainSemantic(spark, Scope.Used)   // collapsed inventory
     * }}} */
-  def explainSemantic(spark: SparkSession, scope: Scope): String =
+  def explainSemantic(implicit spark: SparkSession, scope: Scope): String =
     explainSemantic(Option(spark), scope)
 
   /** Attach a pre-join row filter declared via the YAML `filters:` block.
@@ -394,7 +399,7 @@ final class SemanticTable private[semanticdf] (
     *
     * @param spark the active SparkSession (used only to create the result DataFrame)
     */
-  def schema(spark: SparkSession): DataFrame = {
+  def schema(implicit spark: SparkSession): DataFrame = {
     import spark.implicits._
 
     val rows = collectSchemaFields(root, None, None)
@@ -1299,7 +1304,7 @@ final class SemanticTable private[semanticdf] (
     * @param spark the active SparkSession
     * @return the post-aggregation output schema (StructType)
     */
-  def compiledSchema(spark: SparkSession): StructType =
+  def compiledSchema(implicit spark: SparkSession): StructType =
     toDataFrame(spark).schema
 
   /** Validate the op tree without compiling.

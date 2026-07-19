@@ -1,7 +1,7 @@
 package io.semanticdf
 
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, StructType}
-import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.functions.{count, lit, sum}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
@@ -288,5 +288,86 @@ class HardeningSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
     } finally {
       spark.conf.set("spark.sql.autoBroadcastJoinThreshold", originalThreshold)
     }
+  }
+}
+
+/** Regression test for the implicit-spark pattern introduced in PR #81.
+  *
+  * `SemanticTable.toDataFrame`, `execute`, `explain`, `schema`, `compiledSchema`,
+  * and the rest of the implicit-spark methods take `implicit spark: SparkSession`.
+  * Two contract requirements:
+  *
+  *   1. Backward compat — the EXISTING explicit form `.execute(spark)` must
+  *      continue to work unchanged (zero test modifications; this test would
+  *      otherwise break every existing test).
+  *
+  *   2. New implicit form — with `implicit val spark: SparkSession = spark`
+  *      in scope, `.execute()` must compile and produce the same DataFrame.
+  *      This is what user code looks like once they adopt the implicit form.
+  */
+class ImplicitSparkSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
+
+  // Mirror the FlightsFixture pattern from other specs but small — explicit
+  // values so the test reads on its own without depending on other fixtures.
+  // `lazy val` because `spark` is null until `beforeAll` runs; constructors
+  // run before `beforeAll`.
+  private lazy val flights = spark.createDataFrame(
+    spark.sparkContext.parallelize(Seq(
+      org.apache.spark.sql.Row("AA", 100L, 5L),
+      org.apache.spark.sql.Row("UA",  80L, 3L),
+      org.apache.spark.sql.Row("DL", 150L, 6L),
+    )),
+    org.apache.spark.sql.types.StructType(Seq(
+      org.apache.spark.sql.types.StructField("carrier",   org.apache.spark.sql.types.StringType),
+      org.apache.spark.sql.types.StructField("distance",  org.apache.spark.sql.types.LongType),
+      org.apache.spark.sql.types.StructField("passengers",org.apache.spark.sql.types.LongType),
+    )),
+  )
+
+  private lazy val model = toSemanticTable(flights, name = Some("flights"))
+    .withDimensions(Dimension("carrier", t => t("carrier")))
+    .withMeasures(
+      Measure("flight_count",   t => sum(t("passengers"))),
+      Measure("total_distance", t => sum(t("distance"))),
+    )
+
+  test("explicit form: .execute(spark) works unchanged (backward compat)") {
+    val rows = model.groupBy("carrier").aggregate("flight_count").execute(spark).collect()
+    rows.length shouldBe 3
+    rows.map(_.getString(0)).toSet shouldBe Set("AA", "UA", "DL")
+  }
+
+  test("implicit form: .execute() works with implicit val spark in scope") {
+    implicit val s: SparkSession = spark
+    val rows = model.groupBy("carrier").aggregate("flight_count").execute.collect()
+    rows.length shouldBe 3
+    rows.map(_.getString(0)).toSet shouldBe Set("AA", "UA", "DL")
+  }
+
+  test("implicit form: .toDataFrame() works") {
+    implicit val s: SparkSession = spark
+    val df = model.toDataFrame
+    df.count() shouldBe 3
+  }
+
+  test("implicit form: .explain() works") {
+    implicit val s: SparkSession = spark
+    // .explain(implicit spark) returns Spark's physical plan.
+    // Verify: contains a HashAggregate operator (the group-by aggregate) and a
+    // reference to the `carrier` column.
+    val explanation = model.groupBy("carrier").aggregate("flight_count").explain
+    explanation should (include("HashAggregate") and include("carrier"))
+  }
+
+  test("implicit form: .schema() works") {
+    implicit val s: SparkSession = spark
+    val schemaDf = model.schema
+    assert(schemaDf.count() >= 1, "at least one field per model")
+  }
+
+  test("implicit form: .compiledSchema() works") {
+    implicit val s: SparkSession = spark
+    val structType = model.compiledSchema
+    assert(structType.fields.length >= 1, "compiled schema should have fields")
   }
 }
