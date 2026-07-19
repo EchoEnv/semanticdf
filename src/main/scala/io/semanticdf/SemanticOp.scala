@@ -55,16 +55,21 @@ object SemanticOp {
     * Pre-join row filters ([[SemanticRowFilterOp]]) are transparent wrappers —
     * they apply a row predicate to the source DataFrame but do not change the
     * declared model. Walk through them to reach the underlying leaf. */
-  private[semanticdf] def rootModel(op: SemanticOp): Option[SemanticTableOp] = op match {
-    case t: SemanticTableOp             => Some(t)
-    case j: SemanticJoinOp              => None  // joined — use SemanticJoinOp.mergedModel
-    case SemanticAggregateOp(src, _, _) => rootModel(src)
-    case SemanticFilterOp(src, _)       => rootModel(src)
-    case SemanticRowFilterOp(src, _, _, _, _) => rootModel(src)  // pre-join filter is transparent
-    case SemanticOrderByOp(src, _)      => rootModel(src)
-    case SemanticLimitOp(src, _)        => rootModel(src)
-    case SemanticHintOp(src, _, _)      => rootModel(src)
-    case SemanticTransformsOp(src, _)   => rootModel(src)  // transforms are transparent — they don't change the underlying model
+  private[semanticdf] def rootModel(op: SemanticOp): Option[SemanticTableOp] = {
+    val collector = new SemanticOpVisitor {
+      private var found: Option[SemanticTableOp] = None
+      def foundOpt: Option[SemanticTableOp] = found
+      override def enter(o: SemanticOp): Unit = o match {
+        case t: SemanticTableOp =>
+          found = Some(t); stop = true
+        // Joined models don't have a single leaf — callers should use
+        // SemanticJoinOp.mergedModel. Don't stop the walk; let the leaf of
+        // a side surface naturally if it exists.
+        case _ => ()
+      }
+    }
+    collector.visit(op)
+    collector.foundOpt
   }
 }
 
@@ -818,16 +823,24 @@ final case class SemanticAggregateOp(
     // on a filtered or joined model throws "no root SemanticTableOp or SemanticJoinOp".
     // Pre-join row filters are transparent — they apply a row predicate but do not
     // change the declared model, so the underlying SemanticTableOp is the right root.
-    def unwrap(op: SemanticOp): SemanticOp = op match {
-      case SemanticFilterOp(s, _)          => unwrap(s)
-      case SemanticRowFilterOp(s, _, _, _, _) => unwrap(s)
-      case SemanticOrderByOp(s, _)         => unwrap(s)
-      case SemanticLimitOp(s, _)           => unwrap(s)
-      // Transforms are transparent wrappers — they apply at compile time but
-      // don't change the declared model. Unwrap to find the underlying
-      // SemanticTableOp or SemanticJoinOp.
-      case SemanticTransformsOp(s, _)      => unwrap(s)
-      case other                           => other
+    def unwrap(op: SemanticOp): SemanticOp = {
+      val collector = new SemanticOpVisitor {
+        private var result: SemanticOp = op
+        def resultOp: SemanticOp = result
+        override def enter(o: SemanticOp): Unit = o match {
+          case SemanticFilterOp(s, _)          => result = s
+          case SemanticRowFilterOp(s, _, _, _, _) => result = s
+          case SemanticOrderByOp(s, _)         => result = s
+          case SemanticLimitOp(s, _)           => result = s
+          // Transforms are transparent wrappers — they apply at compile time but
+          // don't change the declared model. Unwrap to find the underlying
+          // SemanticTableOp or SemanticJoinOp.
+          case SemanticTransformsOp(s, _)      => result = s
+          case other                           => result = other; stop = true
+        }
+      }
+      collector.visit(op)
+      collector.resultOp
     }
     unwrap(src) match {
       case join: SemanticJoinOp =>
