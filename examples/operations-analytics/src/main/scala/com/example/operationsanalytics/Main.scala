@@ -99,7 +99,13 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-operations-analytics")
       .config("spark.ui.enabled", "false")
@@ -142,7 +148,7 @@ object Main {
       orders
         .groupBy()
         .aggregateMeasures(avgShipDays, onTimeRate, orderCount)
-        .execute(spark)
+        .execute
         .show(false)
       Logger.info("  (avg_ship_days and on_time_rate are calc measures in the YAML model)")
 
@@ -167,7 +173,7 @@ object Main {
         )
         .groupBy()
         .aggregateMeasures(meanAmount, varAmount)
-        .execute(spark)
+        .execute
         .collect()
         .head
       val mean = stats.getAs[Double]("mean_amount")
@@ -182,7 +188,7 @@ object Main {
         .groupByDimensions(orderId)
         .aggregateMeasures(orderAmount)
         .orderBy(SortKey.desc(orderAmount))
-        .execute(spark)
+        .execute
         .show(10, false)
     } finally spark.stop()
   }

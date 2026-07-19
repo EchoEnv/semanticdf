@@ -92,7 +92,13 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-pipeline")
       .config("spark.ui.enabled", "false")
@@ -205,7 +211,7 @@ object Main {
         .groupByDimensions(name, city, country)
         .aggregateMeasures(totalRevenue, orderCount, totalUnits)
         .orderBy(SortKey.desc(totalRevenue))
-        .execute(spark)
+        .execute
         .show(10, false)
 
       // Query 2: Revenue per country
@@ -214,7 +220,7 @@ object Main {
         .groupByDimensions(country)
         .aggregateMeasures(totalRevenue, orderCount)
         .orderBy(SortKey.desc(totalRevenue))
-        .execute(spark)
+        .execute
         .show(false)
 
       // Query 3: Monthly trend
@@ -224,7 +230,7 @@ object Main {
         .groupByDimensions(orderDate)
         .aggregateMeasures(totalRevenue, orderCount)
         .orderBy(SortKey.asc(orderDate))
-        .execute(spark)
+        .execute
         .show(false)
 
       // Schema introspection — every field from every model as a DataFrame.

@@ -85,7 +85,13 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-customer-analytics")
       .config("spark.ui.enabled", "false")
@@ -146,7 +152,7 @@ object Main {
         // (a dimension ref here would be a compile error).
         .aggregateMeasures(recencyDays, orderCount, orderAmount, segment)
         .orderBy(SortKey.desc(orderAmount))
-        .execute(spark)
+        .execute
         .show(20, false)
 
       // ---------------------------------------------------------------------
@@ -166,7 +172,7 @@ object Main {
         .groupByDimensions(signupDate)
         .aggregateMeasures(orderCount, orderAmount)
         .orderBy(SortKey.asc(signupDate))
-        .execute(spark)
+        .execute
         .show(20, false)
     } finally spark.stop()
   }

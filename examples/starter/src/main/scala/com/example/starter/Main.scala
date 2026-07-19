@@ -52,7 +52,13 @@ object Logger {
 object Main {
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-starter")
       .config("spark.ui.enabled", "false")
@@ -91,7 +97,7 @@ object Main {
       flights
         .groupBy("carrier")
         .aggregate("total_passengers", "flight_count", "avg_passengers")
-        .toDataFrame(spark)
+        .toDataFrame
         .orderBy(col("total_passengers").desc)
         .show(false)
 
@@ -102,7 +108,7 @@ object Main {
       flights
         .groupBy("carrier")
         .aggregate("total_passengers", "pct_of_total")
-        .toDataFrame(spark)
+        .toDataFrame
         .orderBy(col("pct_of_total").desc)
         .show(false)
 
@@ -113,7 +119,7 @@ object Main {
       flights
         .groupBy("carrier", "name", "hub")
         .aggregate("total_passengers", "avg_distance")
-        .toDataFrame(spark)
+        .toDataFrame
         .orderBy(col("total_passengers").desc)
         .show(false)
 
@@ -125,7 +131,7 @@ object Main {
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date")
         .aggregate("total_passengers", "flight_count")
-        .toDataFrame(spark)
+        .toDataFrame
         .orderBy("flight_date")
         .show(false)
 
@@ -138,7 +144,7 @@ object Main {
         .where("carrier" === "AA")
         .groupBy("origin")
         .aggregate("total_passengers", "flight_count")
-        .toDataFrame(spark)
+        .toDataFrame
         .orderBy(col("total_passengers").desc)
         .show(false)
 
@@ -196,7 +202,7 @@ object Main {
         .aggregateMeasures(pax, rank)                                        // typed
         .where(Predicate.Le(rank, 5))                                       // typed: Predicate.Le via the typed factory
         .orderBy(SortKey.asc(carrier), SortKey.asc(rank))                   // typed SortKey
-        .toDataFrame(spark)
+        .toDataFrame
         .show(20, false)
 
       // ---------------------------------------------------------------------
@@ -237,7 +243,7 @@ object Main {
         .groupBy("flight_date")
         .aggregate("total_passengers", "prev_month_passengers", "pct_change")
         .orderBy("flight_date")                  // flight_date isn't in the typed Refs above
-        .toDataFrame(spark)
+        .toDataFrame
         .show(false)
       Logger.info("  (pct_change is 0.0 for the first month — safeDivide default, no prior month)")
 
@@ -257,7 +263,7 @@ object Main {
         .groupByDimensions(carrier)                         // dimension-only — measure refs are a compile error
         .aggregateMeasures(pax, count, avg)                  // measure-only  — dimension refs are a compile error
         .orderBy(SortKey.desc(pax))                             // typed SortKey
-        .toDataFrame(spark)
+        .toDataFrame
         .show(false)
 
       // Typed predicate factory: `Predicate.Gt(pax, 500)` produces a `Compare.Gt`
@@ -268,7 +274,7 @@ object Main {
         .groupByDimensions(carrier)
         .aggregateMeasures(pax, count)
         .orderBy(SortKey.desc(pax))                             // typed SortKey
-        .toDataFrame(spark)
+        .toDataFrame
         .show(false)
 
       // ---------------------------------------------------------------------
