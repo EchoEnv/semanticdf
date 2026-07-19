@@ -175,9 +175,13 @@ joined.withMeasures(Measure("total_orders", t => sum(t("order_amount"))))  // OK
   join-key grain. This is correct but not free — pre-aggregation has a
   cost. For very large fact tables, benchmark before assuming it's fast
   enough.
-- **Percent-of-total with many `t.all()` calls:** Each `t.all()` builds
-  a separate 1-row totals table and cross-joins it. Many `t.all()`
-  calls in one query = many cross-joins. Keep `t.all()` usage moderate.
+- **Percent-of-total with many `t.all()` calls:** A single pruned
+  totals row is built per aggregate compile, containing only the
+  measures referenced by any `t.all()` in that query. All `t.all()`
+  calls in the same query share the same cross-joined totals row. Keep
+  `t.all()` usage moderate — the single-row cross-join is cheap but the
+  pruning is per-query, so very heavy `t.all()` workloads still pay for
+  the broadcast.
 - **`explain()` does not run the query.** `explain(spark)` compiles and
   explains the plan; `explain()` (no args) shows the SemanticDF op tree
   without compiling. See [`docs/guide.md` → How a query compiles](guide.md#how-a-query-compiles).

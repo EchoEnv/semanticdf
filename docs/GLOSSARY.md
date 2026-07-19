@@ -62,11 +62,11 @@ list as new concepts land.
   `DataFrame` (or, in the future, a `StreamingQuery`). One model, one
   tree, two terminals (DESIGN §4.5, ADR 0002).
 - **`join_one` / `join_many` / `join_cross`** — the three join
-  cardinalities. `join_many` pre-aggregates the "many" side to the join
+  cardinalities. `join_many` pre-aggregates **both sides** at the join
   grain before joining, so you don't double-count. This is what makes
   multi-fact stars correct without trusting the SQL planner.
 - **Pre-aggregation for fan-out prevention** — `join_many` runs an
-  `agg` on the "many" side at the grain of the join keys before the
+  `agg` on both sides at the grain of the join keys before the
   join. Without this, a 1000-row fact table joined against a customer
   dimension would explode to ~customer_x_orders rows.
 
