@@ -555,7 +555,10 @@ The same `SemanticTable` compiles against different terminals:
 
 - **Batch** (current) — `.toDataFrame(spark)` / `.execute(spark)` /
   `.collectAs[T](spark)`. Returns a Spark `DataFrame` (batch
-  flavor) or `Seq[T]` (typed flavor).
+  flavor) or `Seq[T]` (typed flavor). `.queryAs[T](...)` bundles
+  `query(...)` parameters and returns `Dataset[T]` (Spark's typed
+  collection) — the one-shot pick when you want a typed result
+  in one line.
 - **Streaming** (ADR 0002) — `.toStreamingQuery(spark, opts)`. Same
   op tree, different terminal. Not yet built; the interface is
   shaped so adding it is a terminal, not a new API.

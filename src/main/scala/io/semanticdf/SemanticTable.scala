@@ -1,6 +1,6 @@
 package io.semanticdf
 
-import org.apache.spark.sql.{Column, DataFrame, SparkSession}
+import org.apache.spark.sql.{Column, Dataset, DataFrame, SparkSession}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.functions._
 import scala.jdk.CollectionConverters._
@@ -144,6 +144,62 @@ final class SemanticTable private[semanticdf] (
     * [[ResultDecoder]] for the typeclass contract. */
   def collectAs[T](spark: SparkSession)(implicit decoder: ResultDecoder[T], ct: scala.reflect.ClassTag[T]): Seq[T] =
     toDataFrame(spark).collect().toSeq.map(decoder.decode)
+
+  /** Typed one-shot bundled query — `query(...)` that decodes into a
+    * Spark `Dataset[T]` (Phase E1, see `docs/phase-E-plan.md`).
+    *
+    * Builds the op tree, runs it, decodes every row into a `T` via the
+    * implicit [[ResultDecoder[T]]], and returns a Spark `Dataset[T]`.
+    * `T` is usually a case class; `ResultDecoder.derive[T]` derives
+    * the decoder automatically for case classes with primitive fields
+    * (PR #64). All `query(...)` parameters (where, having, orderBy,
+    * limit, timeGrain, timeGrains, timeRange) work the same way they
+    * do in the string-based `query`.
+    *
+    * '''Compile-time type safety.''' If the case class field names or
+    * types don't match the result schema, you get a compile error
+    * rather than a runtime `AnalysisException` or wrong values.
+    *
+    * {{{
+    *   case class CarrierRevenue(carrier: String, total: Long)
+    *   implicit val dec: ResultDecoder[CarrierRevenue] = ResultDecoder.derive
+    *
+    *   val result: Dataset[CarrierRevenue] =
+    *     model.queryAs[CarrierRevenue]("carrier", "total")
+    *
+    *   // Wrong case class field? COMPILE ERROR:
+    *   // case class CarrierRevenue(carrier: String, totalPassengerrs: Long)
+    *   // → error: value totalPassengerrs is not a member of CarrierRevenue
+    *
+    *   // Wrong field type? COMPILE ERROR:
+    *   // case class CarrierRevenue(carrier: Int, total: Long)
+    *   // → error: type mismatch: found Int, required String
+    * }}}
+    *
+    * '''Note on Spark `Encoder[T]`.''' The `Dataset[T]` conversion uses
+    * Spark's `.as[T]`, which requires an implicit `Encoder[T]` in scope
+    * (usually via `import spark.implicits._`). If the encoder is not
+    * in scope, you get a clear "could not find Encoder" compile error
+    * pointing at the missing import — not a runtime failure.
+    *
+    * @tparam T the result row shape (typically a case class)
+    * @return a Spark `Dataset[T]` of the typed result rows
+    */
+  def queryAs[T](
+      measures:    Iterable[String],
+      dimensions:  Iterable[String] = Nil,
+      where:       Option[Predicate] = None,
+      having:      Option[Predicate] = None,
+      orderBy:     Iterable[SortKey] = Nil,
+      limit:       Option[Int] = None,
+      timeGrain:   Option[String] = None,
+      timeGrains:  Map[String, String] = Map.empty,
+      timeRange:   Option[(String, String)] = None,
+  )(implicit spark: SparkSession, decoder: ResultDecoder[T], encoder: org.apache.spark.sql.Encoder[T]): Dataset[T] =
+    query(measures, dimensions, where, having, orderBy, limit,
+          timeGrain, timeGrains, timeRange)
+      .execute(spark)
+      .as[T](encoder)
 
   // -------------------------------------------------------------------------
   // Observability (Phase B)
