@@ -224,64 +224,71 @@ final class SemanticTable private[semanticdf] (
     sb.toString
   }
 
-  private def explainNode(op: SemanticOp, sb: StringBuilder, indent: String): Unit = op match {
-    case t: SemanticTableOp =>
-      sb.append(s"${indent}table: ${t.name.getOrElse("(anonymous)")} " +
-        s"[${t.table.columns.size} columns]\n")
-      if (t.dimensions.nonEmpty)
-        sb.append(s"${indent}  dimensions: ${t.dimensions.keys.mkString(", ")}\n")
-      if (t.measures.nonEmpty) {
-        sb.append(s"${indent}  measures:\n")
-        t.measures.values.foreach(m =>
-          sb.append(s"${indent}    ${m.name}: ${m.getClass.getSimpleName.replace("$", "")}"))
-        sb.append("\n")
-      }
+  private def explainNode(op: SemanticOp, sb: StringBuilder, indent: String): Unit = {
+    // The visitor is regenerated for each recursive call so that `indent`
+    // is captured fresh from the current invocation. The accumulator `sb`
+    // is shared via closure across the recursion.
+    def renderOp(o: SemanticOp, ind: String): Unit = o match {
+      case t: SemanticTableOp =>
+        sb.append(s"${ind}table: ${t.name.getOrElse("(anonymous)")} " +
+          s"[${t.table.columns.size} columns]\n")
+        if (t.dimensions.nonEmpty)
+          sb.append(s"${ind}  dimensions: ${t.dimensions.keys.mkString(", ")}\n")
+        if (t.measures.nonEmpty) {
+          sb.append(s"${ind}  measures:\n")
+          t.measures.values.foreach(m =>
+            sb.append(s"${ind}    ${m.name}: ${m.getClass.getSimpleName.replace("$", "")}"))
+          sb.append("\n")
+        }
 
-    case j: SemanticJoinOp =>
-      sb.append(s"${indent}join(${j.cardinality})\n")
-      sb.append(s"${indent}  left:\n")
-      explainNode(j.left, sb, indent + "    ")
-      sb.append(s"${indent}  right:\n")
-      explainNode(j.right, sb, indent + "    ")
-      if (j.extraDimensions.nonEmpty)
-        sb.append(s"${indent}  extra dimensions: ${j.extraDimensions.keys.mkString(", ")}\n")
-      if (j.extraMeasures.nonEmpty)
-        sb.append(s"${indent}  extra measures: ${j.extraMeasures.keys.mkString(", ")}\n")
+      case j: SemanticJoinOp =>
+        sb.append(s"${ind}join(${j.cardinality})\n")
+        sb.append(s"${ind}  left:\n")
+        renderOp(j.left, ind + "    ")
+        sb.append(s"${ind}  right:\n")
+        renderOp(j.right, ind + "    ")
+        if (j.extraDimensions.nonEmpty)
+          sb.append(s"${ind}  extra dimensions: ${j.extraDimensions.keys.mkString(", ")}\n")
+        if (j.extraMeasures.nonEmpty)
+          sb.append(s"${ind}  extra measures: ${j.extraMeasures.keys.mkString(", ")}\n")
 
-    case a: SemanticAggregateOp =>
-      sb.append(s"${indent}aggregate(keys=[${a.keys.mkString(", ")}])\n")
-      sb.append(s"${indent}  measures: [${a.measureNames.mkString(", ")}]\n")
-      sb.append(s"${indent}  source:\n")
-      explainNode(a.source, sb, indent + "    ")
+      case a: SemanticAggregateOp =>
+        sb.append(s"${ind}aggregate(keys=[${a.keys.mkString(", ")}]\n")
+        sb.append(s"${ind}  measures: [${a.measureNames.mkString(", ")}]\n")
+        sb.append(s"${ind}  source:\n")
+        renderOp(a.source, ind + "    ")
 
-    case SemanticFilterOp(src, pred) =>
-      sb.append(s"${indent}filter(${pred.describe})\n")
-      sb.append(s"${indent}  source:\n")
-      explainNode(src, sb, indent + "    ")
+      case SemanticFilterOp(src, pred) =>
+        sb.append(s"${ind}filter(${pred.describe})\n")
+        sb.append(s"${ind}  source:\n")
+        renderOp(src, ind + "    ")
 
-    // Pre-join row filter: applied to the source DataFrame before any join,
-    // so it is part of the execution plan (visible in explain output).
-    case SemanticRowFilterOp(src, name, _, expr, _) =>
-      sb.append(s"${indent}row-filter($name): $expr\n")
-      sb.append(s"${indent}  source:\n")
-      explainNode(src, sb, indent + "    ")
+      // Pre-join row filter: applied to the source DataFrame before any join,
+      // so it is part of the execution plan (visible in explain output).
+      case SemanticRowFilterOp(src, name, _, expr, _) =>
+        sb.append(s"${ind}row-filter($name): $expr\n")
+        sb.append(s"${ind}  source:\n")
+        renderOp(src, ind + "    ")
 
-    case SemanticOrderByOp(src, keys) =>
-      sb.append(s"${indent}orderBy(${keys.map(_.toString).mkString(", ")})\n")
-      sb.append(s"${indent}  source:\n")
-      explainNode(src, sb, indent + "    ")
+      case SemanticOrderByOp(src, keys) =>
+        sb.append(s"${ind}orderBy(${keys.map(_.toString).mkString(", ")})\n")
+        sb.append(s"${ind}  source:\n")
+        renderOp(src, ind + "    ")
 
-    case SemanticLimitOp(src, n) =>
-      sb.append(s"${indent}limit($n)\n")
-      sb.append(s"${indent}  source:\n")
-      explainNode(src, sb, indent + "    ")
+      case SemanticLimitOp(src, n) =>
+        sb.append(s"${ind}limit($n)\n")
+        sb.append(s"${ind}  source:\n")
+        renderOp(src, ind + "    ")
 
-    // Hint is a Spark planner wrapper; semanticdflly a pass-through for non-compile concerns.
-    case SemanticHintOp(src, _, _) => explainNode(src, sb, indent)
+      // Hint is a Spark planner wrapper; semanticdflly a pass-through for non-compile concerns.
+      case SemanticHintOp(src, _, _) => renderOp(src, ind)
 
-    // Transforms are applied at compile time; for explain purposes, walk through to the source.
-    case SemanticTransformsOp(src, _) => explainNode(src, sb, indent)
+      // Transforms are applied at compile time; for explain purposes, walk through to the source.
+      case SemanticTransformsOp(src, _) => renderOp(src, ind)
+    }
+    renderOp(op, indent)
   }
+
 
   /** Print the Spark physical plan after compiling the op tree.
     *
@@ -492,37 +499,45 @@ final class SemanticTable private[semanticdf] (
       op: SemanticOp,
       joinSource: Option[String],
       joinCardinality: Option[String],
-  ): List[(Option[String], Option[String], String, String, Option[String], String, String, Boolean, Boolean, Option[String], Option[String], Option[String])] = op match {
-    case t: SemanticTableOp =>
-      val modelName = t.name.orElse(Some("anonymous"))
-      val modelDesc = t.description
-      val dimRows = t.dimensions.values.map(d =>
-        (modelName, modelDesc, d.name, "dimension",
-          d.description, d.metadata.keys.mkString(","), d.metadata.values.mkString(","),
-          d.isEntity, d.isTimeDimension, d.smallestTimeGrain, joinSource, joinCardinality)
-      ).toList
-      val measRows = t.measures.values.map(m =>
-        (modelName, modelDesc, m.name, "measure",
-          m.description, m.metadata.keys.mkString(","), m.metadata.values.mkString(","),
-          false, false, None, joinSource, joinCardinality)
-      ).toList
-      dimRows ::: measRows
+  ): List[(Option[String], Option[String], String, String, Option[String], String, String, Boolean, Boolean, Option[String], Option[String], Option[String])] = {
+    // The visitor is regenerated for each recursive call so that joinSource
+    // and joinCardinality are captured fresh from the current invocation.
+    def walkSubtree(
+        root: SemanticOp,
+        src: Option[String],
+        card: Option[String],
+    ): List[(Option[String], Option[String], String, String, Option[String], String, String, Boolean, Boolean, Option[String], Option[String], Option[String])] = root match {
+      case t: SemanticTableOp =>
+        val modelName = t.name.orElse(Some("anonymous"))
+        val modelDesc = t.description
+        val dimRows = t.dimensions.values.map(d =>
+          (modelName, modelDesc, d.name, "dimension",
+            d.description, d.metadata.keys.mkString(","), d.metadata.values.mkString(","),
+            d.isEntity, d.isTimeDimension, d.smallestTimeGrain, src, card)
+        ).toList
+        val measRows = t.measures.values.map(m =>
+          (modelName, modelDesc, m.name, "measure",
+            m.description, m.metadata.keys.mkString(","), m.metadata.values.mkString(","),
+            false, false, None, src, card)
+        ).toList
+        dimRows ::: measRows
 
-    case j: SemanticJoinOp =>
-      val leftFields  = collectSchemaFields(j.left,  None,             None)
-      val rightSource = j.rightRoot.name.orElse(Some("joined"))
-      val rightFields = collectSchemaFields(j.right, rightSource, Some(j.cardinality.toString))
-      leftFields ::: rightFields
+      case j: SemanticJoinOp =>
+        val leftFields  = walkSubtree(j.left,  None,             None)
+        val rightSource = j.rightRoot.name.orElse(Some("joined"))
+        val rightFields = walkSubtree(j.right, rightSource, Some(j.cardinality.toString))
+        leftFields ::: rightFields
 
-    case f: SemanticFilterOp  => collectSchemaFields(f.source, joinSource, joinCardinality)
-    // Pre-join row filters do not change declared fields — pass through.
-    case rf: SemanticRowFilterOp => collectSchemaFields(rf.source, joinSource, joinCardinality)
-    case o: SemanticOrderByOp => collectSchemaFields(o.source, joinSource, joinCardinality)
-    case l: SemanticLimitOp   => collectSchemaFields(l.source, joinSource, joinCardinality)
-    case a: SemanticAggregateOp => collectSchemaFields(a.source, joinSource, joinCardinality)
-    // Hint is a Spark planner wrapper; semanticdflly a pass-through.
-    case h: SemanticHintOp    => collectSchemaFields(h.source, joinSource, joinCardinality)
+      case f: SemanticFilterOp  => walkSubtree(f.source, src, card)
+      case rf: SemanticRowFilterOp => walkSubtree(rf.source, src, card)
+      case o: SemanticOrderByOp => walkSubtree(o.source, src, card)
+      case l: SemanticLimitOp   => walkSubtree(l.source, src, card)
+      case a: SemanticAggregateOp => walkSubtree(a.source, src, card)
+      case h: SemanticHintOp    => walkSubtree(h.source, src, card)
+    }
+    walkSubtree(op, joinSource, joinCardinality)
   }
+
 
   // -------------------------------------------------------------------------
   // Model extension
