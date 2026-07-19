@@ -1815,16 +1815,22 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     sb.append(s"  table:   $tableLabel\n")
 
     // Find the aggregate even if it's wrapped by HAVING/orderBy/limit filters.
-    def findAggregate(op: SemanticOp): Option[SemanticAggregateOp] = op match {
-      case a: SemanticAggregateOp => Some(a)
-      case SemanticFilterOp(src, _)       => findAggregate(src)
-      case SemanticOrderByOp(src, _)      => findAggregate(src)
-      case SemanticLimitOp(src, _)        => findAggregate(src)
-      case SemanticHintOp(src, _, _)      => findAggregate(src)
-      case SemanticTransformsOp(src, _)   => findAggregate(src)  // transforms are transparent
-      case _                             => None
+    // Uses the SemanticOpVisitor (R1 refactor) with a `stop` flag to
+    // short-circuit at the first match. The visitor's exhaustive match
+    // in `visit()` is the single point of truth for which ops we walk
+    // through — adding a new op to the language updates the visitor
+    // base class, not this call site.
+    val findAggregateVisitor = new SemanticOpVisitor {
+      var found: Option[SemanticAggregateOp] = None
+      override def enter(op: SemanticOp): Unit = op match {
+        case a: SemanticAggregateOp =>
+          found = Some(a)
+          stop = true
+        case _ => ()
+      }
     }
-    findAggregate(st.root) match {
+    findAggregateVisitor.visit(st.root)
+    findAggregateVisitor.found match {
       case Some(a) =>
         val keys = if (a.keys.isEmpty) "(all rows)" else a.keys.mkString(", ")
         val meas = a.measureNames.mkString(", ")
