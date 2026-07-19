@@ -160,7 +160,7 @@ Measure("good", t => sum(t("x")))
 
 1. **Prefer fewer calc layers** — each topological layer adds a `select`. For most queries this is negligible, but deep chains (5+) on wide tables add overhead.
 
-2. **`t.all()` costs a cross-join** — each `t.all()` in a query builds a 1-row totals table and cross-joins it. For 1–3 `t.all()` calls this is fine. For 10+, consider pre-computing totals separately.
+2. **`t.all()` costs a single cross-joined totals row** — a query that uses `t.all()` builds a single pruned 1-row totals table (containing only the measures any `t.all()` references) and cross-joins it. All `t.all()` calls in the same query share that one row. For queries with 1–3 `t.all()` calls this is fine. For 10+, consider pre-computing totals separately.
 
 3. **Avoid calcs inside `where()` predicates** — `st.where(t("ratio") > 1.0)` is a post-aggregation filter, not a calc. If you need a calc in a filter, compute it first:
    ```scala

@@ -179,7 +179,7 @@ with an example (rule 2). The rest is detail.
 - [ ] Future / unshipped features qualified ("reserved for the future X (ADR NNNN)")
 - [ ] All `[[Foo]]` cross-refs resolve in this file
 - [ ] No Scaladoc on `equals` / `hashCode` / `toString` / private members / local vals
-- [ ] `mvn compile` clean, `mvn test` still 335/335 green
+- [ ] `mvn compile` clean, `mvn test` still 341/341 green
 
 ---
 
