@@ -693,6 +693,50 @@ see `DESIGN.md` §E and `docs/phase-E-plan.md`.
 
 ---
 
+## Advanced — extending the framework
+
+### Custom `SemanticScope` (analyzer adapter)
+
+`SemanticScope` is the trait that every measure/dimension lambda
+receives. The framework ships four built-in implementations
+(`BaseScope`, `MeasureScope`, `ClassificationScope`, `MeasureProbeScope`),
+but the trait is public and open — you can implement your own to
+inspect measure expressions without running a query.
+
+The intended use is **tooling**: catalog/dependency analyzers, line-of-business
+glossary generators, or static checks that flag column references without
+executing any Spark query. The expression may contain arbitrary Spark
+logic (UDFs, window functions, subqueries), so any analyzer is
+best-effort — the contract is "no false negatives on simple refs", not
+"see everything the compiler sees."
+
+```scala
+// Simple analyzer that records which dimension/measure names a lambda touches.
+final class RecordingScope extends SemanticScope {
+  val fields = scala.collection.mutable.Set.empty[String]
+  val totals = scala.collection.mutable.Set.empty[String]
+  override def apply(name: String): Column = { fields += name; lit(0.0) }
+  override def all(name: String): Column = { totals += name; lit(0.0) }
+}
+
+val scope = new RecordingScope
+model.measures("total_amount").expr(scope)   // pure metadata pass; no SparkSession needed
+println(scope.fields)                       // Set(total_amount)
+```
+
+This is **not** a way to inject an alternative execution backend —
+`execute` and `toDataFrame` always run the compiled op tree against the
+SparkSession you pass. The use case is "what would this measure
+reference, without running the query?"
+
+This pattern is already used internally by the framework's own catalog
+introspection (see `ClassificationScope` and `MeasureProbeScope` in
+`Scope.scala` and `SemanticTable.scala`). It is the documented public
+extension point for any third-party tool that needs to inspect measure
+expressions.
+
+---
+
 ## Notebook escape hatch — raw SQL via a temp view
 
 For notebook users (Jupyter, Databricks, Zeppelin) and any SQL-first

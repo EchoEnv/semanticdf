@@ -1,7 +1,7 @@
 package io.semanticdf
 
 import org.apache.spark.sql.catalyst.expressions.Expression
-import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
+
 import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
 
 
@@ -24,27 +24,13 @@ import org.apache.spark.sql.catalyst.parser.CatalystSqlParser
   *
   * ==Implementation==
   *
-  * Parses the expression via Spark's [[CatalystSqlParser]] (the same parser
-  * Spark itself uses — handles the full SQL grammar) and walks the AST
-  * collecting [[UnresolvedAttribute]] nodes (column references). Column refs
-  * are case-insensitive (matching Spark's default resolution), so both sides
-  * are lowercased before comparison.
-  *
-  * ===Visibility rules===
-  *
-  * The caller passes the set of columns visible at the point the expression
-  * is evaluated:
-  *
-  *   - For dimensions: the source DataFrame's columns (transforms haven't run yet
-  *     at model-load time, so transform outputs aren't visible to dims either).
-  *   - For transforms: source columns PLUS outputs of any previously-declared
-  *     transforms (declaration order in YAML matters).
-  *   - For base measures: source columns PLUS outputs of any transforms
-  *     (measures run after transforms).
-  *   - For calculated measures: not used — CalcExpr references other measures
-  *     by name, not columns; the resolution happens at query time.
+  * As of R2 (internal refactor), the parse + column-walk logic lives in
+  * [[CatalystColumnValidator]]; this object is now a thin subclass that
+  * supplies the per-block error wording and a small wrapper for the
+  * public `validate(...)` signature.
   */
-private[semanticdf] object ExpressionValidator {
+private[semanticdf] object ExpressionValidator
+    extends CatalystColumnValidator[(String, String, String)] {
 
   /** Throws `IllegalArgumentException` if the expression references any
     * column not in `visibleColumns`.
@@ -62,41 +48,37 @@ private[semanticdf] object ExpressionValidator {
       modelName: String,
       fieldName: String,
   ): Unit = {
-    val ast = try {
-      CatalystSqlParser.parseExpression(expr)
-    } catch {
-      case e: Exception =>
-        throw new IllegalArgumentException(
-          s"$kind '$fieldName' on model '$modelName': failed to parse Spark SQL " +
-          s"expression '$expr': ${e.getMessage}",
-          e)
-    }
-
-    val cols = collectColumns(ast)
-    if (cols.isEmpty) {
-      // Constant expression (e.g., `1`, `'foo'`, `now()`). No column refs to check.
-      return
-    }
-
-    val missing = cols.filterNot(visibleColumns.map(_.toLowerCase).contains)
-    if (missing.nonEmpty) {
-      throw new IllegalArgumentException(
-        s"$kind '$fieldName' on model '$modelName' references column(s) " +
-        s"${missing.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")} that are not " +
-        s"visible at this point. Visible columns: " +
-        s"${visibleColumns.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")}. " +
-        s"Did you misspell a column name? For derived columns, declare them in " +
-        s"`transforms:` first (transforms run before measures and are visible to them)."
-      )
-    }
+    validateColumns(expr, visibleColumns, (kind, modelName, fieldName))
   }
 
-  /** Walks the parsed AST and returns all column references (unqualified, lowercased). */
-  private def collectColumns(e: Expression): Set[String] =
-    e.collect { case UnresolvedAttribute(nameParts) =>
-      // UnresolvedAttribute can be qualified (`table.col`) or unqualified (`col`).
-      // We compare against `df.columns` which never carries table qualifiers,
-      // so use the LAST segment as the column name. Lower-case for case-insensitive match.
-      nameParts.last.toLowerCase
-    }.toSet
+  // ----- CatalystColumnValidator hooks -----
+
+  protected def parseFailure(
+      context: (String, String, String),
+      expression: String,
+      cause: Exception,
+  ): IllegalArgumentException = {
+    val (kind, modelName, fieldName) = context
+    new IllegalArgumentException(
+      s"$kind '$fieldName' on model '$modelName': failed to parse Spark SQL " +
+      s"expression '$expression': ${cause.getMessage}",
+      cause)
+  }
+
+  protected def missingColumns(
+      context: (String, String, String),
+      missing: Set[String],
+      visible: Set[String],
+      parsed: String,
+  ): IllegalArgumentException = {
+    val (kind, modelName, fieldName) = context
+    new IllegalArgumentException(
+      s"$kind '$fieldName' on model '$modelName' references column(s) " +
+      s"${missing.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")} that are not " +
+      s"visible at this point. Visible columns: " +
+      s"${visible.toSeq.sorted.map("\"" + _ + "\"").mkString(", ")}. " +
+      s"Did you misspell a column name? For derived columns, declare them in " +
+      s"`transforms:` first (transforms run before measures and are visible to them)."
+    )
+  }
 }
