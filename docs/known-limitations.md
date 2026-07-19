@@ -1,6 +1,6 @@
 # Current scope & guardrails
 
-This document explains what SemanticDF **does today** (v0.1.5) and the
+This document explains what SemanticDF **does today** (v0.1.6) and the
 guardrails worth knowing before you adopt it. Each item pairs the
 *current behavior* with a *workaround* and a *roadmap hint* — so you
 can plan around what's here now and what's coming.
@@ -29,7 +29,7 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 
 ---
 
-## Scope of v0.1.5
+## Scope of v0.1.6
 
 ### Batch-only (streaming is shaped but not yet wired)
 
@@ -268,4 +268,4 @@ For the architectural decisions behind these deferrals, see
 
 ---
 
-*This document is updated each release. Last updated: v0.1.5.*
+*This document is updated each release. Last updated: v0.1.6.*
