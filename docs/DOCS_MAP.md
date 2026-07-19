@@ -8,8 +8,9 @@ trying to do.
 | If you want to... | Start here |
 |---|---|
 | Get a feel for SemanticDF in 5 minutes | [`README.md`](../README.md) — the new four-section intro |
+| **Get semanticdf running in your own project** (paste-and-run consumer setup) | **[`docs/getting-started.md`](getting-started.md) — 5-minute Maven + SparkSession + first query** |
 | Run the example models and see real output | [`examples/README.md`](../examples/README.md) — central index with a recommended order for each reader type |
-| Use SemanticDF from Scala code in your own project | [`README.md`](../README.md) → `## Build` → `## Quick start` → `## Capabilities` |
+| Use SemanticDF from Scala code in your own project | [`docs/getting-started.md`](getting-started.md) — paste-and-run consumer setup, then [`README.md`](../README.md) → `## Capabilities` |
 | Define a model in YAML instead of Scala | [`examples/starter/`](../examples/starter/) (simplest YAML model) and [`docs/runtime-quickstart.md`](runtime-quickstart.md) |
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
 | Drive the framework as a CLI client over REST | [`examples/cli-consumer/README.md`](../examples/cli-consumer/README.md) |
@@ -32,6 +33,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `docs/guide.md` | Narrative walkthrough: how a query compiles, calc measures, joins, terminals, typed layer, notebook escape hatch. Pairs with DESIGN.md the way a guidebook pairs with a map. | New readers / users |
 | `DESIGN.md` | Architecture of record. Op tree, calc compilation, op-tree compilation, package layout, build & dependency strategy. | Contributors who need to understand *how* the framework works internally |
 | `docs/GLOSSARY.md` | Terms-of-art reference. | Everyone — especially new readers |
+| `docs/getting-started.md` | The canonical consumer setup: prerequisites, Maven dep, SparkSession, sample DataFrame, first model, first query. One paste-and-run path from `mvn install` to printed output. | New users — start here |
 | `docs/DOCS_MAP.md` | This document. Wayfinding. | Everyone |
 | `docs/runtime-quickstart.md` | Toolchain reference: what runs on what, how to handle Java 17 + Spark, etc. | Contributors |
 | `docs/calc-author-guide.md` | How to define calc measures in Scala and YAML. | Calc authors |
@@ -50,14 +52,20 @@ Each document has *one* job. We're migrating toward that structure.
 
 If you have **30 minutes** and want to form a useful mental model:
 1. [`README.md`](../README.md) — the four-section intro
-2. [`docs/guide.md`](../docs/guide.md) — narrative walkthrough (companion to DESIGN.md)
-3. [`examples/starter/`](../examples/starter/) — read its README, then run it (`mvn scala:run -DmainClass=com.example.starter.Main` from the example dir)
+2. **[`docs/getting-started.md`](getting-started.md) — 5-minute paste-and-run consumer setup** (run this before reading further)
+3. [`docs/guide.md`](../docs/guide.md) — narrative walkthrough (companion to DESIGN.md)
+4. [`examples/starter/`](../examples/starter/) — read its README, then run it (`mvn scala:run -DmainClass=com.example.starter.Main` from the example dir)
 
 If you have **2 hours** and want to use SemanticDF:
 1. The 30-minute path above
 2. [`README.md` → `## Capabilities`](../README.md) — read each subsection you're likely to use
 3. [`docs/calc-author-guide.md`](calc-author-guide.md) — if you write calc measures
 4. [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) + [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) — if you're connecting an LLM agent
+
+If you want to use SemanticDF in your own Scala project:
+1. [`docs/getting-started.md`](getting-started.md) — the consumer setup (Maven dep + first query)
+2. [`examples/README.md`](../examples/README.md) — pick the example that matches your use case
+3. Then read [`docs/guide.md`](../docs/guide.md) for the conceptual walkthrough that explains *why* each piece works
 
 If you have **half a day** and want to contribute:
 1. Both paths above
