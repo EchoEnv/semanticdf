@@ -1,5 +1,94 @@
 # Release notes
 
+## v0.1.6 — IDE-Scaladoc, logging consistency, hospital demo, implicit spark
+
+A **feature** release. Seven PRs since v0.1.5 (`#76`–`#82`): the IDE-Scaladoc
+fix (both IntelliJ `-javadoc.jar` and Metals/Bloop `-sources.jar`), logging
+consistency across all examples + consumer templates, a more illustrative
+hospital demo (the 30-day readmission rate goes from `0.00` to `0.50` so the
+calculation has a meaningful number to show), and the new **implicit
+`spark: SparkSession`** feature on `SemanticTable` terminals.
+
+Library, MCP server, and CLI are at
+`io.semanticdf:semanticdf_2.13:0.1.6`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.6`, and
+`io.semanticdf:semanticdf-cli_2.13:0.1.6`.
+
+### Library
+
+- **#81** — Implicit `spark: SparkSession` on `SemanticTable` terminals. Eight
+  methods now take `implicit spark: SparkSession`: `toDataFrame`, `execute`,
+  `explain`, `explainExtended`, `explainSemantic` (×2), `schema`,
+  `compiledSchema`. Backward-compatible: the existing explicit
+  `st.execute(spark)` form continues to work; the new form is
+  `st.execute` when an `implicit val spark: SparkSession` is in scope.
+  **Zero runtime overhead** — implicit resolution is compile-time only.
+  New `ImplicitSparkSpec` (6 tests) exercises the implicit form.
+  `collectAs[T](spark)` was left unchanged because Scala 2.13 disallows
+  two implicit parameter lists, and converting it broke test call sites
+  that pass `spark` positionally (the decoder/ClassTag are then not in
+  implicit scope).
+
+### MCP server
+
+No source changes; `serverInfo` now reports `0.1.6`.
+
+### CLI
+
+- CLI banner now reports `0.1.6`. No behavior change.
+
+### Build / IDE
+
+- **#76** — `mvn install` now produces a `-javadoc.jar` (Scaladoc HTML
+  packaged per the standard Maven `javadoc` classifier). Used by
+  IntelliJ and other IDEs that auto-resolve the `-javadoc.jar` from
+  `~/.m2` for hover docs.
+- **#77** — `mvn install` now also produces a `-sources.jar` (the actual
+  `.scala` source files, ~115 KB). Used by Metals/Bloop, which reads
+  Scaladoc from `-sources.jar` rather than `-javadoc.jar`. Before this
+  change, hovering over `Dimension.apply` etc. in a consumer project
+  showed only the signature; now it shows the full rewrite from #74.
+
+### Examples
+
+- **#78** — In-library demos (`src/main/scala/io/semanticdf/examples/`) now
+  use `SemanticLogger.info` for section headers and explanatory prose
+  instead of `println`. Spark action output (`.show()` tabular,
+  `explain()` plans) stays clean on stdout.
+- **#79** — Consumer templates (`examples/*/src/main/scala/com/example/*/Main.scala`)
+  each get a template-local `java.util.logging.Logger` helper
+  (`Logger.info` / `Logger.warn` / `Logger.error` / `Logger.debug`) rather
+  than importing `SemanticLogger`. Reason: consumer projects are
+  independent of semanticdf internals; their logging should be too.
+  `cli-consumer` is unchanged (it's a CLI tool that talks to the REST
+  server, not a library consumer, and intentionally uses
+  `println`/`System.err.println` per CLI conventions).
+- **#80** — Hospital demo data adjusted so the 30-day readmission rate
+  comes out to `0.50` rather than `0.00`. The original data was
+  structured so no patient's two encounters fell within the 30-day
+  window; the calculation was correct but the result was uninformative.
+  Added one new encounter for P007 (E013, 14 days after E012) so the
+  readmission logic actually fires. README gets a "Sample output"
+  section showing each stage's actual output.
+- **#82** — Hospital template uses the new implicit-spark feature: 6
+  call sites drop the explicit `(spark)` argument. Other templates not
+  updated in this release (will be a follow-up if desired).
+
+### Test count
+
+**413 tests** (341 library + 72 MCP), all green on Spark 3.5.8 (default)
+and Spark 4.1.1 (`-Pspark4`). Up from 407 in v0.1.5:
+  - `ImplicitSparkSpec` (6 new tests) for the implicit-spark feature.
+  - All 335 pre-v0.1.6 library tests unchanged; 6 converted from
+    `HardeningSpec` (now part of `ImplicitSparkSpec`).
+
+### Compatibility
+
+No breaking changes. `SemanticLogger` is unchanged from v0.1.5
+(still `private[semanticdf]`). The 7 new template-local `Logger` objects
+are additive. The 6 new implicit-spark methods accept both forms.
+The `-javadoc.jar` / `-sources.jar` are purely additive jars in `~/.m2`.
+
 ## v0.1.5 — Scaladoc production-bar pass + style guide
 
 A docs-only release. One PR since v0.1.4 (`#74`) that brings two

@@ -41,7 +41,7 @@ cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
-This puts `io.semanticdf:semanticdf_2.13:0.1.5` in `~/.m2/repository`.
+This puts `io.semanticdf:semanticdf_2.13:0.1.6` in `~/.m2/repository`.
 
 ### Step 2: run the starter
 
@@ -220,7 +220,7 @@ For a real deployment:
    spark-submit \
      --class com.example.starter.Main \
      --master yarn \
-     target/semanticdf-starter_2.13-0.1.5-jar-with-dependencies.jar
+     target/semanticdf-starter_2.13-0.1.6-jar-with-dependencies.jar
    ```
 
 ---
