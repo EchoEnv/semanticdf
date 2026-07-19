@@ -22,34 +22,57 @@ demand, at the terminal you call.
 
 ```scala
 import io.semanticdf._
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
-val flights = toSemanticTable(flightsDf, name = Some("flights"))
+// 1. SparkSession (omit in your own code if you already have one)
+val spark = SparkSession.builder().master("local[2]").getOrCreate()
+import spark.implicits._
+
+// 2. A sample source DataFrame
+val flights = Seq(
+  ("AA", 100, 5), ("AA", 120, 4),
+  ("UA",  80, 3), ("DL", 150, 6),
+).toDF("carrier", "distance", "passengers")
+
+// 3. A semantic model (declarative — doesn't run anything)
+val flightsModel = toSemanticTable(flights, name = Some("flights"))
   .withDimensions(
     Dimension("carrier", t => t("carrier")),
   )
   .withMeasures(
-    Measure("flight_count",   t => count(lit(1))),
-    Measure("total_distance", t => sum(t("distance"))),
+    Measure("flight_count",  t => count(lit(1))),
+    Measure("total_distance",t => sum(t("distance"))),
+    // Calc measure — references other measures by name. Framework pulls
+    // `total_distance` and `flight_count` automatically when you ask for
+    // `avg_distance_per_flight`.
     Measure("avg_distance_per_flight",
-            t => t("total_distance") / t("flight_count")),  // calc
+            t => t("total_distance") / t("flight_count")),
   )
 
-// Terminal 1: returns a Spark DataFrame
-flights.groupBy("carrier").aggregate("avg_distance_per_flight").execute(spark)
-// → DataFrame[(carrier: String, avg_distance_per_flight: Double)]
+// 4. ONE query, THREE terminals. Note the `byCarrier` val is shared:
+val byCarrier = flightsModel
+  .groupBy("carrier")
+  .aggregate("flight_count", "avg_distance_per_flight")
 
-// Terminal 2: returns a typed Seq (PR #52 + PR #64)
-case class Row(carrier: String, avg_distance_per_flight: Double)
+// Terminal 1: returns a Spark DataFrame (batch flavor, for SQL/BI tools)
+byCarrier.execute(spark)
+// → DataFrame[(carrier: String, flight_count: Long, avg_distance_per_flight: Double)]
+
+// Terminal 2: returns a typed Seq (compile-time field safety via ResultDecoder)
+case class Row(carrier: String, flight_count: Long, avg_distance_per_flight: Double)
 implicit val dec: ResultDecoder[Row] = ResultDecoder.derive[Row]
-flights.collectAs[Row](spark)
-// → Seq(Row("AA", 125.0), Row("UA", 225.0), Row("DL", 325.0))
+byCarrier.collectAs[Row](spark)
+// → Seq(Row("AA", 2L, 110.0), Row("UA", 1L, 80.0), Row("DL", 1L, 150.0))
 
-// Terminal 3: just the compiled DataFrame, for further Spark use
-val compiledDf = flights.toDataFrame(spark)
-compiledDf.createOrReplaceTempView("flights_view")
-spark.sql("SELECT carrier, avg_distance_per_flight FROM flights_view")
+// Terminal 3: register as a Spark temp view, then query via plain SQL
+byCarrier.execute(spark).createOrReplaceTempView("flights_view")
+spark.sql("SELECT * FROM flights_view WHERE flight_count >= 2").show()
 ```
+
+The same `byCarrier` query, executed three ways — that's the contract.
+The compilation step happens once per terminal call; the model itself
+doesn't change.
 
 Between *description* (the model) and *DataFrame* (the compiled output)
 sits an **op tree** — a sealed-trait algebra of nodes, one per
@@ -395,28 +418,35 @@ name" is the win.
 
 ### Worked example — the cartesian-product hazard
 
-Imagine a small dataset:
+A small orders + line-items dataset:
 
 ```
-flights:            customers:
-carrier | count     carrier | customer_id
-AA     | 1000       AA       | c-001
-UA     | 2000       UA       | c-002
-DL     | 3000       DL       | c-003
-                      AA       | c-004   ← two AA customers
+orders:                          lineItems:
+order_id | customer_id | amount  item_id | order_id | qty
+1        | 101         | 5000   1        | 1        | 2
+2        | 102         | 3000   2        | 1        | 1
+3        | 101         | 7500   3        | 2        | 3
+4        | 103         | 2000   4        | 3        | 1
+5        | 102         | 1000   5        | 4        | 2
+                                  6        | 5        | 1
 ```
 
-`flights.join_many(customers, "carrier")` — joining on `carrier` —
-should give 6 rows. If we'd written the join as plain SQL:
+`orders.join_many(lineItems, "order_id")` should give exactly **5
+rows** (one per order). If we'd written the join as plain SQL:
 
 ```sql
-SELECT * FROM flights JOIN customers ON flights.carrier = customers.carrier
+SELECT * FROM orders JOIN lineItems ON orders.order_id = lineItems.order_id
 ```
 
-Spark (without our pre-aggregation step) produces a cross-product
-per carrier: `AA → 2 rows × 2 customer rows = 4 rows`. So we get
-10 rows instead of 6, and each carrier's count gets duplicated by the
-number of customers — the numbers are nonsense.
+That's still right here (orders has 5 rows, lineItems has 6 rows, the
+join is many-to-one along order_id). But the danger is real: the
+moment you have a multi-fact join where both sides have the same
+join-key at a HIGHER grain than the fact detail — say you instead
+join `orders` (50 rows: 50 orders by 3 customers = some customers
+place >1 order) against `lineItems` (one per order line) — Spark
+without our pre-aggregation step produces a cross-product per
+order. Customer 101 places 2 orders of 2 items each = order row
+expanded 2 times then per-item, fanning the per-order aggregation out.
 
 `SemanticTable` does **not** trust the SQL planner for this; it
 intercepts at join time.
@@ -426,39 +456,92 @@ intercepts at join time.
 The framework, at `SemanticJoinOp.compile` time:
 1. Captures the join keys at compile time.
 2. Probes each side's measures against that side's DataFrame to find
-   what survives the pre-aggregation.
+   what survives pre-aggregation.
 3. **Pre-aggregates** each side to the join-grain: `groupBy(allResolvableDims).agg(allResolvableMeasures)`.
 4. Joins the pre-aggregated sides with a left-outer equi-join.
 
+A runnable example:
+
 ```scala
-// After pre-aggregation, each side has exactly one row per carrier:
+import io.semanticdf._
+import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.functions._
 
-flights_agg:           customers_agg:
-carrier | count        carrier | total_spend
-AA      | 1000         AA       | 1250.0
-UA      | 2000         UA       | 3400.0
-DL      | 3000         DL       | 2100.0
+val spark = SparkSession.builder().master("local[2]").getOrCreate()
+import spark.implicits._
 
-// The join is now correctness-safe:
-// AA     | 1000       | 1250.0
-// UA     | 2000       | 3400.0
-// DL     | 3000       | 2100.0
+val orders = Seq(
+  (1, 101, 5000, "shipped"),
+  (2, 102, 3000, "shipped"),
+  (3, 101, 7500, "delivered"),
+  (4, 103, 2000, "processing"),
+  (5, 102, 1000, "shipped"),
+).toDF("order_id", "customer_id", "amount", "status")
+
+val lineItems = Seq(
+  (1, 1, 2, 2500), (2, 1, 1, 3000),
+  (3, 2, 3, 1000), (4, 3, 1, 7500),
+  (5, 4, 2, 1000), (6, 5, 1, 1000),
+).toDF("item_id", "order_id", "qty", "price_cents")
+
+val ordersModel = toSemanticTable(orders, name = Some("orders"))
+  .withDimensions(
+    Dimension("customer_id", t => t("customer_id")),
+    Dimension("status",      t => t("status")),
+  )
+  .withMeasures(Measure("order_amount", t => sum(t("amount"))))
+
+val itemsModel = toSemanticTable(lineItems, name = Some("items"))
+  .withDimensions(Dimension("order_id", t => t("order_id")))
+  .withMeasures(Measure("item_count", t => count(lit(1))))
+
+// join_many: each side pre-aggregated to order_id grain, then equi-joined.
+// After join, the result has one row per order_id with these columns:
+//   order_id, customer_id, order_amount   (from orders side)
+//   order_id, item_count                  (from items side)
+val joined = ordersModel.join_many(itemsModel,
+  (l, r) => l("order_id") === r("order_id"))
+
+joined.execute(spark).show(false)
+// Note: row count === orders.count() == 5. The fact table did NOT
+// multiply — that's the fan-out prevention working.
 ```
 
-If you then `groupBy("carrier").aggregate("count * total_spend / 1")`,
-the answer is well-defined.
+What `join_many` does here:
+- **Pre-aggregates each side to the join key.** Each side becomes one
+  row per `order_id`: orders → `(order_id, customer_id, order_amount)`;
+  items → `(order_id, item_count)`.
+- **Equi-joins** the two on `order_id`. With both sides pre-aggregated,
+  the join is **correctness-safe** regardless of how many line items each
+  order has — the per-order `total_amount` doesn't get multiplied by
+  the line count.
 
-If two non-key dimensions share a name (e.g. both sides have a column
-called `category`), the framework raises a clear error pointing at the
-collision — see `docs/known-limitations.md`.
+After the join, the result is a regular `DataFrame` containing both
+sides' measures as columns. You can aggregate further with **plain
+Spark** — for example, grand totals across all orders:
+
+```scala
+joined.execute(spark).agg(
+  sum(col("order_amount")).as("grand_orders"),
+  sum(col("item_count")).as("grand_items"),
+).show()
+```
+
+**Name collisions.** If both sides declare a non-key column with the
+same name (e.g. both have a column called `category`), the join raises
+a clear error pointing at the collision — see
+`docs/known-limitations.md`. To disambiguate, rename one side's column
+with the merged model's `.withDimensions(...)` / `.withMeasures(...)`.
+
+
 
 ### When to use which cardinality
 
 - **`join_one`** — the joined table is at *or above* the join key's
   grain (e.g. a customer dimension). No pre-aggregation needed.
 - **`join_many`** — the joined table is *below* the join key's grain
-  (e.g. a fact table). Pre-aggregates the "many" side to the join
-  grain to prevent fan-out.
+  (e.g. a fact table). Pre-aggregates **both sides** to the join grain
+  to prevent fan-out.
 - **`join_cross`** — Cartesian product. Use sparingly; you've opted
   out of fan-out prevention.
 
