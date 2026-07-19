@@ -92,7 +92,13 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-window-analytics")
       .config("spark.ui.enabled", "false")
@@ -147,7 +153,7 @@ object Main {
         .aggregateMeasures(totalPassengers, flightCount, rankWithinCarrier)
         .where(Predicate.Le(rankWithinCarrier, 5))
         .orderBy(SortKey.asc(carrier), SortKey.asc(rankWithinCarrier))
-        .execute(spark)
+        .execute
         .show(20, false)
 
       // ---------------------------------------------------------------------
@@ -169,7 +175,7 @@ object Main {
         .groupByDimensions(flightDate)
         .aggregateMeasures(totalPassengers, prevMonthPassengers, pctChange)
         .orderBy(SortKey.asc(flightDate))
-        .execute(spark)
+        .execute
         .show(false)
       Logger.info("  (first row's pct_change is 0.0 because there's no prior month — safeDivide default)")
 
@@ -181,7 +187,7 @@ object Main {
         .groupByDimensions(flightDate)
         .aggregateMeasures(totalPassengers, runningTotal)
         .orderBy(SortKey.asc(flightDate))
-        .execute(spark)
+        .execute
         .show(10, false)
       Logger.info("  (running_total is partition-sensitive; the order shown may not")
     } finally spark.stop()

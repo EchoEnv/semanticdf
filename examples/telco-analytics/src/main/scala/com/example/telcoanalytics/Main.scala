@@ -99,7 +99,13 @@ object Main {
   }
 
   def main(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
+        //  so call sites can write  /  without
+    // passing spark positionally. Backward-compatible: explicit
+    //  still works (PR #81).
+    // `implicit` so call sites can write `.execute` / `.toDataFrame` without
+    // passing spark positionally. Backward-compatible: explicit
+    // `.execute(spark)` still works (PR #81).
+    implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-telco-analytics")
       .config("spark.ui.enabled", "false")
@@ -149,7 +155,7 @@ object Main {
         .groupByDimensions(planName)
         .aggregateMeasures(totalRevenue, activeCustomers, arpu)
         .orderBy(SortKey.asc(arpu), SortKey.asc(planName))
-        .execute(spark)
+        .execute
         .show(false)
       Logger.info("  (ARPU = total_revenue / active_customers; active = countDistinct customer_id)")
 
@@ -173,7 +179,7 @@ object Main {
         .groupByDimensions(promoCode)
         .aggregateMeasures(totalRevenue, customersOnPromo, pctOfRevenue)
         .orderBy(SortKey.desc(totalRevenue))
-        .execute(spark)
+        .execute
         .show(false)
       Logger.info("  (pct_of_revenue uses t.all() to re-evaluate total_revenue at zero grain)")
 
@@ -194,7 +200,7 @@ object Main {
       usageWithRoamingPct
         .groupBy()
         .aggregateMeasures(totalRevenue, totalRoamingRevenue, pctRoaming)
-        .execute(spark)
+        .execute
         .show(false)
       Logger.info("  (pct_roaming shows what fraction of all revenue is from roaming events)")
 
