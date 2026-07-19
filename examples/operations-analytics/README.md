@@ -37,7 +37,7 @@ mvn scala:run -DmainClass=com.example.operationsanalytics.Main
 
 You'll see:
 1. **Q1 — Order fulfillment (avg ship_days + on-time rate)** — average days from order to shipment, and the fraction of orders shipped within 2 days.
-2. **Q2 — Anomaly detection (z-score)** — for each order, whether its `amount` is more than 2 standard deviations from the mean.
+2. **Q2 — Anomaly detection (z-score, 2-step)** — orders whose `amount` is more than 2 standard deviations from the mean.
 
 ## What it demonstrates
 
@@ -46,25 +46,45 @@ You'll see:
 | Per-row time-delta measure (`datediff`) | Q1 — `ship_days` (base) |
 | Per-row conditional measure (`case when`) | Q1 — `on_time_flag` (base) |
 | Calc measure = ratio of two base measures | Q1 — `avg_ship_days`, `on_time_rate` |
-| Per-row aggregate measure (`avg`, `stddev`) as group-invariant | Q2 — `mean_amount`, `stddev_amount` |
-| Per-row classification using two group-invariant measures | Q2 — `is_outlier` (calc, auto-pulls deps) |
-| `abs(col - col) > k * col` z-score pattern | Q2 |
+| Per-row aggregate measure (`avg`, `var_samp`) as group-invariant | Q2 — `mean_amount`, `var_amount` (Scala-side) |
+| `Predicate.Gt(typedRef, threshold)` — typed predicate factory | Q2 — `Predicate.Gt(amount, mean + 2*stddev)` |
+| Two-step pipeline: compute global stats → filter rows | Q2 |
 
-## How Q2's anomaly detection works
+## How Q2's anomaly detection works (2-step pattern)
 
-The model is extended in Scala with two **base measures** (`mean_amount`, `stddev_amount`) and one **calc measure** (`is_outlier`):
+Anomaly detection in semanticdf is a **two-step pipeline** — per-row z-score
+doesn't fit in a single base-measure lambda, so we compute the global stats
+first, then filter rows whose `amount` exceeds the threshold.
 
 ```scala
-Measure("mean_amount",   t => avg(t("amount")))            // base: group-invariant
-Measure("stddev_amount", t => stddev(t("amount")))         // base: group-invariant
-Measure("is_outlier",
-  t => when(abs(t("amount") - t("mean_amount")) > lit(2.0) * t("stddev_amount"),
-            lit(1)).otherwise(lit(0)))                       // calc: depends on both
+// Step 1: global stats — compute the dataset-wide mean and sample variance.
+val stats = orders
+  .withMeasures(
+    Measure(meanAmount.name, t => avg(t("amount"))),
+    Measure(varAmount.name,  t => var_samp(t("amount"))),
+  )
+  .groupBy()
+  .aggregateMeasures(meanAmount, varAmount)
+  .execute(spark)
+  .collect().head
+val mean    = stats.getAs[Double]("mean_amount")
+val stddev  = math.sqrt(stats.getAs[Double]("var_amount"))
+val threshold = mean + 2 * stddev
+
+// Step 2: filter orders using the computed threshold. Predicate.Gt is the
+// typed predicate factory — it takes a typed `FieldRef[Amount]`, not a string.
+orders
+  .where(Predicate.Gt(amount, threshold))
+  .groupByDimensions(orderId)
+  .aggregateMeasures(orderAmount)
+  .orderBy(SortKey.desc(orderAmount))
+  .execute(spark)
+  .show(10, false)
 ```
 
-When you request `is_outlier` in a query, the framework's transitive-closure walk sees the `t("mean_amount")` and `t("stddev_amount")` references and **auto-pulls them into the aggregation** — you don't have to list them manually. The `is_outlier` measure then evaluates per-row against the group-mean and group-stddev.
-
-This pattern generalises to any "flag rows that deviate from the group by more than N standard deviations" use case (fraud detection, ops alerting, data-quality checks).
+The two-step pattern generalises to any "flag rows that deviate from
+the group by more than N standard deviations" use case (fraud detection,
+ops alerting, data-quality checks).
 
 ## Related templates
 

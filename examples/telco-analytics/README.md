@@ -60,14 +60,14 @@ You'll see:
 ## Why a denormalized model
 
 The ideal data model for this is a normalized star schema (usage ⨝ customers ⨝ plans).
-But semanticdf's current join implementation only supports 2-level merges
-(leftRoot + rightRoot), so a 3-way join would require chaining — which isn't
-yet supported. We work around this by denormalizing: the `usage` CSV
-includes `plan_name` and `monthly_fee` as extra columns, so a single
-`usage` model carries enough context for all 3 queries.
+A multi-hop join chain is possible in semanticdf but isn't a production-grade
+guarantee yet — see [`docs/known-limitations.md`](../../docs/known-limitations.md)
+for the current state. We work around this here by denormalizing: the
+`usage` CSV includes `plan_name` and `monthly_fee` as extra columns, so a
+single `usage` model carries enough context for all 3 queries.
 
-For a production warehouse, you'd keep the normalized star schema and
-chain joins in semanticdf. The query patterns shown here work the same way.
+For a production warehouse, you can chain joins in semanticdf; the
+query patterns shown here work the same way on a normalized schema.
 
 ## Related templates
 

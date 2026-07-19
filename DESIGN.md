@@ -96,12 +96,13 @@ Nothing here is scheduled. Each item lists the concrete signal that pulls it in.
 | Dependency-graph introspection (`get_graph`) | A consumer wants field-level lineage |
 | `t.all(expr: => Column)` inline-reduction totals | A real measure needs totals of an inline reduction |
 | Sum-special-case windowed totals fast path | A benchmark shows cross-join totals is too slow |
-| YAML config loader + expr mini-DSL (§6.4) | A user wants declarative config over the Scala API |
+| ~~YAML config loader + expr mini-DSL (§6.4)~~ **(shipped in v0.1)** | — |
 | Multi-package layout (`expr/ ops/ …`) | A flat `io.semanticdf` package grows a 3+ file cluster |
 | Second DSL style (tuple-builder) / macro DSL | Record-varargs proves insufficient in practice |
 | Cross-build Scala 2.12 | A consumer is pinned to Spark < 4 (Spark 4 is 2.13-only) |
 | MiMa binary compatibility | There is a downstream user to not break |
 | Maven Central publishing | There is a consumer to publish to |
+| ~~MCP / HTTP tool server~~ **(shipped in v0.1.6)** | — |
 | MCP / HTTP tool server, chart JSON emitter | A consumer needs LLM-tool or viz integration |
 | LangGraph/LLM agent backend | JVM agent demand; design a clean tool interface (no LangGraph on JVM) |
 
@@ -323,14 +324,17 @@ Because our scope is name-based, "rewriting" the calc expression is trivial — 
 
 This is the explicit correctness guarantee BSL makes; we keep it rather than trusting Catalyst, because correctness in multi-fact stars is the whole point of a semantic layer.
 
-### 6.4 YAML expression strings *(deferred — YAML is out of v0.1; see §3 trigger table)*
+### 6.4 YAML expression strings *(partial — shipped for the common case in v0.1; function-call support still deferred)*
 
-> Retained as design reference for when YAML config is revived. Until then, measures are defined in Scala only.
+> Retained as design reference for function-call support. The base
+> format (column refs, aggregate calls, `t.all`) is shipped as a parser
+> in `CalcExpr.scala`; function calls like `abs(x)` or `round(x, n)`
+> still need Scala-side measures (see `docs/known-limitations.md`).
 
 BSL uses `eval` on Python strings (`_.distance.sum()`). The JVM has no safe equivalent. Two-pronged strategy:
 
 - **Scala API:** full power — measures are real `Scope => Column` functions, so any Spark expression works (windows, `when/otherwise`, `struct`, `array`, UDFs).
-- **YAML:** a **restricted, parsed expression mini-DSL** for the common cases: column refs (`distance`), dotted (`flights.distance`), and aggregate calls (`sum(distance)`, `count()`, `mean(x)`, `x / y`). Implemented as a small parser combinator → `Scope => Column`. Anything beyond that must be defined in Scala and *referenced* by name from YAML. This bounds the YAML grammar to a safe, reviewable surface.
+- **YAML:** a **restricted, parsed expression mini-DSL** for the common cases: column refs (`distance`), dotted (`flights.distance`), and aggregate calls (`sum(distance)`, `count()`, `mean(x)`, `x / y`). Implemented as a small parser combinator → `Scope => Column`. Anything beyond that — function calls, window functions, custom UDFs — must be defined in Scala and *referenced* by name from YAML. This bounds the YAML grammar to a safe, reviewable surface.
 
 ### 6.5 Filter pre/post-agg split (WHERE vs HAVING)
 
@@ -347,16 +351,21 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
 - **Spark scope:** `provided` — semanticdf is a library dropped into the user's Spark job; the runtime Spark comes from the user's cluster/distro.
 - **No Python, no xorq, no Ibis, no YAML libs.** Pure JVM, Scala-only config for v0.1.
 - **Testing:** `scalatest` 3.2.x; an in-memory local `SparkSession` fixture; a `flights` test fixture mirroring BSL's so behavior parity is checkable.
-- **Publishing / binary compat:** deferred (ADR 0001) — no Maven Central deploy and no `mima-maven-plugin` until there is a downstream consumer to keep stable.
+- **Publishing / binary compat:** *partially shipped* (v0.1.4) — the release
+  process produces a tag + annotated release + a `pom.xml` that publishes
+  to the local `~/.m2`, and `RELEASE.md` documents the version-bump
+  pattern. Actual `mvn deploy` to Maven Central and the `mima-maven-plugin`
+  binary-compat checker are still deferred (ADR 0001) until there is a
+  downstream consumer to keep stable.
 
-**pom.xml (planned, abridged; version is illustrative — current release is 0.1.3):**
+**pom.xml (planned, abridged; version is illustrative — current release is 0.1.6):**
 
 ```xml
 <project>
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf_2.13</artifactId>
-  <version>0.1.3</version>
+  <version>0.1.6</version>
   <packaging>jar</packaging>
 
   <properties>

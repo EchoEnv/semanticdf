@@ -536,7 +536,7 @@ for the worked example with sample output.
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses (v0.1.1). |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
-| `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). |
+| `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). With `implicit val spark: SparkSession` in scope, both can be called without the argument (`.toDataFrame` / `.execute`). |
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
 | `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
