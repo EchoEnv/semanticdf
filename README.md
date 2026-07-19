@@ -51,8 +51,9 @@ guarantee that they're asking for the right thing.
 
 ## Where to read next
 
-- [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
+- **[`docs/getting-started.md`](docs/getting-started.md) — 5-minute paste-and-run setup (Maven + SparkSession + first query)**
 - [`docs/guide.md`](docs/guide.md) — narrative walkthrough: how SemanticDF works, in plain English
+- [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
@@ -72,26 +73,34 @@ mvn -Pspark4 test             # Spark 4.1.1 (latest stable)
 
 ## Quick start
 
+Add the Maven dep and paste this into your project:
+
 ```scala
 import io.semanticdf._
-import io.semanticdf.Predicate._    // "field" === value, "field" > value, SortKey.desc, ...
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit, sum}
 
-val flights = toSemanticTable(flightsDf, name = Some("flights"))
-  .withDimensions(
-    Dimension("carrier", t => t("carrier")),
-  )
+val spark = SparkSession.builder().master("local[2]").getOrCreate()
+import spark.implicits._
+
+val flights = Seq(
+  ("AA", 100, 5), ("UA",  80, 3), ("DL", 150, 6),
+).toDF("carrier", "distance", "passengers")
+
+val flightsModel = toSemanticTable(flights, name = Some("flights"))
+  .withDimensions(Dimension("carrier", t => t("carrier")))
   .withMeasures(
-    Measure("flight_count",   t => count(lit(1))),
-    Measure("total_distance", t => sum(t("distance"))),
-    // calc measure: references other measures BY NAME — resolved against the
-    // aggregated DataFrame, no expression-tree surgery (DESIGN §6.1).
-    Measure("avg_distance_per_flight", t => t("total_distance") / t("flight_count")),
+    Measure("flight_count",     t => count(lit(1))),
+    Measure("total_passengers",  t => sum(t("passengers"))),
+    Measure("avg_passengers",    t => t("total_passengers") / t("flight_count")),
   )
 
-flights.groupBy("carrier").aggregate("avg_distance_per_flight").execute(spark)
-// {AA → 125, UA → 225, DL → 325}
+flightsModel.groupBy("carrier").aggregate("flight_count", "avg_passengers").execute.show
 ```
+
+> For a full walkthrough (prerequisites, Maven coordinates, troubleshooting) see **[`docs/getting-started.md`](docs/getting-started.md)**.
+
+Once this runs, continue with [`docs/guide.md`](docs/guide.md) for the narrative walkthrough that explains how the compilation works under the hood.
 
 ## CLI Tools
 
