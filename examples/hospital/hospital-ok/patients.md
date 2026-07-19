@@ -2,8 +2,8 @@
 type: SemanticTable
 title: Patients
 description: Cleansed patient master data
-resource: file:///home/emilio/app/projects/semanticdf/examples/hospital/models/patients.yml
-timestamp: "2026-07-13T16:35:38+00:00"
+resource: file://examples/hospital/models/patients.yml
+timestamp: 2026-07-16T07:42:42Z
 tags: [semantic-table]
 ---
 
@@ -21,12 +21,6 @@ tags: [semantic-table]
 | patient_id | dimension | `patient_id` | Patient ID (primary key) | — |
 | patient_count | measure | `count(1)` | Number of unique patients in the group | — |
 
-# Calculated measures
-
-| name | kind | expr | description | metadata |
-|------|------|------|-------------|----------|
-| patient_count | base | `count(1)` | Number of unique patients in the group | — |
-
 # Examples
 
 A consumer pointed at this catalog can run any of the following MCP `query` payloads:
@@ -43,7 +37,7 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 {"model": "patients", "dimensions": ["carrier"], "measures": ["flight_count"], "order_by": [{"field": "flight_count", "direction": "desc"}], "limit": 10}
 ```
 
-> Run via an MCP client pointed at this catalog. See [mcp-contract.md](./mcp-contract.md) for the full schema.
+> Run via an MCP client pointed at this catalog. See [mcp-contract.md](../../mcp-contract.md) for the full schema.
 
 # Citations
 

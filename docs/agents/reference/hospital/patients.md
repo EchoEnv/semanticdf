@@ -37,7 +37,7 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 {"model": "patients", "dimensions": ["carrier"], "measures": ["flight_count"], "order_by": [{"field": "flight_count", "direction": "desc"}], "limit": 10}
 ```
 
-> Run via an MCP client pointed at this catalog. See [mcp-contract.md](./mcp-contract.md) for the full schema.
+> Run via an MCP client pointed at this catalog. See [mcp-contract.md](../../mcp-contract.md) for the full schema.
 
 # Citations
 
