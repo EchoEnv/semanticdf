@@ -12,9 +12,9 @@ semanticdf-hospital/
 ├── pom.xml
 ├── data/
 │   ├── patients_raw.csv               ← 11 rows with intentional quality issues
-│   ├── patients_clean.csv              ← 8 rows after dedup + normalization
-│   ├── encounters_raw.csv              ← 12 rows referencing duplicate patients
-│   ├── encounters_clean.csv            ← 12 rows, patient_ids remapped to canonical
+│   ├── patients_clean.csv              ← 9 rows after dedup + normalization
+│   ├── encounters_raw.csv              ← 13 rows including a 30-day readmission for P007
+│   ├── encounters_clean.csv            ← 13 rows, patient_ids remapped to canonical
 │   └── diagnoses.csv                   ← 6 ICD-10 reference codes
 ├── models/
 │   ├── patients.yml                   ← cleansed patient model
@@ -56,7 +56,47 @@ You'll see all 5 steps run in sequence:
 | Duplicate MRNs (P001 and P004 both have `MRN-1001`) | Group count > 1 on mrn column | Remap to the canonical patient_id (the lowest) |
 | Missing MRN (P006 has empty MRN) | `mrn IS NULL OR mrn = ''` filter | `coalesce(mrn, "MRN-GEN-" + id)` |
 
-After cleansing: 11 patients → 8 unique patients; all MRNs filled; all names in Title Case.
+After cleansing: 11 patients → 9 unique patients; all MRNs filled; all names in Title Case.
+
+## Sample output
+
+The example prints a stage-by-stage trace via `Logger.info`. Expected output on the demo data:
+
+```
+INFO hospital: ======================================================================
+INFO hospital: Hospital data management + cleansing — full ETL → semantic workflow
+INFO hospital: ======================================================================
+INFO hospital:   raw patients:    11 rows
+INFO hospital:   raw encounters:  13 rows
+INFO hospital:   diagnoses:        6 rows
+INFO hospital: ======================================================================
+INFO hospital: STEP 2: Data quality report
+INFO hospital: ======================================================================
+INFO hospital:   duplicate patients (same name+dob): 1   # 1 group (P001/P003/P004)
+INFO hospital:   rows with missing/empty MRN:        1   # P006
+INFO hospital:   duplicate MRN values:                2   # MRN-1001, MRN-1003
+INFO hospital: ======================================================================
+INFO hospital: STEP 3: Cleanse
+INFO hospital: ======================================================================
+INFO hospital:   raw patients:        11 rows
+INFO hospital:   cleansed patients:   9 rows (after dedup)   # dropped P003, P004
+INFO hospital:   encounters:          13 rows
+INFO hospital: ======================================================================
+INFO hospital: STEP 4: Build semantic models on the cleansed data
+INFO hospital: ======================================================================
+INFO hospital:   loaded models: encounters, patients
+INFO hospital: ======================================================================
+INFO hospital: STEP 5: Queries on the cleansed data
+INFO hospital: ======================================================================
+INFO hospital: --- Q1: Patient demographics (by gender, by insurance) ---
+INFO hospital: --- Q2: Average length of stay (ALOS) by department ---
+INFO hospital: --- Q3: 30-day readmission rate ---
+INFO hospital:   patients with multiple encounters: 2   # P001 (2), P007 (3)
+INFO hospital:   of which had a 30-day readmission:    1   # P007: E012 → E013 = 14 days
+INFO hospital:   30-day readmission rate:             0.50
+```
+
+The 30-day readmission rate is `1 / 2 = 0.50`. P001 has two encounters but they're 31 days apart (just outside the 30-day window). P007 has three encounters — E005 (2024-02-20), E012 (2024-04-18), and the new **E013 (2024-05-02)**, which is **14 days after E012** → triggers `is_readmission = 1` → patient counted as readmitted.
 
 ## What it demonstrates
 
