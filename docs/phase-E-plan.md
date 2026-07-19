@@ -29,9 +29,12 @@ Scala's type system can catch these at compile time. The typeclass pattern adds 
 > **Status (2026-07):** `ResultDecoder[T]` typeclass and `collectAs[T]`
 > terminal shipped in PR `#52`. `ResultDecoder.derive[T]` Scala 2 macro
 > for case classes with primitive fields shipped in PR `#64`.
-> **Remaining:** the `SemanticTable.query[T]: Dataset[T]` shape
-> (Spark `Encoder`-flavored return) — the plan's `query[T]` block
-> below describes the still-deferred piece.
+> **Shipped (v0.1.7):** `SemanticTable.queryAs[T]: Dataset[T]` — a Spark
+> `Encoder`-flavored return type for typed inputs. (Originally named
+> `query[T]` in the plan, renamed to `queryAs[T]` for consistency with
+> `collectAs[T]`.) Bundles `query(...)`'s parameters and adds a typed
+> conversion via the implicit `ResultDecoder[T]` + Spark `Encoder[T]`.
+> 5 new tests in `QueryAsSpec`; 346 library tests pass total.
 
 **The highest-value, lowest-risk addition.** After building and executing the op tree, decode the `DataFrame` into a strongly-typed case class.
 
@@ -190,15 +193,23 @@ site (`st.groupBy("carierr")`), not at the declaration.
 - 11 new tests in `VersionAndValidatorSpec` covering all four YAML blocks. 294 total
   library tests on both Spark 3.5.8 and 4.1.1.
 
+### Done — `queryAs[T]: Dataset[T]` typed bundled query (v0.1.7)
+
+- `queryAs[T](measures, dimensions, where, having, orderBy, limit, timeGrain, timeGrains, timeRange)`
+  bundles the same parameters as `query(...)` and returns a `Dataset[T]`
+  (Spark `Encoder`-flavored). The implicit `ResultDecoder[T]` decodes each
+  row; an explicit `Encoder[T]` (normally `import spark.implicits._`) lets
+  Spark materialize the typed collection.
+- Compile-time safety: if the case class field names or types don't
+  match the result schema, you get a compile error rather than a runtime
+  `AnalysisException` or wrong values.
+- 5 new tests in `QueryAsSpec.scala` cover the case-class path, the
+  `where` filter, the `orderBy` + `limit` ordering, the full params
+  round-trip, and a zero-grouping single-row query.
+- 346 library tests pass (up from 341).
+
 ### What's NOT done from the original plan
 
-- **`E1 — ResultDecoder[T]`: mostly shipped, narrow piece still deferred.** The
-  typeclass + `collectAs[T]` terminal shipped in PR `#52`; macro derivation for
-  case classes with primitive fields shipped in PR `#64`. The narrow piece that
-  remains deferred is the `SemanticTable.query[T]: Dataset[T]` shape — a Spark
-  `Encoder`-flavored return type for typed inputs (the original plan's `query[T]`
-  block below). `Seq[T]` via `collectAs` is the current typed-result story; the
-  `Dataset[T]` variant is await-consumer-demand.
 - **E3 — typed arithmetic DSL** (`divide[N, D, R]` etc.): replaced by `ResultDecoder`-style
   result-typed calcs. Still deferred.
 
