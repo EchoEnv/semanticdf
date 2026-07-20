@@ -48,6 +48,7 @@ private[semanticdf] abstract class SemanticOpVisitor {
     if (stop) { leave(op); return }
     op match {
       case _: SemanticTableOp        => () // leaf: no children
+      case _: SemanticStreamingTableOp => () // leaf: streaming source, no children
       case j: SemanticJoinOp         => visit(j.left); visit(j.right)
       case a: SemanticAggregateOp    => visit(a.source)
       case f: SemanticFilterOp       => visit(f.source)
