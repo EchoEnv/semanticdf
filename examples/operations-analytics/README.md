@@ -47,7 +47,7 @@ You'll see:
 | Per-row conditional measure (`case when`) | Q1 — `on_time_flag` (base) |
 | Calc measure = ratio of two base measures | Q1 — `avg_ship_days`, `on_time_rate` |
 | Per-row aggregate measure (`avg`, `var_samp`) as group-invariant | Q2 — `mean_amount`, `var_amount` (Scala-side) |
-| `Predicate.Gt(typedRef, threshold)` — typed predicate factory | Q2 — `Predicate.Gt(amount, mean + 2*stddev)` |
+| Infix typed predicate `ref > value` (or `===`, `=!=`, `>=`, `<=`, `isin`, ...) | Q2 — `amount > threshold` |
 | Two-step pipeline: compute global stats → filter rows | Q2 |
 
 ## How Q2's anomaly detection works (2-step pattern)
@@ -71,10 +71,12 @@ val mean    = stats.getAs[Double]("mean_amount")
 val stddev  = math.sqrt(stats.getAs[Double]("var_amount"))
 val threshold = mean + 2 * stddev
 
-// Step 2: filter orders using the computed threshold. Predicate.Gt is the
-// typed predicate factory — it takes a typed `FieldRef[Amount]`, not a string.
+// Step 2: filter orders using the computed threshold. The infix form
+// `amount > threshold` is the typed-predicate DSL (import PredicateOps._)
+// — same compile-time check as the verbose `Predicate.Gt(amount, threshold)`,
+// shorter syntax.
 orders
-  .where(Predicate.Gt(amount, threshold))
+  .where(amount > threshold)
   .groupByDimensions(orderId)
   .aggregateMeasures(orderAmount)
   .orderBy(SortKey.desc(orderAmount))

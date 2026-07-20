@@ -1,6 +1,7 @@
 package com.example.windowanalytics
 
 import io.semanticdf._
+import io.semanticdf.PredicateOps._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions._
@@ -151,7 +152,10 @@ object Main {
       flightsWithWindows
         .groupByDimensions(carrier, origin)
         .aggregateMeasures(totalPassengers, flightCount, rankWithinCarrier)
-        .where(Predicate.Le(rankWithinCarrier, 5))
+        // Infix typed predicate — `rankWithinCarrier <= 5` is the typed form of
+        // `Predicate.Le(rankWithinCarrier, 5)`. Brought into scope by
+        // `import io.semanticdf.PredicateOps._` above.
+        .where(rankWithinCarrier <= 5)
         .orderBy(SortKey.asc(carrier), SortKey.asc(rankWithinCarrier))
         .execute
         .show(20, false)
