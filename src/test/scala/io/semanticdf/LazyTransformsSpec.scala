@@ -70,23 +70,43 @@ class LazyTransformsSpec extends AnyFunSuite with BeforeAndAfterEach {
   }
 
   /** Walk the op tree and return the first `SemanticTableOp` (deepest leaf). */
-  private def firstLeaf(op: SemanticOp): SemanticTableOp = op match {
-    case t: SemanticTableOp          => t
-    case SemanticTransformsOp(s, _) => firstLeaf(s)
-    case SemanticFilterOp(s, _)      => firstLeaf(s)
-    case SemanticOrderByOp(s, _)     => firstLeaf(s)
-    case SemanticLimitOp(s, _)       => firstLeaf(s)
-    case SemanticHintOp(s, _, _)     => firstLeaf(s)
-    case j: SemanticJoinOp          => firstLeaf(j.left)  // just the left side
-    case _                          =>
+  private def firstLeaf(op: SemanticOp): SemanticTableOp = {
+    // Use a visitor to walk the op tree; stop at the first leaf.
+    // For joins, the original took only the left subtree. The
+    // visitor's stop flag ends the walk the moment we find a leaf.
+    val collector = new SemanticOpVisitor {
+      private var found: Option[SemanticTableOp] = None
+      def foundOpt: Option[SemanticTableOp] = found
+      override def enter(o: SemanticOp): Unit = o match {
+        case t: SemanticTableOp =>
+          found = Some(t); stop = true
+        case j: SemanticJoinOp =>
+          // The original `firstLeaf(j.left)` short-circuited at the left
+          // subtree; preserve that behavior (don't recurse into j.right).
+          found = Some(firstLeaf(j.left)); stop = true
+        case _ => ()  // keep walking for transforms/filters/orders/limits/hints
+      }
+    }
+    collector.visit(op)
+    collector.foundOpt.getOrElse(
       throw new IllegalStateException(s"Unexpected op: ${op.getClass.getSimpleName}")
+    )
   }
 
   /** The op just below a `SemanticTransformsOp` (or `None` if the root isn't
     * a `SemanticTransformsOp`). Used to assert the op-tree shape. */
-  private def sourceUnderTransforms(op: SemanticOp): Option[SemanticOp] = op match {
-    case t: SemanticTransformsOp => Some(t.source)
-    case _ => None
+  private def sourceUnderTransforms(op: SemanticOp): Option[SemanticOp] = {
+    // Use a visitor to find the first SemanticTransformsOp; stop on match.
+    val collector = new SemanticOpVisitor {
+      private var found: Option[SemanticOp] = None
+      def foundOpt: Option[SemanticOp] = found
+      override def enter(o: SemanticOp): Unit = o match {
+        case t: SemanticTransformsOp => found = Some(t.source); stop = true
+        case _ => ()
+      }
+    }
+    collector.visit(op)
+    collector.foundOpt
   }
 
   test("withTransforms on a single-table model wraps in SemanticTransformsOp (lazy)") {
