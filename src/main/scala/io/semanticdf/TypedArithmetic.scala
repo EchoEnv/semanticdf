@@ -39,23 +39,29 @@ object TypedArithmetic {
 
   /** Typed division. Compiles only when `Numeric[T]`, `Numeric[U]`, and
     * `Numeric[R]` are all in implicit scope (i.e. T, U, R are numeric types).
-    * `String`, `Boolean`, and other non-numeric types fail at compile time. */
+    * `String`, `Boolean`, and other non-numeric types fail at compile time.
+    *
+    * Returns a [[TypedColumn]] (a value class wrapping the underlying
+    * Spark Column). The phantom T/U/R is the static type assertion for
+    * the operands. Implicit conversion to `Column` (via
+    * `TypedColumn.toColumn`) makes the typed form drop-in compatible with
+    * the untyped `SemanticScope => Column` lambda. */
   def divide[T, U, R](a: Column, b: Column)(
       implicit nt: Numeric[T], nu: Numeric[U], nr: Numeric[R]
-  ): Column = a / b
+  ): TypedColumn[R] = new TypedColumn[R](a / b)
 
   /** Typed addition. See [[divide]] for the compile-time semantics. */
   def plus[T, U, R](a: Column, b: Column)(
       implicit nt: Numeric[T], nu: Numeric[U], nr: Numeric[R]
-  ): Column = a + b
+  ): TypedColumn[R] = new TypedColumn[R](a + b)
 
   /** Typed subtraction. */
   def minus[T, U, R](a: Column, b: Column)(
       implicit nt: Numeric[T], nu: Numeric[U], nr: Numeric[R]
-  ): Column = a - b
+  ): TypedColumn[R] = new TypedColumn[R](a - b)
 
   /** Typed multiplication. */
   def multiply[T, U, R](a: Column, b: Column)(
       implicit nt: Numeric[T], nu: Numeric[U], nr: Numeric[R]
-  ): Column = a * b
+  ): TypedColumn[R] = new TypedColumn[R](a * b)
 }

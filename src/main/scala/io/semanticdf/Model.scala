@@ -246,6 +246,50 @@ final case class Measure(
     exprString: Option[String] = None,
 )
 
+/** Companion for [[Measure]] — extends the case class's synthesized
+  * `apply` with a `typed[T]` factory. The typed form lets the user write
+  * `Measure.typed[Double]("name", fn)` where the lambda's return type is
+  * type-checked at compile time. See [[TypedMeasure]] and
+  * [[TypedArithmetic]] for the typed-arithmetic DSL.
+  *
+  * The returned [[Measure]] is the untyped form, so existing call sites
+  * (`.withMeasures(measures: Measure*)`, pattern matching on `Measure`,
+  * etc.) work unchanged. The type parameter `T` is purely a compile-time
+  * check on the lambda body; at runtime, T is erased and the lambda is
+  * bridged via [[TypedMeasure.toMeasure]].
+  *
+  * Note on naming: the original plan called for `Measure[Double](name, fn)`
+  * syntax. Implementing that as a second `apply[T]` overload on this
+  * companion conflicts with the case class's synthesized `apply` when
+  * a literal lambda is passed (Scala 2.13 can't disambiguate the lambda's
+  * parameter type from the two overloads). The `typed` factory method
+  * sidesteps the overload and keeps every existing call site working
+  * unchanged. */
+object Measure {
+  /** Typed measure factory.
+    *
+    * {{{
+    *   import io.semanticdf.TypedArithmetic.divide
+    *
+    *   Measure.typed[Double]("avg_passengers", t =>
+    *     divide[Long, Long, Double](t("total_passengers"), t("flight_count")))
+    * }}}
+    *
+    * The `t` parameter is a [[TypedSemanticScope]]; `t("col_name")`
+    * returns a [[TypedColumn]] carrying the user-declared static type
+    * of the column. Compose with [[TypedArithmetic]] functions for
+    * compile-time type checks on `+`, `-`, `*`, `/`.
+    *
+    * The legacy untyped form `Measure("name", fn)` where `fn: SemanticScope
+    * => Column` continues to work — the case class's synthesized
+    * `apply` is the only `apply` on this companion. */
+  def typed[T](
+      name: String,
+      expr: TypedSemanticScope => TypedColumn[T],
+  ): Measure =
+    TypedMeasure[T](name, expr).toMeasure
+}
+
 /** A per-row transformation applied to the source data at model-load time.
   *
   * Use a `Transform` for per-row logic that doesn't fit a measure's aggregate
