@@ -104,5 +104,16 @@ object PredicateOps {
       * (`Compare.ArrayContains(name, value)` → `array_contains(scope(name), lit(value))`).
       * The column should be an array type; Spark's runtime catches type mismatches. */
     def arrayContains(value: Any): Predicate = Predicate.Compare.ArrayContains(ref.name, value)
+
+    /** `ref isin values` — membership test
+      * (`In(name, values.toSeq, negate = false)` → `scope(name).isin(values: _*)`).
+      * Accepts any `Iterable` (Seq, List, Set, etc.) — converted to a
+      * `Seq[Any]` for the underlying `Predicate.In` case class. */
+    def isin(values: Iterable[Any]): Predicate = Predicate.In(ref.name, values.toSeq, negate = false)
+
+    /** `ref notin values` — negated membership test
+      * (`In(name, values.toSeq, negate = true)` → `!scope(name).isin(values: _*)`).
+      * The natural counterpart of `isin`. */
+    def notin(values: Iterable[Any]): Predicate = Predicate.In(ref.name, values.toSeq, negate = true)
   }
 }

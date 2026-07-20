@@ -91,16 +91,19 @@ list as new concepts land.
   typos at compile time. See `docs/guide.md` for the worked
   walkthrough; see `examples/starter` Q8 for a working example.
 - **Infix typed predicate** — the infix form `carrier === "AA"`,
-  `pax > 500L`, `carrier.isNotNull`, `carrier contains "AB"`,
+  `pax > 500L`, `carrier.isNotNull`, `carrier isin Seq("AA", "DL")`,
+  `carrier notin Seq(...)`, `carrier contains "AB"`,
   `tags arrayContains "vip"`, etc. enabled by the `PredicateOps._`
   import. The form takes any `SemanticField[T]` (the parent of
   `SemanticDimension` and `SemanticMeasure`) and delegates to the
-  underlying `Predicate.Compare` case classes. The field name is
-  read from the typed ref's witness. The verbose form
-  (`Predicate.Eq(carrier, "AA")`) continues to work unchanged. The
-  string-specific ops (`contains`, `startsWith`, `endsWith`) compile
-  to Spark's `Column.contains/startsWith/endsWith`; `arrayContains`
-  compiles to `functions.array_contains`.
+  underlying `Predicate.Compare` / `Predicate.In` case classes. The
+  field name is read from the typed ref's witness. The verbose form
+  (`Predicate.Eq(carrier, "AA")`, `Predicate.In(carrier, Seq(...))`)
+  continues to work unchanged. The string-specific ops
+  (`contains`, `startsWith`, `endsWith`) compile to Spark's
+  `Column.contains/startsWith/endsWith`; `arrayContains` compiles to
+  `functions.array_contains`; `isin` / `notin` compile to
+  `Column.isin(...)` (with a NOT for `notin`).
 
 - **ResultDecoder[T]** — the typeclass that decodes a Spark `Row` into
   a typed value `T`. `collectAs[T]` plumbs a `Seq[T]` from the

@@ -786,6 +786,8 @@ flights.where(origin.isNotNull)       // non-null check
 flights.where(carrier contains "AB")  // string substring
 flights.where(carrier startsWith "A") // string prefix
 flights.where(carrier endsWith "A")   // string suffix
+flights.where(carrier isin Seq("AA", "DL"))  // membership
+flights.where(carrier notin Seq("AA", "DL")) // negated membership
 flights.where(tags arrayContains "vip")  // array membership
 ```
 
