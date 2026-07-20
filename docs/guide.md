@@ -27,7 +27,7 @@ import org.apache.spark.sql.functions._
 
 // 1. SparkSession (omit in your own code if you already have one)
 // `implicit val` so all the .execute / .toDataFrame / .createOrReplaceTempView
-// calls below can omit the argument (PR #81). The explicit `.execute(spark)`
+// calls below can omit the argument. The explicit `.execute(spark)`
 // form still works if you keep `val spark` instead.
 implicit val spark: SparkSession = SparkSession.builder().master("local[2]").getOrCreate()
 import spark.implicits._
@@ -562,11 +562,11 @@ The same `SemanticTable` compiles against different terminals:
   `query(...)` parameters and returns `Dataset[T]` (Spark's typed
   collection) — the one-shot pick when you want a typed result
   in one line.
-- **Streaming** (ADR 0002) — `.toStreamingQuery(spark, opts)`. Same
-  op tree, different terminal. Not yet built; the interface is
-  shaped so adding it is a terminal, not a new API.
+- **Streaming** — `.toStreamingQuery(spark, opts)`. Same op tree,
+  different terminal. Not yet built; the interface is shaped so
+  adding it is a terminal, not a new API.
 
-### `queryAs[T]` — typed one-shot bundle (Phase E1)
+### `queryAs[T]` — typed one-shot bundle
 
 `queryAs[T]` is the typed-flavor sibling of `query(...)`: same
 parameter shape (measures, dimensions, where, having, orderBy,
@@ -612,7 +612,7 @@ Notes:
   resolution find it.
 - The case class must be top-level (not nested inside a method or
   class) for Spark's `newProductEncoder` to find a no-arg constructor.
-- See [`docs/phase-E-plan.md`](phase-E-plan.md) §E1 for the design
+- See [`docs/phase-E-plan.md`](phase-E-plan.md) for the design
   rationale and the macro mechanics.
 
 The construction API (`toSemanticTable(df).withDimensions(...).withMeasures(...)`)
@@ -741,7 +741,7 @@ Other compile-time catches:
   decoders.
 
 For details on why the typeclass pattern was chosen over a richer DSL,
-see `DESIGN.md` §E and `docs/phase-E-plan.md`.
+see `DESIGN.md` and `docs/phase-E-plan.md`.
 
 ---
 
@@ -798,7 +798,7 @@ with plain SQL:
 
 ```scala
 // SparkSession as an implicit so the model's .createOrReplaceTempView()
-// call below can omit the argument (PR #81). The explicit form
+// call below can omit the argument. The explicit form
 // `.createOrReplaceTempView("flights_view")(spark)` still works.
 implicit val spark: SparkSession = SparkSession.builder().master("local[*]").getOrCreate()
 val flights = YamlLoader.load("flights.yml", dataConfig)("flights")

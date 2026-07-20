@@ -45,7 +45,7 @@ Pick one team/use case. Not all consumers are equal at this stage.
 
 ### Bad candidates (for now)
 
-- Streaming workloads (ADR 0002, not built)
+- Streaming workloads (not built)
 - Multi-hop join chains (3+ tables) — edge cases unverified
 - External customers (not ready to expose rough edges externally)
 
@@ -203,7 +203,7 @@ While the consumer is soaking, improve the areas most likely to need work:
 - **Publishing to Maven Central** — that's a later step. First consumer is internal.
 - **Multi-tenant security** — not designed in yet. First consumer should be a single team with shared data access.
 - **Schema evolution** — if their source schema changes, there's no invalidation. That's a future feature.
-- **Streaming** — ADR 0002. Not in scope for first consumer.
+- **Streaming** — not in scope for first consumer.
 
 ---
 

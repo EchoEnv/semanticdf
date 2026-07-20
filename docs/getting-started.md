@@ -140,8 +140,8 @@ flightsModel
 > parameter. If you change step 3's `val spark = ...` to
 > `implicit val spark = ...`, you can call all of the above without the
 > trailing `(spark)` argument. **All eight consumer templates use this
-> form** (since PR #89, v0.1.7). Explicit `.execute(spark)` continues to
-> work — the implicit form is purely a convenience.
+> form**. Explicit `.execute(spark)` continues to work — the implicit
+> form is purely a convenience.
 
 Expected output (sums match the data above):
 

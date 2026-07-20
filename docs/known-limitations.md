@@ -18,7 +18,7 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 
 | Area | Status today | Roadmap |
 |---|---|---|
-| **Execution model** | Batch `DataFrame` terminal | Streaming terminal (ADR 0002) — same op tree, new terminal |
+| **Execution model** | Batch `DataFrame` terminal | Streaming terminal — same op tree, new terminal |
 | **Security model** | Per Spark session (no in-library row-level security) | Pluggable authn/authz adapter (gated on consumer demand) |
 | **Schema evolution** | Caller's responsibility | Drift detection on the wishlist |
 | **Join chains** | `join_one` / `join_many` / `join_cross`, tested up to 2 tables | Multi-hop join testing + collision policy |
@@ -34,12 +34,12 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 ### Batch-only (streaming is shaped but not yet wired)
 
 `toSemanticTable` accepts a batch `DataFrame` today. Structured
-Streaming sources won't work yet. ADR 0002 lays out the design — the
-**same model file** will compile against a streaming terminal once it
+Streaming sources won't work yet. The design is to have the
+**same model file** compile against a streaming terminal once it
 ships; the missing piece is the terminal, not your model definition.
 
 **Workaround today:** Use batch DataFrames.
-**Roadmap:** Streaming terminal (ADR 0002) — same op tree, new terminal.
+**Roadmap:** Streaming terminal — same op tree, new terminal.
 The construction API is already identical for batch and streaming.
 
 ### Per-session security model
