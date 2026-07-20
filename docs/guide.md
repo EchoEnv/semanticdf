@@ -26,7 +26,10 @@ import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
 // 1. SparkSession (omit in your own code if you already have one)
-val spark = SparkSession.builder().master("local[2]").getOrCreate()
+// `implicit val` so all the .execute / .toDataFrame / .createOrReplaceTempView
+// calls below can omit the argument (PR #81). The explicit `.execute(spark)`
+// form still works if you keep `val spark` instead.
+implicit val spark: SparkSession = SparkSession.builder().master("local[2]").getOrCreate()
 import spark.implicits._
 
 // 2. A sample source DataFrame
@@ -745,6 +748,10 @@ consumer (BI tools via the Spark Thrift Server, dbt, etc.), a compiled
 with plain SQL:
 
 ```scala
+// SparkSession as an implicit so the model's .createOrReplaceTempView()
+// call below can omit the argument (PR #81). The explicit form
+// `.createOrReplaceTempView("flights_view")(spark)` still works.
+implicit val spark: SparkSession = SparkSession.builder().master("local[*]").getOrCreate()
 val flights = YamlLoader.load("flights.yml", dataConfig)("flights")
 flights.createOrReplaceTempView("flights_view")  // session-scoped
 
@@ -774,6 +781,12 @@ reflects the change on the next `spark.sql(...)` call (views are
 ### Worked example — notebook workflow
 
 ```scala
+// Set up SparkSession. The model's `.createOrReplaceTempView()` and
+// `.collectAs[T]()` calls below need `(implicit spark: SparkSession)`
+// in scope, so declare spark as `implicit val`.
+implicit val spark: SparkSession = SparkSession.builder().master("local[*]").getOrCreate()
+import spark.implicits._  // for Encoder[T] on case classes (typed bundled queries)
+
 // Cell 1 — load the model
 val orders = YamlLoader.load("orders.yml", dataConfig)("orders")
 orders.createOrReplaceTempView("orders_view")
