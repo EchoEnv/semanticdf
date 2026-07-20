@@ -48,11 +48,29 @@ object StreamingSupport {
     * @param checkpointLocation optional checkpoint path for fault tolerance.
     * @param foreachBatch callback for each micro-batch result. Default no-op.
     */
+  /** Time window spec for windowed aggregation in the streaming terminal
+    * (ADR 0002 stage 2). `column` is the time column to window on; `duration`
+    * is a Spark duration string (e.g., "5 minutes", "1 hour"). The terminal
+    * applies this as `groupBy(window(col(column), duration))` on the streaming
+    * source. */
+  final case class WindowSpec(column: String, duration: String)
+
+  /** Watermark spec for event-time processing in the streaming terminal
+    * (ADR 0002 stage 2). `column` is the event-time column; `delay` is the
+    * allowed lateness (Spark duration string, e.g., "10 minutes"). */
+  final case class WatermarkSpec(column: String, delay: String)
+
   final case class StreamingQueryOptions(
     trigger: Option[Trigger] = None,
     outputMode: String = "append",
     checkpointLocation: Option[String] = None,
     foreachBatch: DataFrame => Unit = _ => (),
+    /** Time window for windowed aggregation. Required when the model uses
+      * `groupBy + aggregate`; otherwise the validator rejects the query. */
+    window: Option[WindowSpec] = None,
+    /** Watermark (event-time lateness). Optional but recommended for any
+      * streaming query that uses event-time windows. */
+    watermark: Option[WatermarkSpec] = None,
   )
 
   /** Thrown when a model uses features the streaming terminal doesn't support
@@ -74,24 +92,12 @@ object StreamingSupport {
     * percent-of-total references during classification.
     */
   object StreamingValidator {
-    def validate(root: SemanticOp): Unit = {
-      val violations = scala.collection.mutable.ListBuffer.empty[String]
-      walk(root, violations)
-      if (violations.nonEmpty) {
-        throw new StreamingUnsupportedError(
-          violations.mkString("; ") +
-          " (see ADR 0002 — only where filters on streaming sources are " +
-          "currently supported; groupBy/aggregate/joints/limits/orderBy/t.all " +
-          "need their respective ADR stages)")
-      }
-    }
-
     /** Full validation including t.all detection. Preferred entry point.
       * The op-tree walk catches groupBy/aggregate/limit/orderBy/joins;
       * the per-measure probe catches t.all(...) usage. */
-    def validate(model: SemanticTable): Unit = {
+    def validate(model: SemanticTable, options: StreamingQueryOptions = StreamingQueryOptions()): Unit = {
       val violations = scala.collection.mutable.ListBuffer.empty[String]
-      walk(model.root, violations)
+      walk(model.root, violations, options)
       // Collect measures via the SemanticTable's allMeasures() (private[semanticdf]).
       // The call is made from inside the same package, so visibility is fine.
       val measures = scala.collection.mutable.ListBuffer.empty[(String, Measure)]
@@ -122,15 +128,23 @@ object StreamingSupport {
     private def walk(
       op: SemanticOp,
       v: scala.collection.mutable.ListBuffer[String],
+      options: StreamingQueryOptions,
     ): Unit = op match {
       case _: SemanticTableOp         => () // batch root: not a streaming model
       case _: SemanticStreamingTableOp => () // streaming root: ok
-      case f: SemanticFilterOp        => walk(f.source, v)  // where: ok
-      case rf: SemanticRowFilterOp    => walk(rf.source, v) // row filter: ok
-      case h: SemanticHintOp          => walk(h.source, v)  // hint: ok
-      case tr: SemanticTransformsOp   => walk(tr.source, v) // transforms: ok
+      case f: SemanticFilterOp        => walk(f.source, v, options)  // where: ok
+      case rf: SemanticRowFilterOp    => walk(rf.source, v, options) // row filter: ok
+      case h: SemanticHintOp          => walk(h.source, v, options)  // hint: ok
+      case tr: SemanticTransformsOp   => walk(tr.source, v, options) // transforms: ok
       case a: SemanticAggregateOp =>
-        v += "groupBy(...).aggregate(...) requires time windows + watermark (ADR 0002 stage 2)"
+        // Windowed aggregation is OK if a WindowSpec is provided (ADR 0002 stage 2).
+        if (options.window.isEmpty) {
+          v += "groupBy(...).aggregate(...) requires window spec (ADR 0002 stage 2)"
+        }
+        // If a window IS specified, we accept the aggregate — the terminal will
+        // translate the groupBy+aggregate into a streaming groupBy(window(...)).agg(...).
+        // We still walk children so any nested ops get checked.
+        walk(a.source, v, options)
       case o: SemanticOrderByOp =>
         v += "orderBy not supported in streaming (ADR 0002 stage 2)"
       case l: SemanticLimitOp =>
