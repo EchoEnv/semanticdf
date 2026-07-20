@@ -1,7 +1,7 @@
 package io.semanticdf
 
 import org.apache.spark.sql.Column
-import org.apache.spark.sql.functions.lit
+import org.apache.spark.sql.functions.{array_contains, lit}
 
 /** Predicate AST for filter expressions (Phase 5, DESIGN §6.5).
   *
@@ -116,6 +116,30 @@ object Predicate {
     final case class Ge(field: String, value: Any) extends Compare {
       override def compile(scope: SemanticScope): Column = scope(field) >= lit(value)
       override def describe: String = s"$field >= $value"
+    }
+
+    /** String substring search: `field contains value`. */
+    final case class Contains(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field).contains(lit(value))
+      override def describe: String = s"$field contains $value"
+    }
+
+    /** String prefix: `field startsWith value`. */
+    final case class StartsWith(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field).startsWith(lit(value))
+      override def describe: String = s"$field starts with $value"
+    }
+
+    /** String suffix: `field endsWith value`. */
+    final case class EndsWith(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = scope(field).endsWith(lit(value))
+      override def describe: String = s"$field ends with $value"
+    }
+
+    /** Array membership: `array_contains(field, value)`. */
+    final case class ArrayContains(field: String, value: Any) extends Compare {
+      override def compile(scope: SemanticScope): Column = array_contains(scope(field), lit(value))
+      override def describe: String = s"array_contains($field, $value)"
     }
   }
 

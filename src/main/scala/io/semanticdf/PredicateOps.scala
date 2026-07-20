@@ -83,5 +83,26 @@ object PredicateOps {
 
     /** `ref.isNotNull` — `IsNull(name, negate = true)`. */
     def isNotNull: Predicate = new Predicate.IsNull(ref.name, negate = true)
+
+    /** `ref contains value` — string substring search
+      * (`Compare.Contains(name, value)` → `scope(name).contains(lit(value))`).
+      * Note: the phantom `T` tag doesn't carry the column's value type,
+      * so `pax contains "5"` compiles (pax is a measure) but fails at
+      * runtime. The value parameter is `Any` to match the rest of the
+      * infix surface. */
+    def contains(value: Any): Predicate = Predicate.Compare.Contains(ref.name, value)
+
+    /** `ref startsWith value` — string prefix
+      * (`Compare.StartsWith(name, value)` → `scope(name).startsWith(lit(value))`). */
+    def startsWith(value: Any): Predicate = Predicate.Compare.StartsWith(ref.name, value)
+
+    /** `ref endsWith value` — string suffix
+      * (`Compare.EndsWith(name, value)` → `scope(name).endsWith(lit(value))`). */
+    def endsWith(value: Any): Predicate = Predicate.Compare.EndsWith(ref.name, value)
+
+    /** `ref arrayContains value` — array membership
+      * (`Compare.ArrayContains(name, value)` → `array_contains(scope(name), lit(value))`).
+      * The column should be an array type; Spark's runtime catches type mismatches. */
+    def arrayContains(value: Any): Predicate = Predicate.Compare.ArrayContains(ref.name, value)
   }
 }
