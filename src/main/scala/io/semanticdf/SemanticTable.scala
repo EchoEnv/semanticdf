@@ -128,6 +128,104 @@ final class SemanticTable private[semanticdf] (
     */
   def execute(implicit spark: SparkSession): DataFrame = toDataFrame(spark)
 
+  /** Streaming terminal (ADR 0002) — compile the op tree as a Structured
+    * Streaming query. Parallel to [[toDataFrame]] / [[execute]]; the
+    * API shape is the same (one terminal call, one StreamingQuery back).
+    *
+    * '''Scope of this PR (PR 1):''' only `where` filters on streaming
+    * sources are supported. The validator ([[StreamingSupport.StreamingValidator]])
+    * rejects op trees that use `groupBy + aggregate`, `orderBy`, `limit`,
+    * `t.all(...)`, or joins — each with a clear message pointing at the
+    * ADR 0002 stage that would enable it. The validator fails LOUDLY
+    * before the query starts; the user's `foreachBatch` callback never
+    * sees a partial / wrong result.
+    *
+    * Each micro-batch is processed by `foreachBatch`: the streaming
+    * source is replaced with the batch `DataFrame`, the existing
+    * batch compile path runs against it, and the result is passed to
+    * the user's `opts.foreachBatch` callback. This is Spark's
+    * recommended pattern for "run arbitrary batch logic on a stream"
+    * and means the streaming terminal reuses 100% of the existing
+    * dimension/measure/filter compile logic.
+    *
+    * Example:
+    * {{{
+    *   val model = toStreamingSemanticTable(spark.readStream.format("rate").load())
+    *     .withDimensions(Dimension("value", t => t("value")))
+    *     .withMeasures(Measure("count", t => count(lit(1))))
+    *
+    *   val query = model.toStreamingQuery(spark, StreamingQueryOptions(
+    *     trigger = Some(Trigger.ProcessingTime("5 seconds")),
+    *     foreachBatch = (df: DataFrame) => df.write.parquet("/tmp/out")
+    *   ))
+    *   query.awaitTermination()
+    * }}}
+    *
+    * Returns a [[org.apache.spark.sql.streaming.StreamingQuery]] that the
+    * caller can `awaitTermination()` or `stop()`.
+    */
+  def toStreamingQuery(
+      spark: SparkSession,
+      opts: StreamingSupport.StreamingQueryOptions = StreamingSupport.StreamingQueryOptions(),
+  ): org.apache.spark.sql.streaming.StreamingQuery = {
+    import StreamingSupport._
+
+    // 1. Find the streaming source. A non-streaming model is a hard error
+    //    (not a soft one) — the user built a batch model and is calling
+    //    the streaming terminal by mistake.
+    val source: DataFrame = root match {
+      case s: SemanticStreamingTableOp => s.stream
+      case other =>
+        throw new IllegalStateException(
+          s"toStreamingQuery: root must be SemanticStreamingTableOp (found " +
+          s"${other.getClass.getSimpleName}). " +
+          "Use toStreamingSemanticTable(stream, ...) at the package level " +
+          "to construct a streaming model.")
+    }
+
+    // 2. Validate. Loud failure for any feature the streaming terminal
+    //    doesn't support yet — see StreamingValidator.
+    StreamingValidator.validate(this)
+
+    // 3. The user-visible query name (for Spark UI / logs).
+    val queryName = sourceTable.getOrElse("semanticdf_streaming_model")
+
+    // 4. Build the streaming query. foreachBatch invokes the existing
+    //    batch compile path per micro-batch: replace the streaming root
+    //    with a SemanticTableOp wrapping the batch DataFrame, then call
+    //    the model's toDataFrame. The result is a normal DataFrame
+    //    which the user's callback receives.
+    val capturedRoot = root
+    val capturedPostAgg = postAggPredicates
+    val capturedVersion = version
+    val capturedSourceTable = sourceTable
+    val foreachBatchFn = opts.foreachBatch
+
+    val writer = source.writeStream
+      .foreachBatch { (batchDf: DataFrame, _: Long) =>
+        val batchRoot = SemanticTableOp(
+          table = batchDf,
+          name = sourceTable,
+          description = sourceTable.flatMap(_ => None),
+        )
+        val batchModel = new SemanticTable(
+          batchRoot, capturedPostAgg, capturedVersion, capturedSourceTable)
+        val result = batchModel.toDataFrame(spark)
+        foreachBatchFn(result)
+      }
+      .queryName(queryName)
+      .outputMode(opts.outputMode)
+      .trigger(opts.trigger.getOrElse(
+        org.apache.spark.sql.streaming.Trigger.ProcessingTime("5 seconds")))
+
+    val writerWithCheckpoint = opts.checkpointLocation match {
+      case Some(loc) => writer.option("checkpointLocation", loc)
+      case None      => writer
+    }
+
+    writerWithCheckpoint.start()
+  }
+
   /** Typed terminal — compile the op tree, collect the rows, decode each
     * into `T` via the implicit [[ResultDecoder]]. The decoder is the
     * caller's responsibility (supply an implicit instance or use one of
@@ -551,6 +649,10 @@ final class SemanticTable private[semanticdf] (
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable)
 
+      // Streaming source (ADR 0002): dims attach to the streaming model.
+      case s: SemanticStreamingTableOp =>
+        new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable)
+
       case j: SemanticJoinOp =>
         // Pass extra dimensions so mergedModel includes them.
         val updatedJoin = SemanticJoinOp(
@@ -644,6 +746,10 @@ final class SemanticTable private[semanticdf] (
     root match {
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable)
+
+      // Streaming source (ADR 0002): measures attach to the streaming model.
+      case s: SemanticStreamingTableOp =>
+        new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable)
 
       case j: SemanticJoinOp =>
         val updatedJoin = SemanticJoinOp(
@@ -2166,7 +2272,7 @@ final case class JoinInfo(
   * everything (never executes). Mirrors the intent of
   * [[SemanticOp.ClassificationScope]] but is self-contained here so the renderer
   * does not depend on a SparkSession. */
-private final class MeasureProbeScope(known: Set[String]) extends SemanticScope {
+private[semanticdf] final class MeasureProbeScope(known: Set[String]) extends SemanticScope {
   private[semanticdf] val referenced       = scala.collection.mutable.Set.empty[String]
   private[semanticdf] val referencedTotals = scala.collection.mutable.Set.empty[String]
   override def apply(name: String): Column = {

@@ -79,4 +79,37 @@ package object semanticdf {
       SemanticTableOp(table, name, description),
       sourceTable = sourceTable,
     )
+
+  /** Construct a [[SemanticTable]] from a streaming source for use with
+    * [[SemanticTable.toStreamingQuery]] (ADR 0002).
+    *
+    * Parallel to [[toSemanticTable]] but for streaming. The `stream` must
+    * come from `spark.readStream` (i.e. `stream.isStreaming` is true).
+    * The model construction (`withDimensions`, `withMeasures`, `where`)
+    * is otherwise identical to the batch path.
+    *
+    * Example:
+    * {{{
+    *   val rate = spark.readStream.format("rate").option("rowsPerSecond", 1).load()
+    *   val model = toStreamingSemanticTable(rate, name = Some("rate"))
+    *     .withDimensions(Dimension("value", t => t("value")))
+    *     .withMeasures(Measure("count", t => count(lit(1))))
+    *   val q = model.toStreamingQuery(spark, StreamingQueryOptions(
+    *     foreachBatch = (df: DataFrame) => df.write.parquet("/tmp/out")))
+    *   q.awaitTermination()
+    * }}}
+    */
+  def toStreamingSemanticTable(
+      stream: DataFrame,
+      name: Option[String] = None,
+      description: Option[String] = None,
+      sourceTable: Option[String] = None,
+  ): SemanticTable = {
+    require(stream.isStreaming,
+      "toStreamingSemanticTable requires a streaming DataFrame (from spark.readStream)")
+    new SemanticTable(
+      SemanticStreamingTableOp(stream, name, description),
+      sourceTable = sourceTable,
+    )
+  }
 }

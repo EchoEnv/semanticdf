@@ -185,6 +185,31 @@ final case class SemanticTableOp(
   override def compile(spark: SparkSession): DataFrame = table
 }
 
+/** A streaming source for the streaming terminal (ADR 0002).
+  *
+  * Wraps a Spark streaming `DataFrame` (from `spark.readStream`).
+  * The compile method returns the streaming DataFrame unchanged —
+  * the actual streaming query is started by the [[SemanticTable.toStreamingQuery]]
+  * terminal via `foreachBatch`, which invokes the existing batch
+  * compile path per micro-batch.
+  *
+  * The op tree is otherwise source-agnostic: dimension/measure lambdas
+  * compile against each micro-batch DataFrame the same way they
+  * compile against a batch source.
+  */
+final case class SemanticStreamingTableOp(
+    stream: DataFrame,
+    name: Option[String] = None,
+    description: Option[String] = None,
+    dimensions: Map[String, Dimension] = Map.empty,
+    measures: Map[String, Measure] = Map.empty,
+) extends SemanticOp {
+  require(stream.isStreaming,
+    "SemanticStreamingTableOp requires a streaming DataFrame (from spark.readStream). " +
+    "Use toStreamingSemanticTable(...) at the package level to construct a streaming model.")
+  override def compile(spark: SparkSession): DataFrame = stream
+}
+
 // ---------------------------------------------------------------------------
 // Phase 4: Join op (DESIGN §7)
 // ---------------------------------------------------------------------------
