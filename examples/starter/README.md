@@ -81,7 +81,8 @@ Loaded 2 models: flights, carriers
 | **Q7** | Window function: `lag(total_passengers, 1) over (... order by flight_date)` for MoM change |
 | **Q8** | Typed query — `groupByDimensions / aggregateMeasures` (compile-time field-ref safety) |
 | **Q9** | Typed predicate — `Predicate.Gt(pax, 500)` (operator kind in the type, not a string) |
-| **Q10** | `queryAs[T]: Dataset[T]` — typed-bundled-query terminal, one-shot case-class result (Phase E1) |
+| **Q10** | `queryAs[T]: Dataset[T]` — typed-bundled-query terminal, one-shot case-class result |
+| **Q11** | `Measure.typed[Double]` + `TypedArithmetic.divide` — calc measure with compile-time type-checked arithmetic (zero runtime overhead, no memory leak) |
 | Schema | `model.schema(spark)` — every dimension and measure as a DataFrame |
 
 See [`examples/window-analytics`](../window-analytics/README.md) for a deeper walkthrough of window functions.

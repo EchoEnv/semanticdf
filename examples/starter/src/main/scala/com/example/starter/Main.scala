@@ -310,6 +310,40 @@ object Main {
       Logger.info(s"  ds is a Dataset[CarrierRow] with ${ds.count} rows — type-safe, no manual decoders.")
 
       // ---------------------------------------------------------------------
+      // 8c. Measure.typed[T] — typed measure factory (compile-time type check)
+      // ---------------------------------------------------------------------
+      // Same shape as Q1 (top carriers by total passengers), but the
+      // measure is built via `Measure.typed[Double]` and the arithmetic
+      // is type-checked via `TypedArithmetic.{divide, plus, minus,
+      // multiply}`. The `t` parameter is a `TypedSemanticScope`; `t("a")`
+      // returns a `TypedColumn[Long]`, and `divide[Long, Long, Double]`
+      // requires implicit `Numeric[Long]` and `Numeric[Long]`. A typo in
+      // the types (e.g. `divide[String, Long, Double]`) fails at compile
+      // time because `String` has no `Numeric` instance.
+      //
+      // The factory returns a plain `Measure` at runtime — works with
+      // `withMeasures(...)` and every downstream consumer unchanged.
+      Logger.info("--- Q11 (typed measure): avg passengers via Measure.typed[Double] ---")
+      import io.semanticdf.TypedArithmetic.{divide => typedDivide}
+      // `t("col")` returns a TypedColumn[Long]; `.column` extracts the
+      // underlying Column. We use the explicit form here rather than the
+      // implicit TypedColumn -> Column conversion so the call site is
+      // self-documenting (the type check happens at `typedDivide[Long,
+      // Long, Double]`, not at the conversion).
+      val flightsWithTypedCalc = flights.withMeasures(
+        Measure.typed[Double]("avg_passengers_typed", t =>
+          typedDivide[Long, Long, Double](t("total_passengers").column, t("flight_count").column)
+        )
+      )
+      flightsWithTypedCalc
+        .groupBy("carrier")
+        .aggregate("avg_passengers_typed")
+        .toDataFrame
+        .orderBy(col("avg_passengers_typed").desc)
+        .show(false)
+      Logger.info("  (avg_passengers_typed uses Measure.typed[Double] — same result as the existing avg_passengers, type-checked at build time)")
+
+      // ---------------------------------------------------------------------
       // 9. Schema introspection — every dimension and measure as a DataFrame
       // ---------------------------------------------------------------------
       Logger.info("--- Model schema (every field, every model) ---")
