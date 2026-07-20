@@ -1,5 +1,178 @@
 # Release notes
 
+
+## v0.1.7 — `queryAs[T]`, internal visitor migration, double-walk fix, docs polish
+
+A **feature + refactor + docs** release. Twenty-one PRs since v0.1.6
+(`#80`–`#101`): the new **`queryAs[T]: Dataset[T]`** typed-bundled-query
+terminal (Phase E1), the visitor-pattern migration across the library and
+tests (a structural cleanup that surfaced a real perf bug now fixed), and
+a doc pass that brings the `queryAs[T]` feature and the implicit-spark
+convention into the user-facing surface for the first time.
+
+Library, MCP server, and CLI are at
+`io.semanticdf:semanticdf_2.13:0.1.7`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.7`, and
+`io.semanticdf:semanticdf-cli_2.13:0.1.7`.
+
+### Library — features
+
+- **#90** — `SemanticTable.queryAs[T](measures, dimensions?, where?, having?,
+  orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)(implicit spark,
+  decoder: ResultDecoder[T], encoder: Encoder[T]): Dataset[T]`. The
+  typed-flavor sibling of `.query(...)`: same parameter shape, but the
+  result is a `Dataset[T]` decoded from the rows via the implicit
+  `ResultDecoder[T]` + Spark `Encoder[T]`. Pair with
+  `ResultDecoder.derive[T]` for case-class witnesses (requires
+  `import scala.language.experimental.macros` at the call site, then
+  `implicit val d: ResultDecoder[MyRow] = ResultDecoder.derive[MyRow]`).
+  Case class must be top-level — Spark's `newProductEncoder` cannot
+  instantiate inner classes. New `QueryAsSpec` (5 tests) covers the
+  case-class path, the tuple-decoder path, every optional parameter,
+  and a zero-grouping single-row query. Phase E1 done. (Phase E3 — the
+  typed arithmetic DSL within calc measures — is the next deferred
+  piece.)
+- **#81** — Implicit `spark: SparkSession` on `SemanticTable` terminals
+  (carried from v0.1.6; the README Quick start and the rest of the user
+  docs now teach the implicit form, which is what all eight consumer
+  templates use).
+
+### Library — internal refactors (visitor migration)
+
+The op-tree walks in the library and tests previously recursed by hand:
+each walker had its own `op match` over the same case classes, and adding
+a new `SemanticOp` subtype meant hunting down every walker. The visitor
+pattern (`SemanticOpVisitor`, with `enter` / `leave` / `stop`) centralizes
+the exhaustiveness check at one place.
+
+- **#91** — Introduce `private[semanticdf] SemanticOpVisitor` and
+  `private[semanticdf] CatalystColumnValidator` (R1 + R2 of the senior
+  design audit). Migrate one walk site (`findAggregate`) as a working
+  example. Add `docs/guide.md` "Advanced — extending the framework"
+  section that documents `SemanticScope` (the public extension point)
+  with a `RecordingScope` worked example.
+- **#92** — Migrate nine parameterless walks in `SemanticTable.scala`
+  to the visitor pattern.
+- **#93** — Migrate the `rootModel` and `unwrap` walks in
+  `SemanticOp.scala` to the visitor pattern.
+- **#94** — Migrate `explainNode` and `collectSchemaFields` (the two
+  walks with per-call parameters like `indent` and `joinSource`) to
+  local recursive helpers, since the straight visitor pattern is awkward
+  when parameters change through the recursion.
+- **#95** — Migrate the test walks in `LazyTransformsSpec` to the
+  visitor pattern, with `foundOpt` def getters since anonymous-class
+  `private var` fields can't be accessed from outer code.
+
+### Library — bug fix
+
+- **#96** — Remove the **double-walk** bug introduced by the visitor
+  migration. The visitor's `visit()` already auto-recurses into all
+  wrapper ops, but the migrated `enter()` methods had kept explicit
+  `visit(src)` calls — every wrapper op walked its sub-tree **twice**.
+  Effects: `allMeasures` / `allDimensions` did wasted work (Map updates
+  are idempotent so the bug was silent); `allFilters` and
+  `allRowFilters` appended to a ListBuffer and so accumulated
+  **duplicates**; the side-effect order of the `allRowFilters` walk
+  was wrong. Fix: remove all explicit `visit(...)` calls from the
+  migrated `enter` methods; switch `allRowFilters` from `enter` to
+  `leave` so the visitor recurses into children BEFORE the wrapper's
+  `leave` runs (preserves the documented "innermost first" order).
+  Net change: −84 / +25 lines. Verified by two new regression tests in
+  `RowFilterWalkSpec` that build models with 3 nested row filters and
+  assert each filter appears exactly once in the plan / `validate()`
+  succeeds.
+
+### MCP server
+
+No source changes; `serverInfo` now reports `0.1.7`.
+
+### CLI
+
+CLI banner now reports `0.1.7`. No behavior change.
+
+### Docs
+
+- **#80** — Hospital demo data: added E013 (P007 follow-up 14 days after
+  E012) so the 30-day readmission rate comes out to `0.50` rather than
+  `0.00`. `examples/hospital/README.md` gets a new "Sample output"
+  section.
+- **#82** — Hospital template migrates to the new implicit-spark
+  pattern.
+- **#84** — Small current-facts sync: test counts 335/407 → 341/413,
+  branch name `master` → `main`, `join_many` "many side" → "both sides",
+  `t.all` cost wording corrected.
+- **#85** — `docs/getting-started.md` (~190 lines): 5-minute
+  paste-and-run consumer setup. Quick-start code in the README now
+  matches the real pattern.
+- **#86** — Repair `docs/guide.md` 5-minute mental model + joins
+  section (the original had an undefined `flightsDf`, a
+  self-contradictory "three terminals" example, and a mis-stated
+  `count * total_spend / 1` calculation).
+- **#87** — Agent onboarding surface: `mcp-contract.md` status v2 → v3,
+  server lifecycle adds `--okf-bundle`, "How this doc changes"
+  redirects to `RELEASE.md`, `semanticdf-mcp/README.md` Status v0.1.6,
+  plus regenerated all 8 OKF bundles to fix the 15 broken
+  `mcp-contract.md` links (now `../../mcp-contract.md`) and
+  machine-local paths.
+- **#88** — Small consistency pass + separate current from historical
+  plans. Migrated `operations-analytics/README.md` Q2 description to
+  match the actual two-step pattern; fixed `telco-analytics/README.md`
+  3-way-join claim; fixed `DESIGN.md` §3, §6.4, §7 stale-deferral
+  claims; added an implicit-terminal-form note to the README API
+  reference.
+- **#89** — Apply the implicit-spark pattern to the remaining six
+  consumer templates (starter, customer-analytics, operations-analytics,
+  pipeline, telco-analytics, window-analytics).
+- **#97** — Pre-release mechanical doc fixes: README Quick start now
+  uses `implicit val spark` so the snippet compiles; README:389
+  broken anchor (single-dash vs. double-dash on em-dash); README:442
+  "what's still deferred" claim corrected (the `Dataset[T]` query
+  variant shipped in this release, not deferred); README API reference
+  gains a `.queryAs[T]` row; test counts 341 → 353, 413 → 425; v0.1.6
+  → v0.1.7 in 9 places; `phase-E-plan.md` test count 346 → 353.
+- **#98** — Surface `queryAs[T]` in the user-facing docs:
+  `docs/GLOSSARY.md` gains a `queryAs[T]` entry under "Type safety";
+  `docs/guide.md` "The terminal" section gets a full worked example
+  (case class + `ResultDecoder.derive` + `Encoder` + the `queryAs[T]`
+  call); `examples/starter` gains **Q10** — the canonical hello-world
+  path for typed-bundled-query, mirroring the same shape as Q1 but
+  decoded into a `case class CarrierRow`; the starter README lists
+  Q8/Q9/Q10 in its "What the queries show" table.
+- **#99** — Show `implicit val spark` in the `guide.md` 5-minute mental
+  model and notebook blocks (lines 26, 748, 781); add a Tip block to
+  `docs/getting-started.md` after step 6 announcing the implicit form
+  and noting that all eight consumer templates use it.
+- **#100** — Remove provenance noise from user-facing docs:
+  `(PR #N)`, `v0.1.7`, `(ADR 0002)`, `(Phase E1)`, `§E1` annotations
+  scattered through README, guide.md, glossary, example code, etc.
+  The principle: docs describe the WHAT, not the WHEN. Git log /
+  `RELEASE.md` / `docs/adr/` are the canonical home for provenance.
+- **#101** — Two more ADR references in the README header that PR #100
+  missed. Final state: no ADR references remain in any user-facing doc
+  (only in `docs/adr/` which IS the ADRs).
+
+### Test count
+
+**425 tests** (353 library + 72 MCP), all green on Spark 3.5.8 (default)
+and Spark 4.1.1 (`-Pspark4`). Up from 413 in v0.1.6:
+- `QueryAsSpec` (5 new tests) for the `queryAs[T]` feature.
+- `SemanticOpTraversalSpec` (5 new tests) for the visitor base class.
+- `ImplicitSparkSpec` (6 new tests) for the implicit-spark feature.
+- `HintOpRegressionSpec` (structurally defended — adding a new
+  `SemanticOp` subtype now updates only the visitor's exhaustive match
+  in `SemanticOpTraversal.scala`; the compiler flags every visitor
+  subclass that needs to handle the new subtype).
+- `RowFilterWalkSpec` (+2 new tests) for the double-walk fix.
+
+### Compatibility
+
+No breaking changes. The visitor migration is internal-only
+(`private[semanticdf]`). `queryAs[T]` is a new public method, additive
+on top of the existing `query(...)`. The implicit-spark feature from
+v0.1.6 is unchanged. No new dependencies; no dep upgrades; no Spark
+API changes.
+
+
 ## v0.1.6 — IDE-Scaladoc, logging consistency, hospital demo, implicit spark
 
 A **feature** release. Seven PRs since v0.1.5 (`#76`–`#82`): the IDE-Scaladoc
