@@ -186,6 +186,7 @@ final class SemanticTable private[semanticdf] (
         case l: SemanticLimitOp           => findStream(l.source)
         case h: SemanticHintOp           => findStream(h.source)
         case tr: SemanticTransformsOp     => findStream(tr.source)
+        case j: SemanticJoinOp           => findStream(j.left).orElse(findStream(j.right))
         case _: SemanticTableOp           => None  // batch root, not a streaming model
         case _                           => None
       }
@@ -195,6 +196,26 @@ final class SemanticTable private[semanticdf] (
           s"(found ${root.getClass.getSimpleName}). " +
           "Use toStreamingSemanticTable(stream, ...) at the package level " +
           "to construct a streaming model."))
+    }
+
+    /** Walk the op tree to find the dimensions declared on the
+      * SemanticStreamingTableOp. Used for static-stream joins to build
+      * the JoinSide for the streaming side. */
+    def findStreamingDimensions(op: SemanticOp): Map[String, Dimension] = op match {
+      case s: SemanticStreamingTableOp => s.dimensions
+      case a: SemanticAggregateOp       => findStreamingDimensions(a.source)
+      case f: SemanticFilterOp          => findStreamingDimensions(f.source)
+      case rf: SemanticRowFilterOp      => findStreamingDimensions(rf.source)
+      case o: SemanticOrderByOp         => findStreamingDimensions(o.source)
+      case l: SemanticLimitOp           => findStreamingDimensions(l.source)
+      case h: SemanticHintOp           => findStreamingDimensions(h.source)
+      case tr: SemanticTransformsOp     => findStreamingDimensions(tr.source)
+      case j: SemanticJoinOp           =>
+        if (StreamingSupport.StreamingValidator.hasStreamingSource(j.left))
+          findStreamingDimensions(j.left)
+        else
+          findStreamingDimensions(j.right)
+      case _ => Map.empty
     }
 
     // 2. Validate. Loud failure for any feature the streaming terminal
@@ -271,6 +292,38 @@ final class SemanticTable private[semanticdf] (
         } else {
           withWatermark.groupBy(groupCols: _*).agg(aggregateColumns.head, aggregateColumns.tail: _*)
         }
+
+      case j: SemanticJoinOp =>
+        // Static-stream join (ADR 0002 stage 3). Identify which side is the
+        // stream (only one side can be a streaming source per the validator).
+        val streamingIsLeft = StreamingSupport.StreamingValidator.hasStreamingSource(j.left)
+        // The static side's root is always a SemanticTableOp (the non-streaming
+        // side of the join). leftRoot/rightRoot are those batch roots.
+        val (staticRoot, staticDimensions) = if (streamingIsLeft) {
+          (j.rightRoot, j.rightRoot.dimensions)
+        } else {
+          (j.leftRoot,  j.leftRoot.dimensions)
+        }
+        val staticDf: DataFrame = staticRoot.table
+        // The streaming side: walk through to find the SemanticStreamingTableOp.
+        // We've already applied watermark to `withWatermark` (the streaming
+        // source after .withWatermark(...)).
+        val streamingDimensions = if (streamingIsLeft) {
+          findStreamingDimensions(j.left)
+        } else {
+          findStreamingDimensions(j.right)
+        }
+        // Build JoinSide instances. The static side is the LEFT of the join;
+        // the streaming side is the RIGHT. The user's `on` lambda is called
+        // with (static, stream) in that order — they can use l/r to mean
+        // whatever they want, but the framework's convention is static=LEFT.
+        val lCaptured = scala.collection.mutable.Map.empty[String, Boolean]
+        val rCaptured = scala.collection.mutable.Map.empty[String, Boolean]
+        val lSide = new JoinSide("static", staticDf, staticDimensions, lCaptured)
+        val rSide = new JoinSide("stream", withWatermark, streamingDimensions, rCaptured)
+        val joinCondition: Column = j.on(lSide, rSide)
+        // Static-stream join: static (LEFT) joins with streaming (RIGHT).
+        staticDf.join(withWatermark, joinCondition, "leftOuter")
 
       case _ =>
         // No groupBy + aggregate in the op tree (or no window). Pass each
@@ -1040,11 +1093,60 @@ final class SemanticTable private[semanticdf] (
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
   ): SemanticTable = {
-    val leftRoot  = requireRoot("join_one (left)")
-    val rightRoot = other.requireRoot("join_one (right)")
+    // We pass `this.root` and `other.root` (the actual op trees) as the
+    // `left`/`right` of the SemanticJoinOp — NOT just the roots. The roots
+    // are stored separately. This is important for the streaming terminal:
+    // when one side is a SemanticStreamingTableOp, the framework needs the
+    // ORIGINAL op (preserving the streaming source info) in `left`/`right`
+    // so the streaming-side detection walks correctly.
+    //
+    // Wrapper ops (Filter, RowFilter, OrderBy, Limit, Hint, Transforms) are
+    // transparent for join purposes: we walk through them to find the root
+    // model (a SemanticTableOp or SemanticStreamingTableOp).
+    val leftOp  = this.root
+    val rightOp = other.root
+    def rootOf(op: SemanticOp): SemanticOp = op match {
+      case t: SemanticTableOp         => t
+      case s: SemanticStreamingTableOp => s
+      // Pre-join row filters and transforms are transparent — unwrap.
+      case rf: SemanticRowFilterOp     => rootOf(rf.source)
+      case tr: SemanticTransformsOp    => rootOf(tr.source)
+      // Query wrappers (filter/orderBy/limit/hint) and aggregate are not
+      // supported as roots for joins — see docs/known-limitations.md.
+      case j: SemanticJoinOp =>
+        throw new IllegalArgumentException(
+          s"join_one: the left side is already a joined table. " +
+            "Multi-hop joins are not supported in this version — see docs/known-limitations.md.")
+      case a: SemanticAggregateOp =>
+        throw new IllegalArgumentException(
+          s"join_one: cannot join after aggregate(). Join tables first, then call groupBy().")
+      case f: SemanticFilterOp => throw queryWrapperError
+      case o: SemanticOrderByOp => throw queryWrapperError
+      case l: SemanticLimitOp   => throw queryWrapperError
+      case h: SemanticHintOp    => throw queryWrapperError
+    }
+    // Helper for the query-wrapper rejection — extracted so the four
+    // cases above share the same error message.
+    def queryWrapperError: IllegalArgumentException =
+      new IllegalArgumentException(
+        s"join_one: the left/right side is a query wrapper (filter/orderBy/limit/hint). " +
+          s"Construct joins from base tables (no query layer above them), then call groupBy() " +
+          s"and aggregate() on the joined model.")
+    val leftUnderlying  = rootOf(leftOp)
+    val rightUnderlying = rootOf(rightOp)
+    val leftRoot  = leftUnderlying match {
+      case t: SemanticTableOp         => t
+      case s: SemanticStreamingTableOp =>
+        SemanticTableOp(s.stream, s.name, s.description, s.dimensions, s.measures)
+    }
+    val rightRoot = rightUnderlying match {
+      case t: SemanticTableOp         => t
+      case s: SemanticStreamingTableOp =>
+        SemanticTableOp(s.stream, s.name, s.description, s.dimensions, s.measures)
+    }
     val join = SemanticJoinOp(
-      left   = leftRoot,
-      right  = rightRoot,
+      left   = leftOp,
+      right  = rightOp,
       on     = on,
       cardinality = JoinCardinality.One,
       leftRoot  = leftRoot,

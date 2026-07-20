@@ -150,7 +150,38 @@ object StreamingSupport {
       case l: SemanticLimitOp =>
         v += "limit not supported in streaming (ADR 0002 stage 2)"
       case j: SemanticJoinOp =>
-        v += "joins not yet supported in streaming (ADR 0002 stage 3)"
+        // Static-stream join (ADR 0002 stage 3) is supported: one side is a
+        // batch source (SemanticTableOp), the other is a streaming source
+        // (SemanticStreamingTableOp). Stream-stream joins are still rejected.
+        val leftIsStream  = hasStreamingSource(j.left)
+        val rightIsStream = hasStreamingSource(j.right)
+        if (!leftIsStream && !rightIsStream) {
+          v += "stream-static join: neither side is a streaming source — " +
+            "the model is fully batch (ADR 0002 stage 3 is for streaming joins)"
+        } else if (leftIsStream && rightIsStream) {
+          v += "stream-stream joins not yet supported in streaming " +
+            "(ADR 0002 stage 3 supports static-stream only; " +
+            "stream-stream requires time bounds + watermarks — future enhancement)"
+        }
+        // Static-stream: OK, the terminal will handle it.
+        // Still walk children for any nested issues.
+        walk(j.left, v, options)
+        walk(j.right, v, options)
+    }
+
+    /** Does the op subtree contain a `SemanticStreamingTableOp`? */
+    private[semanticdf] def hasStreamingSource(op: SemanticOp): Boolean = op match {
+      case _: SemanticStreamingTableOp => true
+      case a: SemanticAggregateOp       => hasStreamingSource(a.source)
+      case f: SemanticFilterOp          => hasStreamingSource(f.source)
+      case rf: SemanticRowFilterOp      => hasStreamingSource(rf.source)
+      case o: SemanticOrderByOp         => hasStreamingSource(o.source)
+      case l: SemanticLimitOp           => hasStreamingSource(l.source)
+      case h: SemanticHintOp           => hasStreamingSource(h.source)
+      case tr: SemanticTransformsOp     => hasStreamingSource(tr.source)
+      case j: SemanticJoinOp           => hasStreamingSource(j.left) || hasStreamingSource(j.right)
+      case _: SemanticTableOp           => false
+      case _                           => false
     }
 
     /** Probe each measure's lambda with a [[MeasureProbeScope]] to detect
