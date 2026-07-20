@@ -717,6 +717,97 @@ the same model you'd point at a streaming source tomorrow.
 
 ---
 
+## Typed field references — declare once, use everywhere
+
+The typed field-reference pattern catches the most common mistake in
+the API: typos in dimension/measure names at the call site. Today
+`model.groupBy("carierr")` is a runtime `AnalysisException`. With
+typed references, `model.groupByDimensions(carrier)` is a compile error
+if `carrier` is declared as a measure (a dimension is required) or
+not declared at all.
+
+### The pattern
+
+Three steps, in this order:
+
+1. **Declare phantom tags** — one per field you want to reference
+   by type. Tags are usually a sealed trait hierarchy in a
+   `Refs` object so the compiler can distinguish dimensions from
+   measures.
+
+2. **Declare implicit witnesses** — the only place a field name is
+   hard-coded. The `name` carried in the witness is the string
+   Spark will see at runtime.
+
+3. **Use the typed refs at every call site** — `groupByDimensions`,
+   `aggregateMeasures`, `SortKey.asc/desc`, `Predicate.Eq/Ne/Gt/...`,
+   infix `===` / `>`, `queryAs[T]`, `Measure.typed[T]`, etc.
+
+```scala
+import io.semanticdf._
+
+object Refs {
+  // Phantom tags — one per field.
+  sealed trait Carrier
+  sealed trait Pax
+  sealed trait AvgPax
+
+  // Implicit witnesses — the *only* place a field name is hard-coded.
+  implicit val carrier: SemanticDimension[Carrier] = SemanticDimension.of[Carrier]("carrier")
+  implicit val pax:     SemanticMeasure[Pax]         = SemanticMeasure.of[Pax]("total_passengers")
+  implicit val avgPax:  SemanticMeasure[AvgPax]      = SemanticMeasure.of[AvgPax]("avg_pax")
+}
+import Refs._
+
+// Use typed refs at every call site. Compile-time catches:
+//   - passing a measure where a dimension is expected
+//   - passing a dimension where a measure is expected
+//   - typos in the implicit declaration (caught at the `implicit val` line)
+flights
+  .groupByDimensions(carrier)        // typed
+  .aggregateMeasures(pax, avgPax)     // typed
+  .where(carrier === "AA")           // infix typed
+  .orderBy(SortKey.desc(pax))         // typed
+  .toDataFrame
+```
+
+### What this catches at compile time
+
+| Mistake | Runtime form | Typed form |
+|---|---|---|
+| `groupBy("carierr")` (typo) | `AnalysisException` at first query | `SemanticDimension[Carierr]` not found — at the implicit declaration line |
+| `groupByDimensions(pax)` (measure where dimension is expected) | Wrong group key; result is wrong | `SemanticMeasure[Pax]` is not a `SemanticDimension` — compile error |
+| `aggregateMeasures(carrier)` (dimension where measure is expected) | Runtime error or wrong result | `SemanticDimension[Carrier]` is not a `SemanticMeasure` — compile error |
+| `where("totall_passengers" > 500)` (typo in measure name) | `UnknownFieldError` at first query | Same — typo is in the `implicit val` declaration |
+
+### What it doesn't catch
+
+- The value passed to a predicate: `pax > "AA"` compiles (the
+  phantom tag `Pax` is unrelated to the Scala value type) because
+  `Predicate` factories accept `Any`. Spark catches the runtime
+  type mismatch.
+- A typo in the YAML field name that the implicit declaration
+  references: `implicit val pax: SemanticMeasure[Pax] =
+  SemanticMeasure.of[Pax]("totall_passengers")` — this would
+  fail at first query, not at compile time. The typed API catches
+  typos in the **usage** of refs, not in the **declaration** (the
+  declaration is still stringly-typed).
+
+### What's still un-typed (and a future enhancement)
+
+The pattern is for **field references** (the field name part of a
+query). The field names are the strings in the `implicit val` lines.
+Everything *else* — the value passed to a predicate, the structure
+of the result schema — is still verified at runtime by Spark.
+
+The natural next step (when there's a concrete user pain point)
+would be a typed-query terminal: `model.executeTyped[(Carrier, Pax,
+AvgPax)]` that returns a `Dataset[(String, Long, Double)]` instead
+of an untyped `DataFrame`. The result column types would be
+compile-time-checked against the typed refs.
+
+---
+
 ## Filters — pre-join hygiene, public `where` for query-time
 
 Two kinds of filter, with different lifetimes:

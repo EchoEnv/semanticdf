@@ -78,6 +78,26 @@ list as new concepts land.
   API (`groupByDimensions(D1, D2)` / `aggregateMeasures(M1, M2)`)
   catches dimension-vs-measure confusion at compile time. Zero runtime
   cost.
+- **Typed field-reference pattern** — the "declare once, use
+  everywhere" pattern for typed field refs. Declare phantom tags
+  (e.g., `sealed trait Carrier`) and implicit witnesses
+  (`implicit val carrier: SemanticDimension[Carrier] =
+  SemanticDimension.of[Carrier]("carrier")`) in a `Refs` object.
+  Then use the typed refs at every call site:
+  `model.groupByDimensions(carrier).aggregateMeasures(pax)`,
+  `SortKey.asc(carrier)`, `where(carrier === "AA")`, etc. The
+  implicit declaration line is the only place a field name is
+  hard-coded. Catches dimension-vs-measure confusion and ref-name
+  typos at compile time. See `docs/guide.md` for the worked
+  walkthrough; see `examples/starter` Q8 for a working example.
+- **Infix typed predicate** — the infix form `carrier === "AA"`,
+  `pax > 500L`, `carrier.isNotNull`, etc. enabled by the
+  `PredicateOps._` import. The form takes any `SemanticField[T]`
+  (the parent of `SemanticDimension` and `SemanticMeasure`) and
+  delegates to the underlying `Predicate` factories. The field name
+  is read from the typed ref's witness. The verbose form
+  (`Predicate.Eq(carrier, "AA")`) continues to work unchanged.
+
 - **ResultDecoder[T]** — the typeclass that decodes a Spark `Row` into
   a typed value `T`. `collectAs[T]` plumbs a `Seq[T]` from the
   DataFrame.
