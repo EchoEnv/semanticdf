@@ -7,7 +7,7 @@ A `SemanticTable` is a deferred, source-agnostic definition that compiles to a S
 `DataFrame` at a batch terminal (`.toDataFrame(spark)` / `.execute(spark)`). It is *not*
 a `DataFrame` itself — it captures *what* you want (dimensions, measures, joins, filters,
 grains) so the engine can decide *how* to compute it. A future streaming terminal would
-reuse the same definition against a different sink (ADR 0002).
+reuse the same definition against a different sink.
 
 ## What problems SemanticDF solves
 
@@ -34,7 +34,7 @@ guarantee that they're asking for the right thing.
   call site rather than at first execution. `ResultDecoder.derive[T]` does the same
   for the *result* side of a query.
 - **One model across batch and (eventually) streaming.** The op tree is source-agnostic;
-  only the execution terminal differs (§4.5, ADR 0002).
+  only the execution terminal differs.
 - **A models → agents bridge.** `okfgen` produces OKF markdown an LLM can read;
   the MCP server exposes the tools (`list_models`, `describe_model`, `query`,
   `introspect`) over stdio or REST.
