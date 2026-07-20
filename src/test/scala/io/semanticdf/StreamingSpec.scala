@@ -45,7 +45,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     // (no groupBy, no aggregate, no orderBy, no limit, no joins).
     // Note: a `.where(Predicate)` would also be accepted, but requires
     // declaring a typed ref. The bare model is the simplest "supported" case.
-    StreamingValidator.validate(model.root)
+    StreamingValidator.validate(model)
     // No throw: where-only is supported.
   }
 
@@ -73,7 +73,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     // Force a limit op into the tree via .limit(...)
     val limited = model.limit(5)
     val ex = intercept[StreamingUnsupportedError] {
-      StreamingValidator.validate(limited.root)
+      StreamingValidator.validate(limited)
     }
     assert(ex.getMessage.contains("limit"),
       s"Expected 'limit' message, got: ${ex.getMessage}")
@@ -85,22 +85,32 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     val model = toStreamingSemanticTable(stream, name = Some("rate"))
     val ordered = model.orderBy("value")
     val ex = intercept[StreamingUnsupportedError] {
-      StreamingValidator.validate(ordered.root)
+      StreamingValidator.validate(ordered)
     }
     assert(ex.getMessage.contains("orderBy"),
       s"Expected 'orderBy' message, got: ${ex.getMessage}")
   }
 
-  test("validator rejects groupBy + aggregate") {
+  test("validator rejects groupBy + aggregate when no window spec") {
     implicit val s: SparkSession = spark
     val stream = s.readStream.format("rate").load()
     val model = toStreamingSemanticTable(stream, name = Some("rate"))
     val grouped = model.groupBy("value").aggregate("count")
     val ex = intercept[StreamingUnsupportedError] {
-      StreamingValidator.validate(grouped.root)
+      StreamingValidator.validate(grouped)  // no window in default options
     }
-    assert(ex.getMessage.contains("groupBy") || ex.getMessage.contains("aggregate"),
-      s"Expected 'groupBy/aggregate' message, got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("groupBy") && ex.getMessage.contains("window"),
+      s"Expected 'groupBy/window' message, got: ${ex.getMessage}")
+  }
+
+  test("validator accepts groupBy + aggregate when a window spec is provided") {
+    implicit val s: SparkSession = spark
+    val stream = s.readStream.format("rate").load()
+    val model = toStreamingSemanticTable(stream, name = Some("rate"))
+      .groupBy("value").aggregate("count")
+    val options = StreamingQueryOptions(window = Some(WindowSpec("timestamp", "5 seconds")))
+    // Should not throw.
+    StreamingValidator.validate(model, options)
   }
 
   test("validator rejects non-streaming root (batch model)") {
@@ -178,5 +188,45 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     val total = collected.sum
     assert(total > 0L,
       s"expected some rows across micro-batches, got total=$total")
+  }
+
+  test("toStreamingQuery: windowed aggregation, end-to-end") {
+    implicit val s: SparkSession = spark
+    val stream = s.readStream
+      .format("rate")
+      .option("rowsPerSecond", 5)
+      .load()
+
+    val model = toStreamingSemanticTable(stream, name = Some("rate_windowed"))
+      .withDimensions(Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")))
+      .withMeasures(Measure("count", t => count(lit(1))))
+      .groupBy("timestamp")
+      .aggregate("count")
+
+    val collected = scala.collection.mutable.ListBuffer.empty[Long]
+    val query = model.toStreamingQuery(s, StreamingQueryOptions(
+      trigger = Some(Trigger.ProcessingTime("500 milliseconds")),
+      // Short window (1 second) so a window can close within the test wait time.
+      window = Some(WindowSpec("timestamp", "1 second")),
+      // Watermark is required for windowed aggregations in append mode.
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+      // Update mode emits per-micro-batch aggregates (so we don't have
+      // to wait for a window to close).
+      outputMode = "update",
+      foreachBatch = (df: DataFrame) => {
+        if (!df.rdd.isEmpty()) collected += df.count()
+      },
+    ))
+
+    // Wait for several micro-batches.
+    Thread.sleep(5000)
+    query.stop()
+    query.awaitTermination()
+
+    assert(collected.nonEmpty,
+      s"expected at least one windowed micro-batch, got 0")
+    val total = collected.sum
+    assert(total > 0L,
+      s"expected some aggregated rows across micro-batches, got total=$total")
   }
 }

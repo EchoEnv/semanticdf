@@ -169,49 +169,138 @@ final class SemanticTable private[semanticdf] (
       opts: StreamingSupport.StreamingQueryOptions = StreamingSupport.StreamingQueryOptions(),
   ): org.apache.spark.sql.streaming.StreamingQuery = {
     import StreamingSupport._
+    import org.apache.spark.sql.functions._
 
     // 1. Find the streaming source. A non-streaming model is a hard error
     //    (not a soft one) — the user built a batch model and is calling
-    //    the streaming terminal by mistake.
-    val source: DataFrame = root match {
-      case s: SemanticStreamingTableOp => s.stream
-      case other =>
+    //    the streaming terminal by mistake. The root may be a
+    //    SemanticAggregateOp wrapping a SemanticStreamingTableOp (when the
+    //    model uses groupBy + aggregate); we walk through to find the source.
+    val source: DataFrame = {
+      def findStream(op: SemanticOp): Option[DataFrame] = op match {
+        case s: SemanticStreamingTableOp => Some(s.stream)
+        case a: SemanticAggregateOp       => findStream(a.source)
+        case f: SemanticFilterOp          => findStream(f.source)
+        case rf: SemanticRowFilterOp      => findStream(rf.source)
+        case o: SemanticOrderByOp         => findStream(o.source)
+        case l: SemanticLimitOp           => findStream(l.source)
+        case h: SemanticHintOp           => findStream(h.source)
+        case tr: SemanticTransformsOp     => findStream(tr.source)
+        case _: SemanticTableOp           => None  // batch root, not a streaming model
+        case _                           => None
+      }
+      findStream(root).getOrElse(
         throw new IllegalStateException(
-          s"toStreamingQuery: root must be SemanticStreamingTableOp (found " +
-          s"${other.getClass.getSimpleName}). " +
+          s"toStreamingQuery: could not find SemanticStreamingTableOp at the root " +
+          s"(found ${root.getClass.getSimpleName}). " +
           "Use toStreamingSemanticTable(stream, ...) at the package level " +
-          "to construct a streaming model.")
+          "to construct a streaming model."))
     }
 
     // 2. Validate. Loud failure for any feature the streaming terminal
     //    doesn't support yet — see StreamingValidator.
-    StreamingValidator.validate(this)
+    StreamingValidator.validate(this, opts)
 
     // 3. The user-visible query name (for Spark UI / logs).
     val queryName = sourceTable.getOrElse("semanticdf_streaming_model")
 
-    // 4. Build the streaming query. foreachBatch invokes the existing
-    //    batch compile path per micro-batch: replace the streaming root
-    //    with a SemanticTableOp wrapping the batch DataFrame, then call
-    //    the model's toDataFrame. The result is a normal DataFrame
-    //    which the user's callback receives.
-    val capturedRoot = root
-    val capturedPostAgg = postAggPredicates
-    val capturedVersion = version
-    val capturedSourceTable = sourceTable
-    val foreachBatchFn = opts.foreachBatch
+    // 4. Apply watermark FIRST (if specified). Watermarks require event-time
+    //    columns, and the watermark must be set before any aggregation.
+    val withWatermark: DataFrame = opts.watermark match {
+      case Some(w) => source.withWatermark(w.column, w.delay)
+      case None    => source
+    }
 
-    val writer = source.writeStream
+    // 5. If the model has a SemanticAggregateOp, translate it to a streaming
+    //    groupBy(window(...)).agg(...) pipeline. This is the TRUE windowed
+    //    aggregation — Spark's streaming engine handles the stateful
+    //    aggregation across micro-batches, with windows. The foreachBatch
+    //    receives the per-window aggregated result.
+    //
+    //    Without a SemanticAggregateOp, the model is filter-only. The
+    //    foreachBatch then runs the existing op tree per batch on the raw
+    //    (watermarked) data.
+    val foreachBatchFn = opts.foreachBatch
+    val queryPlan: DataFrame = root match {
+      case agg @ SemanticAggregateOp(src, keys, measureNames) if opts.window.isDefined =>
+        val w = opts.window.get
+        // Build the streaming aggregation:
+        //   groupBy(window(col(w.column), w.duration), keys*)
+        //   .agg(measure1, measure2, ...)
+        // Each measure's `expr: SemanticScope => Column` is invoked against
+        // a MeasureScope over the watermarked source to produce the aggregate
+        // column. This is a direct translation of the batch compile path's
+        // base-measure pass into the streaming engine.
+        // Collect all declared measures via a visitor (allMeasures() is
+        // private[semanticdf] but we're in the same package).
+        val collectedMeasures = scala.collection.mutable.ListBuffer.empty[(String, Measure)]
+        val measCollector = new SemanticOpVisitor {
+          override def enter(op: SemanticOp): Unit = op match {
+            case t: SemanticTableOp =>
+              t.measures.foreach { case (n, m) => collectedMeasures += ((n, m)) }
+            case s: SemanticStreamingTableOp =>
+              s.measures.foreach { case (n, m) => collectedMeasures += ((n, m)) }
+            case _ => ()
+          }
+        }
+        measCollector.visit(this.root)
+        val measuresByName: Map[String, Measure] = collectedMeasures.toMap
+        val aggregateColumns: Seq[Column] = measureNames.flatMap { name =>
+          measuresByName.get(name) match {
+            case Some(measure) =>
+              val scope = new MeasureScope(
+                df = withWatermark,
+                knownMeasures = collectedMeasures.map(_._1).toSet,
+              )
+              try {
+                Some(measure.expr(scope).as(name))
+              } catch {
+                case _: Throwable => None  // skip measures that can't be translated
+              }
+            case None => None
+          }
+        }
+        val windowCol = window(col(w.column), w.duration)
+        val groupCols: Seq[Column] = windowCol +: keys.filter(_ != w.column).map(col)
+        // Pass the per-window aggregate to the user's foreachBatch via
+        // .foreachBatch — batchDf there is the per-window aggregated result.
+        if (aggregateColumns.isEmpty) {
+          // No aggregate expressions produced (e.g., all measures were calc
+          // references that didn't translate). Fall back to per-batch.
+          withWatermark
+        } else {
+          withWatermark.groupBy(groupCols: _*).agg(aggregateColumns.head, aggregateColumns.tail: _*)
+        }
+
+      case _ =>
+        // No groupBy + aggregate in the op tree (or no window). Pass each
+        // batch's raw data through the existing op tree's compile path.
+        // This is the PR 1 behavior.
+        withWatermark
+    }
+
+    val writer = queryPlan.writeStream
       .foreachBatch { (batchDf: DataFrame, _: Long) =>
-        val batchRoot = SemanticTableOp(
-          table = batchDf,
-          name = sourceTable,
-          description = sourceTable.flatMap(_ => None),
-        )
-        val batchModel = new SemanticTable(
-          batchRoot, capturedPostAgg, capturedVersion, capturedSourceTable)
-        val result = batchModel.toDataFrame(spark)
-        foreachBatchFn(result)
+        // If we did TRUE streaming aggregation, the batch IS the per-window
+        // aggregated result. Pass it through as-is.
+        // If we're in the filter-only path, run the op tree per batch.
+        root match {
+          case _: SemanticAggregateOp if opts.window.isDefined =>
+            // The streaming engine already did the aggregation. batchDf is
+            // the per-window result. No further compilation needed.
+            foreachBatchFn(batchDf)
+          case _ =>
+            // Filter-only path: compile the op tree against the batch.
+            val batchRoot = SemanticTableOp(
+              table = batchDf,
+              name = sourceTable,
+              description = sourceTable.flatMap(_ => None),
+            )
+            val batchModel = new SemanticTable(
+              batchRoot, postAggPredicates, this.version, sourceTable)
+            val result = batchModel.toDataFrame(spark)
+            foreachBatchFn(result)
+        }
       }
       .queryName(queryName)
       .outputMode(opts.outputMode)
