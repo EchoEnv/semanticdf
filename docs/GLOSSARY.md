@@ -92,6 +92,35 @@ list as new concepts land.
   pick when you want a typed result without manually chaining
   `.toDataFrame → .collectAs[T]`. Requires `import spark.implicits._`
   for the encoder on case classes.
+- **TypedColumn[T]** — phantom-typed value-class wrapper around
+  `org.apache.spark.sql.Column`. The phantom `T` encodes the user's
+  static type assertion about the column. Value class — zero
+  allocation in the same compilation unit; one small allocation
+  when crossing the library boundary. Implicit conversion to
+  `Column` makes the typed form drop-in compatible with the
+  untyped `SemanticScope => Column` lambda.
+- **TypedSemanticScope** — the typed equivalent of `SemanticScope`.
+  `t("col_name")` returns a `TypedColumn[T]` carrying the
+  user-declared static type of the column. Used as the `t`
+  parameter in `Measure.typed[T]` lambdas.
+- **Measure.typed[T]** — typed measure factory. Same shape as the
+  `Measure(name, fn)` constructor but the lambda is
+  `TypedSemanticScope => TypedColumn[T]`, so the return type is
+  type-checked at compile time. The typed form lowers to a plain
+  `Measure` at runtime — works with `withMeasures(...)` and every
+  downstream consumer. The phantom `T` is purely a compile-time
+  check; at runtime, `T` is erased.
+- **TypedArithmetic** — typed arithmetic functions for measure
+  lambdas. `TypedArithmetic.divide[T, U, R](a, b)`,
+  `plus[T, U, R]`, `minus[T, U, R]`, `multiply[T, U, R]`. Each
+  function takes two `Column` args + implicit `Numeric[T]` /
+  `Numeric[U]` / `Numeric[R]`; the compiler catches
+  `divide[String, Long, Double]("a", "b")` at build time because
+  `String` has no `Numeric` instance. Returns a `TypedColumn[R]`.
+  The function body is just the corresponding Spark `Column` op
+  (`/`, `+`, `-`, `*`) — type parameters are erased. Zero runtime
+  overhead. Use together with `Measure.typed[T]` for fully
+  type-checked measure lambdas.
 
 ## Validation & error envelopes
 
