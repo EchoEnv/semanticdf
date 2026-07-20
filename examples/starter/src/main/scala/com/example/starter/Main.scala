@@ -1,9 +1,19 @@
 package com.example.starter
 
 import io.semanticdf._
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_number}
+
+/** Result case class for Q10 (queryAs[T]).
+  *
+  * Must be top-level (not nested in Main or a method) so Spark's
+  * newProductEncoder can find a no-arg constructor.
+  *
+  * Field names match the column names the query produces: `carrier` is a
+  * declared dimension; `total_passengers` and `flight_count` are declared
+  * measure names in `models/flights.yml`. */
+case class CarrierRow(carrier: String, total_passengers: Long, flight_count: Long)
 
 /** Starter template for semanticdf — declarative semantic layer on Spark.
   *
@@ -276,6 +286,28 @@ object Main {
         .orderBy(SortKey.desc(pax))                             // typed SortKey
         .toDataFrame
         .show(false)
+
+      // ---------------------------------------------------------------------
+      // 8b. queryAs[T] — typed-bundled-query terminal (Phase E1, v0.1.7)
+      // ---------------------------------------------------------------------
+      // The same shape as Q1, but as a one-shot typed bundle: the op tree is
+      // built, run, and every row is decoded into a case-class `T` via the
+      // implicit `ResultDecoder[T]` and Spark `Encoder[T]`.
+      //
+      // Field names in the case class must match the column names the
+      // query produces. The case class is declared at the top level of the
+      // file (below) because Spark's `newProductEncoder` requires a no-arg
+      // constructor in a class it can reflectively instantiate.
+      Logger.info("--- Q10 (queryAs[T]): Top carriers as a typed Dataset[CarrierRow] ---")
+      import spark.implicits._  // for Encoder[CarrierRow]
+      import scala.language.experimental.macros
+      implicit val carrierRowDecoder: ResultDecoder[CarrierRow] = ResultDecoder.derive[CarrierRow]
+      val ds: Dataset[CarrierRow] = flights.queryAs[CarrierRow](
+        measures  = Seq("total_passengers", "flight_count"),
+        dimensions = Seq("carrier"),
+      )
+      ds.show(false)
+      Logger.info(s"  ds is a Dataset[CarrierRow] with ${ds.count} rows — type-safe, no manual decoders.")
 
       // ---------------------------------------------------------------------
       // 9. Schema introspection — every dimension and measure as a DataFrame

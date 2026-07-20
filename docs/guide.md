@@ -563,6 +563,55 @@ The same `SemanticTable` compiles against different terminals:
   op tree, different terminal. Not yet built; the interface is
   shaped so adding it is a terminal, not a new API.
 
+### `queryAs[T]` — typed one-shot bundle (Phase E1)
+
+`queryAs[T]` is the typed-flavor sibling of `query(...)`: same
+parameter shape (measures, dimensions, where, having, orderBy,
+limit, timeGrain), but the result is a `Dataset[T]` decoded from
+the rows via the implicit `ResultDecoder[T]` + Spark `Encoder[T]`.
+
+```scala
+import io.semanticdf.ResultDecoder
+import org.apache.spark.sql.SparkSession
+
+implicit val spark: SparkSession =
+  SparkSession.builder().master("local[*]").getOrCreate()
+import spark.implicits._  // required for Encoder[T] on case classes
+
+// 1. Define a case class for the result.
+case class CarrierRevenue(carrier: String, total: Long)
+
+// 2. Build a SemanticTable as usual.
+val model = toSemanticTable(flights, name = Some("flights"))
+  .withDimensions(Dimension("carrier", t => t("carrier")))
+  .withMeasures(Measure("flight_count", t => count(lit(1))))
+
+// 3. queryAs[T] bundles query(...) and decodes into a Dataset[T].
+val ds: Dataset[CarrierRevenue] = model.queryAs[CarrierRevenue](
+  measures = Seq("flight_count"),
+  dimensions = Seq("carrier"),
+)
+// ds.collect() -> Array(CarrierRevenue("AA", 10), CarrierRevenue("UA", 10), ...)
+
+// Compile-time safety: a typo in the case class field name fails to
+// derive ResultDecoder[CarrierRevenue] at the call site:
+//   case class CarrierRevenew(carrier: String, total: Long)  // typo
+//   model.queryAs[CarrierRevenew](...)                       // compile error
+```
+
+Notes:
+- Field names in the case class must match the column names the
+  query produces (use `.alias("...")` in the measure lambda, or
+  rely on the default measure name).
+- For the macro: bring `ResultDecoder.derive[T]` into scope via
+  `import scala.language.experimental.macros` at the call site, or
+  import `io.semanticdf.ResultDecoder._` once and let the implicit
+  resolution find it.
+- The case class must be top-level (not nested inside a method or
+  class) for Spark's `newProductEncoder` to find a no-arg constructor.
+- See [`docs/phase-E-plan.md`](phase-E-plan.md) §E1 for the design
+  rationale and the macro mechanics.
+
 The construction API (`toSemanticTable(df).withDimensions(...).withMeasures(...)`)
 is **identical** for batch and streaming; the user only diverges at
 the terminal. The model file you build for a batch source today is
