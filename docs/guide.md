@@ -771,6 +771,32 @@ flights
   .toDataFrame
 ```
 
+The same pattern works for the full infix predicate DSL
+(import `io.semanticdf.PredicateOps._` once):
+
+```scala
+flights.where(carrier === "AA")        // equality
+flights.where(carrier =!= "AA")       // not-equal
+flights.where(pax > 500L)             // greater-than
+flights.where(pax >= 500L)            // greater-or-equal
+flights.where(pax < 500L)             // less-than
+flights.where(pax <= 500L)            // less-or-equal
+flights.where(origin.isNull)          // null check
+flights.where(origin.isNotNull)       // non-null check
+flights.where(carrier contains "AB")  // string substring
+flights.where(carrier startsWith "A") // string prefix
+flights.where(carrier endsWith "A")   // string suffix
+flights.where(carrier isin Seq("AA", "DL"))  // membership
+flights.where(carrier notin Seq("AA", "DL")) // negated membership
+flights.where(tags arrayContains "vip")  // array membership
+```
+
+The string ops compile to Spark's `Column.contains/startsWith/endsWith`
+methods; `arrayContains` compiles to `functions.array_contains`. The
+field name is read from the typed ref's witness at compile time, so
+typos in the dimension/measure name are caught at the
+`implicit val` line.
+
 ### What this catches at compile time
 
 | Mistake | Runtime form | Typed form |
