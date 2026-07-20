@@ -7,7 +7,7 @@ stdio.
 
 ## Status
 
-**All five tools ship as of v0.1.6** (`list_models`, `describe_model`,
+**All five tools ship as of v0.1.4** (`list_models`, `describe_model`,
 `query`, `explain`, `introspect`). 72 MCP tests cover the handler
 logic; the JSON-RPC transport is covered by the upstream MCP SDK. The
 wire contract is the source of truth — this server implements against

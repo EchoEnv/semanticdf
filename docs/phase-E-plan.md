@@ -34,7 +34,7 @@ Scala's type system can catch these at compile time. The typeclass pattern adds 
 > `query[T]` in the plan, renamed to `queryAs[T]` for consistency with
 > `collectAs[T]`.) Bundles `query(...)`'s parameters and adds a typed
 > conversion via the implicit `ResultDecoder[T]` + Spark `Encoder[T]`.
-> 5 new tests in `QueryAsSpec`; 346 library tests pass total.
+> 5 new tests in `QueryAsSpec`; 353 library tests pass total.
 
 **The highest-value, lowest-risk addition.** After building and executing the op tree, decode the `DataFrame` into a strongly-typed case class.
 
@@ -206,7 +206,7 @@ site (`st.groupBy("carierr")`), not at the declaration.
 - 5 new tests in `QueryAsSpec.scala` cover the case-class path, the
   `where` filter, the `orderBy` + `limit` ordering, the full params
   round-trip, and a zero-grouping single-row query.
-- 346 library tests pass (up from 341).
+- 353 library tests pass (up from 341).
 
 ### What's NOT done from the original plan
 

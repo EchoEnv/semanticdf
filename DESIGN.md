@@ -102,7 +102,7 @@ Nothing here is scheduled. Each item lists the concrete signal that pulls it in.
 | Cross-build Scala 2.12 | A consumer is pinned to Spark < 4 (Spark 4 is 2.13-only) |
 | MiMa binary compatibility | There is a downstream user to not break |
 | Maven Central publishing | There is a consumer to publish to |
-| ~~MCP / HTTP tool server~~ **(shipped in v0.1.6)** | — |
+| ~~MCP / HTTP tool server~~ **(shipped in v0.1.4)** | — |
 | MCP / HTTP tool server, chart JSON emitter | A consumer needs LLM-tool or viz integration |
 | LangGraph/LLM agent backend | JVM agent demand; design a clean tool interface (no LangGraph on JVM) |
 
@@ -358,14 +358,14 @@ Reproduced exactly: a `Filter` over a **measure** field is routed post-aggregati
   binary-compat checker are still deferred (ADR 0001) until there is a
   downstream consumer to keep stable.
 
-**pom.xml (planned, abridged; version is illustrative — current release is 0.1.6):**
+**pom.xml (planned, abridged; version is illustrative — current release is 0.1.7):**
 
 ```xml
 <project>
   <modelVersion>4.0.0</modelVersion>
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf_2.13</artifactId>
-  <version>0.1.6</version>
+  <version>0.1.7</version>
   <packaging>jar</packaging>
 
   <properties>
