@@ -229,4 +229,39 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     assert(total > 0L,
       s"expected some aggregated rows across micro-batches, got total=$total")
   }
+
+
+  test("validator rejects stream-stream joins") {
+    implicit val s: SparkSession = spark
+    val stream1 = s.readStream.format("rate").load()
+    val stream2 = s.readStream.format("rate").load()
+    val m1 = toStreamingSemanticTable(stream1, name = Some("s1"))
+      .withDimensions(Dimension("k", t => t("value")))
+    val m2 = toStreamingSemanticTable(stream2, name = Some("s2"))
+      .withDimensions(Dimension("k", t => t("value")))
+    val joined = m1.join_one(m2, (l, r) => l("k") === r("k"))
+    val ex = intercept[StreamingUnsupportedError] {
+      StreamingValidator.validate(joined)
+    }
+    assert(ex.getMessage.contains("stream-stream") || ex.getMessage.contains("stage 3"),
+      s"Expected stream-stream error, got: ${ex.getMessage}")
+  }
+
+  test("validator accepts static-stream join") {
+    implicit val s: SparkSession = spark
+    import s.implicits._
+    val staticRows = s.sparkContext.parallelize(Seq(Row("AA")))
+    val staticSchema = org.apache.spark.sql.types.StructType(Seq(
+      org.apache.spark.sql.types.StructField("key", org.apache.spark.sql.types.StringType)
+    ))
+    val staticData = s.createDataFrame(staticRows, staticSchema)
+    val staticModel = toSemanticTable(staticData, name = Some("static"))
+      .withDimensions(Dimension("k", t => t("key")))
+    val stream = s.readStream.format("rate").load()
+    val streamingModel = toStreamingSemanticTable(stream, name = Some("stream"))
+      .withDimensions(Dimension("k", _ => lit("AA")))
+    val joined = staticModel.join_one(streamingModel, (l, r) => l("k") === r("k"))
+    // Should not throw.
+    StreamingValidator.validate(joined)
+}
 }
