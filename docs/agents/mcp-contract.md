@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.6 with 72 MCP tests. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
+**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing

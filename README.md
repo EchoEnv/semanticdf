@@ -80,7 +80,7 @@ import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit, sum}
 
-val spark = SparkSession.builder().master("local[2]").getOrCreate()
+implicit val spark = SparkSession.builder().master("local[2]").getOrCreate()
 import spark.implicits._
 
 val flights = Seq(
@@ -386,7 +386,7 @@ as a Spark temp view and queried with plain SQL via
 *compiled output* of the model — joins, pre-join filters, and pre-aggregation
 all happen *before* the SQL queries the view.
 
-See [`docs/guide.md` → Notebook escape hatch](docs/guide.md#notebook-escape-hatch-raw-sql-via-a-temp-view)
+See [`docs/guide.md` → Notebook escape hatch](docs/guide.md#notebook-escape-hatch--raw-sql-via-a-temp-view)
 for the worked example, scoping rules, and a multi-cell notebook workflow.
 
 ### Typed queries (compile-time safety)
@@ -439,9 +439,10 @@ val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t(
   single runtime check for arity 5+ (rare in practice).
 - The `FieldRef[T]` carrier is a value class — no allocation on the hot path.
 - See [Phase E — type safety via typeclasses](docs/phase-E-plan.md) for the design rationale
-  and what's still deferred (notably the `Dataset[T]`-shaped query variant — the
-  `ResultDecoder[T]` typeclass itself, including macro derivation for case classes,
-  is shipped as of PR `#64`; see the snippets below).
+  and what's still deferred (the typed-arithmetic DSL of Phase E3 — see
+  [`docs/phase-E-plan.md`](docs/phase-E-plan.md) §E3). The `ResultDecoder[T]`
+  typeclass (including macro derivation for case classes via `ResultDecoder.derive[T]`)
+  and the `queryAs[T]: Dataset[T]` terminal are shipped as of v0.1.7.
 
 ### Typed query results — `ResultDecoder[T]`
 
@@ -536,6 +537,7 @@ for the worked example with sample output.
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses (v0.1.1). |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
+| `.queryAs[T](measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)(implicit spark, decoder: ResultDecoder[T], encoder: Encoder[T]): Dataset[T]` | Typed one-shot bundle. Same shape as `.query` but returns a `Dataset[T]`, decoding rows into a case class via the implicit `ResultDecoder[T]` (use `ResultDecoder.derive[T]` for the case-class witness) and `Encoder[T]` (use `import spark.implicits._`). Compile-time type-safety on result field names and types (PR #90). |
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). With `implicit val spark: SparkSession` in scope, both can be called without the argument (`.toDataFrame` / `.execute`). |
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
@@ -605,7 +607,7 @@ mvn scala:run -DmainClass=com.example.windowanalytics.Main
 
 ## Cross-version compatibility
 
-Verified green on both Spark lines (341 library tests + 72 MCP tests = 413 total,
+Verified green on both Spark lines (353 library tests + 72 MCP tests = 425 total,
 on each):
 
 | Spark | Scala | Status |
@@ -622,7 +624,7 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 - **[`docs/runtime-quickstart.md`](docs/runtime-quickstart.md)** — JDK/Scala/Spark/Maven
   matrix, build & test commands, CLI tools, the four runtime traps (Java-17
   module flags, `scala:run` arg leak, deprecated import, version files).
-- **[`docs/known-limitations.md`](docs/known-limitations.md)** — current scope & guardrails for v0.1.6 (batch-only, per-session security, symmetric join keys, etc.) with workarounds and roadmap hints. Read before first consumer.
+- **[`docs/known-limitations.md`](docs/known-limitations.md)** — current scope & guardrails (batch-only, per-session security, symmetric join keys, etc.) with workarounds and roadmap hints. Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
 - **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
 - **[`docs/feature-roadmap.md`](docs/feature-roadmap.md)** — T1-T4 prioritized list of features and performance improvements. T1 ships next; T2-T4 gated on real consumer demand.
