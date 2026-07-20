@@ -1,3 +1,5 @@
+<p align="center"><img width="256" height="256" alt="ChatGPT Image Jul 21, 2026, 02_57_52 AM" src="https://github.com/user-attachments/assets/77955306-216d-4357-90b2-77e315fa9f1a" /></p>
+
 # SemanticDF
 
 A **semantic layer for Apache Spark** (JVM/Scala), adapted from the
