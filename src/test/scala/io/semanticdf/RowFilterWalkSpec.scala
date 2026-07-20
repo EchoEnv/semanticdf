@@ -220,4 +220,66 @@ class RowFilterWalkSpec extends AnyFunSuite with SparkSessionFixture with Flight
     val name: String = carriers.dimensions("name").name
     assert(name == "name")
   }
+
+  // ---------------------------------------------------------------------------
+  // Walk correctness (no double-walk). After the visitor-pattern migration
+  // (PRs #91, #92), the visitor`'s visit() already auto-recurses into all
+  // wrapper ops. Migrated walks had explicit visit(src) calls inside their
+  // enter methods — a subtle bug that walked each sub-tree twice. Symptom:
+  // walks that appended to a ListBuffer accumulated duplicates; walks that
+  // updated a Map silently re-did work.
+  //
+  // These tests verify the dedup'd result. They build a model with N
+  // pre-join row filters and assert the downstream counts are exactly N.
+  // ---------------------------------------------------------------------------
+
+  test("REGRESSION: 3 nested row filters appear exactly once in explain() output") {
+    val yaml =
+      """
+        |flights:
+        |  table: flights_tbl
+        |  filters:
+        |    f1:
+        |      expr: "origin IS NOT NULL"
+        |    f2:
+        |      expr: "carrier IS NOT NULL"
+        |    f3:
+        |      expr: "passengers > 0"
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |"""
+        .stripMargin
+    val m = YamlLoader.load(writeYaml(yaml), flightsTables)("flights")
+    val plan = m.explain()
+    // Each row filter appears once in the plan — no double-walk duplicates.
+    // Use Regex.quote to escape the parentheses (otherwise (f1) is treated
+    // as a regex capture group of either 'f' or '1', which matches anything).
+    val rf1 = java.util.regex.Pattern.quote("row-filter(f1)").r.findAllIn(plan).length
+    val rf2 = java.util.regex.Pattern.quote("row-filter(f2)").r.findAllIn(plan).length
+    val rf3 = java.util.regex.Pattern.quote("row-filter(f3)").r.findAllIn(plan).length
+    assert(rf1 == 1, s"f1 appears $rf1 times, expected 1. Plan:\n$plan")
+    assert(rf2 == 1, s"f2 appears $rf2 times, expected 1. Plan:\n$plan")
+    assert(rf3 == 1, s"f3 appears $rf3 times, expected 1. Plan:\n$plan")
+  }
+
+  test("REGRESSION: validate() succeeds on a model with multiple row filters (no double-walk crash)") {
+    val yaml =
+      """
+        |flights:
+        |  table: flights_tbl
+        |  filters:
+        |    a: { expr: "origin IS NOT NULL" }
+        |    b: { expr: "carrier IS NOT NULL" }
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |"""
+        .stripMargin
+    val m = YamlLoader.load(writeYaml(yaml), flightsTables)("flights")
+    val r = m.validate()
+    assert(r.isValid, s"Expected valid, got: ${r.errors}")
+  }
 }

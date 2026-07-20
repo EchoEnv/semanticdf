@@ -1402,6 +1402,8 @@ final class SemanticTable private[semanticdf] (
     val allMs        = scala.collection.mutable.LinkedHashMap.empty[String, Measure]
     val allDs        = scala.collection.mutable.LinkedHashMap.empty[String, Dimension]
     val allFilters   = scala.collection.mutable.ListBuffer.empty[SemanticFilterOp]
+    // The visitor's visit() auto-recurses into all wrapper ops, so we don't
+    // need explicit visit(...) calls here. Each op is entered exactly once.
     val collector = new SemanticOpVisitor {
       override def enter(op: SemanticOp): Unit = op match {
         case t: SemanticTableOp =>
@@ -1410,18 +1412,10 @@ final class SemanticTable private[semanticdf] (
         case j: SemanticJoinOp =>
           j.extraMeasures.foreach { case (n, m) => allMs.update(n, m) }
           j.extraDimensions.foreach { case (n, d) => allDs.update(n, d) }
-          visit(j.left); visit(j.right)
-        case a: SemanticAggregateOp     => visit(a.source)
         case f @ SemanticFilterOp(src, _) =>
+          // Record this filter; leave its recursion to the visitor.
           allFilters += f
-          visit(src)
-        // Pre-join row filters are validated at load time by SparkFilterValidator;
-        // here they are transparent — they don't change declared dims/measures.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _)  => visit(src)
-        case SemanticLimitOp(src, _)    => visit(src)
-        case SemanticHintOp(src, _, _)  => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case _ => ()  // Aggregate, RowFilter, OrderBy, Limit, Hint, Transforms: no declared dim/measure/filter work.
       }
     }
     collector.visit(root)
@@ -1655,28 +1649,22 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     * [[Scope.Used]]. */
   private def referencedFields(): Set[String] = {
     val acc = scala.collection.mutable.Set.empty[String]
+    // The visitor's visit() auto-recurses; we collect referenced fields
+    // exactly once per op (no explicit visit() calls here).
     val collector = new SemanticOpVisitor {
       override def enter(op: SemanticOp): Unit = op match {
         case _: SemanticTableOp        => ()  // leaf: do not enumerate declared fields
         case j: SemanticJoinOp =>
           j.extraDimensions.keys.foreach(acc.add)
           j.extraMeasures.keys.foreach(acc.add)
-          visit(j.left); visit(j.right)
         case a: SemanticAggregateOp =>
           a.keys.foreach(acc.add)
           a.measureNames.foreach(acc.add)
-          visit(a.source)
-        case SemanticFilterOp(src, pred) =>
+        case SemanticFilterOp(_, pred) =>
           pred.fields.foreach(acc.add)
-          visit(src)
-        // Pre-join row filters don't reference declared fields in the aggregate sense.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, keys) =>
+        case SemanticOrderByOp(_, keys) =>
           keys.foreach(k => acc.add(SortKey.nameOf(k)))
-          visit(src)
-        case SemanticLimitOp(src, _)     => visit(src)
-        case SemanticHintOp(src, _, _)   => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case _ => ()  // RowFilter, Limit, Hint, Transforms: no field refs.
       }
     }
     collector.visit(st.root)
@@ -1711,15 +1699,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
           t.measures.foreach { case (n, m) => acc.update(n, m) }
         case j: SemanticJoinOp =>
           j.extraMeasures.foreach { case (n, m) => acc.update(n, m) }
-          visit(j.left); visit(j.right)
-        case a: SemanticAggregateOp     => visit(a.source)
-        case SemanticFilterOp(src, _)   => visit(src)
-        // Pre-join row filters do not change declared measures — pass through.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _)  => visit(src)
-        case SemanticLimitOp(src, _)    => visit(src)
-        case SemanticHintOp(src, _, _)  => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case _ => ()  // wrappers (Aggregate, Filter, RowFilter, OrderBy, Limit, Hint, Transforms) carry no declared measures.
       }
     }
     collector.visit(st.root)
@@ -1736,15 +1716,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
           t.dimensions.foreach { case (n, d) => acc.update(n, d) }
         case j: SemanticJoinOp =>
           j.extraDimensions.foreach { case (n, d) => acc.update(n, d) }
-          visit(j.left); visit(j.right)
-        case a: SemanticAggregateOp     => visit(a.source)
-        case SemanticFilterOp(src, _)   => visit(src)
-        // Pre-join row filters do not change declared dimensions — pass through.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _)  => visit(src)
-        case SemanticLimitOp(src, _)    => visit(src)
-        case SemanticHintOp(src, _, _)  => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case _ => ()
       }
     }
     collector.visit(st.root)
@@ -1756,17 +1728,8 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     val acc = scala.collection.mutable.ListBuffer.empty[SemanticJoinOp]
     val collector = new SemanticOpVisitor {
       override def enter(op: SemanticOp): Unit = op match {
-        case j: SemanticJoinOp =>
-          acc += j; visit(j.left); visit(j.right)
-        case a: SemanticAggregateOp     => visit(a.source)
-        case SemanticFilterOp(src, _)   => visit(src)
-        // Pre-join row filters don't add joins — pass through.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _)  => visit(src)
-        case SemanticLimitOp(src, _)    => visit(src)
-        case _: SemanticTableOp         => // leaf
-        case SemanticHintOp(src, _, _)  => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case j: SemanticJoinOp => acc += j
+        case _ => ()
       }
     }
     collector.visit(st.root)
@@ -1778,26 +1741,18 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     // Boolean = "is HAVING (post-agg)" — true iff the filter's own source is an
     // aggregate (matches SemanticFilterOp.compile's runtime check).
     val acc = scala.collection.mutable.ListBuffer.empty[(SemanticFilterOp, Boolean)]
+    // Note: we need to inspect the FILTER's own source to determine
+    // isHaving. The visitor auto-recurses into f.source AFTER enter(f),
+    // so we look at f.source directly here.
     val collector = new SemanticOpVisitor {
       override def enter(op: SemanticOp): Unit = op match {
-        case f @ SemanticFilterOp(src, pred) =>
+        case f @ SemanticFilterOp(src, _) =>
           val isHaving = src match {
             case _: SemanticAggregateOp => true
             case _                      => false
           }
           acc += ((f, isHaving))
-          visit(src)
-        case j: SemanticJoinOp =>
-          visit(j.left); visit(j.right)
-        case a: SemanticAggregateOp    => visit(a.source)
-        // Pre-join row filters are not query-time filters — skip here; rendered
-        // separately as "ROW-FILTER" entries via allRowFilters().
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _) => visit(src)
-        case SemanticLimitOp(src, _)   => visit(src)
-        case _: SemanticTableOp        => // leaf
-        case SemanticHintOp(src, _, _) => visit(src)
-        case SemanticTransformsOp(src, _) => visit(src)  // transforms are transparent
+        case _ => ()
       }
     }
     collector.visit(st.root)
@@ -1808,20 +1763,14 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     * from the root, in op-tree declaration order (innermost first, outermost
     * last). Distinct from [[allFilters]] which returns query-time filters. */
   private[semanticdf] def allRowFilters(): Seq[SemanticRowFilterOp] = {
+    // Use `leave` instead of `enter` so we record innermost-first: the
+    // visitor recurses into the source BEFORE calling leave on the wrapper,
+    // so the deepest SemanticRowFilterOp's leave runs first.
     val acc = scala.collection.mutable.ListBuffer.empty[SemanticRowFilterOp]
     val collector = new SemanticOpVisitor {
-      override def enter(op: SemanticOp): Unit = op match {
-        case rf: SemanticRowFilterOp =>
-          visit(rf.source); acc += rf
-        case j: SemanticJoinOp =>
-          visit(j.left); visit(j.right)
-        case SemanticAggregateOp(src, _, _) => visit(src)
-        case SemanticFilterOp(src, _)       => visit(src)
-        case SemanticOrderByOp(src, _)      => visit(src)
-        case SemanticLimitOp(src, _)        => visit(src)
-        case _: SemanticTableOp             => // leaf
-        case SemanticHintOp(src, _, _)      => visit(src)
-        case SemanticTransformsOp(src, _)   => visit(src)  // transforms are transparent
+      override def leave(op: SemanticOp): Unit = op match {
+        case rf: SemanticRowFilterOp => acc += rf
+        case _ => ()
       }
     }
     collector.visit(st.root)
@@ -2154,15 +2103,7 @@ private class SemanticPlanRenderer(st: SemanticTable, scope: Scope = Scope.All) 
     val collector = new SemanticOpVisitor {
       override def enter(op: SemanticOp): Unit = op match {
         case t: SemanticTableOp => t.name.foreach(acc += _)
-        case j: SemanticJoinOp  => visit(j.left); visit(j.right)
-        case SemanticAggregateOp(src, _, _) => visit(src)
-        case SemanticFilterOp(src, _)       => visit(src)
-        // Pre-join row filters don't change the model identity — pass through.
-        case SemanticRowFilterOp(src, _, _, _, _) => visit(src)
-        case SemanticOrderByOp(src, _)      => visit(src)
-        case SemanticLimitOp(src, _)        => visit(src)
-        case SemanticHintOp(src, _, _)      => visit(src)
-        case SemanticTransformsOp(src, _)   => visit(src)  // transforms are transparent
+        case _ => ()
       }
     }
     collector.visit(st.root)
