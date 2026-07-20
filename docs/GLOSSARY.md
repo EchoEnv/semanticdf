@@ -85,6 +85,13 @@ list as new concepts land.
   `ResultDecoder[Foo]` instance for case classes whose fields are
   String/Int/Long/Double/Float/Boolean/Short/Byte/BigDecimal.
   Compile-time error on unsupported field types.
+- **queryAs[T]** — typed-bundled-query terminal on `SemanticTable`
+  (Phase E1, shipped in v0.1.7). Same shape as `.query(...)` but
+  returns a Spark `Dataset[T]`: the op tree is built, run, and each
+  row is decoded into a `T` via the implicit `ResultDecoder[T]`
+  and Spark `Encoder[T]`. The one-shot pick when you want a typed
+  result without manually chaining `.toDataFrame → .collectAs[T]`.
+  Requires `import spark.implicits._` for the encoder on case classes.
 
 ## Validation & error envelopes
 
