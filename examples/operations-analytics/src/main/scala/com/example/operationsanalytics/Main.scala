@@ -1,6 +1,7 @@
 package com.example.operationsanalytics
 
 import io.semanticdf._
+import io.semanticdf.PredicateOps._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
 
@@ -182,9 +183,11 @@ object Main {
       Logger.info(f"  mean=$mean%.2f  stddev=$stddev%.2f  threshold(2σ)=$threshold%.2f")
 
       // Step 2: per-order classification using the global threshold.
-      // Predicate.Gt is the typed predicate factory — accepts a typed ref.
+      // Infix typed predicate — `amount > threshold` is the typed form of
+      // `Predicate.Gt(amount, threshold)`. Brought into scope by
+      // `import io.semanticdf.PredicateOps._` above.
       orders
-        .where(Predicate.Gt(amount, threshold))
+        .where(amount > threshold)
         .groupByDimensions(orderId)
         .aggregateMeasures(orderAmount)
         .orderBy(SortKey.desc(orderAmount))

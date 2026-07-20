@@ -48,7 +48,7 @@ You'll see:
 | `lag(col, 1) over (orderBy ...)` | Q2 — period-over-period |
 | `sum(col) over (orderBy ... rows between ...)` | Q3 — running total |
 | `safeDivide(num, denom, defaultValue)` | Q2 — guards div-by-zero in the pct-change calc |
-| `where(Predicate.Compare(...))` after window | Q1 — filter on the rank measure |
+| Infix typed predicate `ref <= value` (or `===`, `>`, `isin`, ...) after window | Q1 — `rankWithinCarrier <= 5` |
 | Window measure classified as **calc** (not base) | All — because they reference other measures via `t(...)`, the framework detects the dep and runs them in Pass 2 |
 
 ## Why window measures are added in Scala, not in YAML
