@@ -252,7 +252,7 @@ materializations:
 
 ---
 
-### 2.3 Streaming source support (ADR 0002)
+### 2.3 Streaming source support
 
 **Problem:** The op tree is source-agnostic (DESIGN §4.4), but `SemanticTableOp` only accepts batch `DataFrame`. Streaming sources fail.
 

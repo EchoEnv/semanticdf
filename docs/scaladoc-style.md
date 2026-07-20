@@ -78,8 +78,8 @@ the type signature:
   *                          `"quarter"`, `"month"`, `"week"`, `"day"`,
   *                          `"hour"`, `"minute"`. `None` means no restriction.
   * @param isEventTimestamp `true` if this column is the table's event-time
-  *                          column. Reserved for the future streaming terminal
-  *                          (ADR 0002); no effect in batch today.
+  *                          column. Reserved for the future streaming terminal;
+  *                          no effect in batch today.
   */
 ```
 
@@ -107,7 +107,7 @@ it. Readers who can't find the feature need to know whether it's
 real-but-future or whether they misread the doc.
 
 ```scala
-/** Reserved for the future streaming terminal (ADR 0002); no effect in
+/** Reserved for the future streaming terminal; no effect in
   * batch today. */
 ```
 

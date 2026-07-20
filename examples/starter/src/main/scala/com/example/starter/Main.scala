@@ -64,10 +64,10 @@ object Main {
   def main(args: Array[String]): Unit = {
         //  so call sites can write  /  without
     // passing spark positionally. Backward-compatible: explicit
-    //  still works (PR #81).
+    //  still works.
     // `implicit` so call sites can write `.execute` / `.toDataFrame` without
     // passing spark positionally. Backward-compatible: explicit
-    // `.execute(spark)` still works (PR #81).
+    // `.execute(spark)` still works.
     implicit val spark = SparkSession.builder()
       .master("local[*]")
       .appName("semanticdf-starter")
@@ -288,7 +288,7 @@ object Main {
         .show(false)
 
       // ---------------------------------------------------------------------
-      // 8b. queryAs[T] — typed-bundled-query terminal (Phase E1, v0.1.7)
+      // 8b. queryAs[T] — typed-bundled-query terminal
       // ---------------------------------------------------------------------
       // The same shape as Q1, but as a one-shot typed bundle: the op tree is
       // built, run, and every row is decoded into a case-class `T` via the

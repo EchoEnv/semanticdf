@@ -442,7 +442,7 @@ val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t(
   and what's still deferred (the typed-arithmetic DSL of Phase E3 — see
   [`docs/phase-E-plan.md`](docs/phase-E-plan.md) §E3). The `ResultDecoder[T]`
   typeclass (including macro derivation for case classes via `ResultDecoder.derive[T]`)
-  and the `queryAs[T]: Dataset[T]` terminal are shipped as of v0.1.7.
+  and the `queryAs[T]: Dataset[T]` terminal are shipped.
 
 ### Typed query results — `ResultDecoder[T]`
 
@@ -537,7 +537,7 @@ for the worked example with sample output.
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
 | `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses (v0.1.1). |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
-| `.queryAs[T](measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)(implicit spark, decoder: ResultDecoder[T], encoder: Encoder[T]): Dataset[T]` | Typed one-shot bundle. Same shape as `.query` but returns a `Dataset[T]`, decoding rows into a case class via the implicit `ResultDecoder[T]` (use `ResultDecoder.derive[T]` for the case-class witness) and `Encoder[T]` (use `import spark.implicits._`). Compile-time type-safety on result field names and types (PR #90). |
+| `.queryAs[T](measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)(implicit spark, decoder: ResultDecoder[T], encoder: Encoder[T]): Dataset[T]` | Typed one-shot bundle. Same shape as `.query` but returns a `Dataset[T]`, decoding rows into a case class via the implicit `ResultDecoder[T]` (use `ResultDecoder.derive[T]` for the case-class witness) and `Encoder[T]` (use `import spark.implicits._`). Compile-time type-safety on result field names and types. |
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). With `implicit val spark: SparkSession` in scope, both can be called without the argument (`.toDataFrame` / `.execute`). |
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |

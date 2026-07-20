@@ -589,7 +589,7 @@ list of strings the Introspector emits when it can't classify a field.
 | MCP prompts / resources | Easy server-side, but bloat the contract; add once we know what agents actually need |
 | Arrow result format | JSON is fine under 10k rows; promote to Arrow if benchmarks demand |
 | Multi-tenant / row-level security | Hard; defer until a second real user shows up |
-| Streaming queries (`SemanticOp.Streaming*`) | Library doesn't ship these yet (ADR 0002) |
+| Streaming queries (`SemanticOp.Streaming*`) | Library doesn't ship these yet |
 | Row mutation / writes | All v1 tools are read-only. Writes belong in a separate "admin" MCP namespace |
 
 ---
