@@ -1,5 +1,107 @@
 # Release notes
 
+## v0.1.8 — typed arithmetic, infix predicates, typed-measure factory
+
+A **feature + refactor** release. Six PRs since v0.1.7 (`#103`–`#108`):
+the new `queryAs[T]`-style typed-arithmetic DSL (`TypedArithmetic`
+with `divide` / `plus` / `minus` / `multiply`), a typed-measure
+factory (`Measure.typed[T]`) for compile-time-checked calc
+measures, the infix typed-predicate DSL on `FieldRef`
+(`===` / `=!=` / `>` / `>=` / `<` / `<=` / `isNull` / `isNotNull` /
+`contains` / `startsWith` / `endsWith` / `arrayContains` /
+`isin` / `notin`), and the user-facing docs that surface all of
+the above.
+
+Library, MCP server, and CLI are at
+`io.semanticdf:semanticdf_2.13:0.1.8`,
+`io.semanticdf:semanticdf-mcp_2.13:0.1.8`, and
+`io.semanticdf:semanticdf-cli_2.13:0.1.8`.
+
+### Library — features
+
+- **#103** — `TypedArithmetic.{divide, plus, minus, multiply}` — typed
+  arithmetic ops for measure lambdas. Each function takes two
+  `Column` args + implicit `Numeric[T]` / `Numeric[U]` / `Numeric[R]`
+  and returns a `TypedColumn[R]` (a value class wrapping `Column`).
+  Compiles only when `T` / `U` / `R` are numeric types. The function
+  body is the corresponding Spark `Column` op (`/`, `+`, `-`, `*`) —
+  T / U / R are erased. Zero runtime overhead, no memory leak. Use
+  with the untyped form: `Measure("ratio", t => TypedArithmetic.divide
+  [Long, Long, Double](F.sum(t("a")), F.sum(t("b"))))`.
+
+- **#104** — `Measure.typed[T](name, fn)` — typed-measure factory on the
+  `Measure` companion. Same shape as the case-class `Measure` apply
+  but the lambda is `TypedSemanticScope => TypedColumn[T]`, so the
+  return type is type-checked at compile time. The typed form lowers
+  to a plain `Measure` at runtime — works with `withMeasures(...)`
+  and every downstream consumer unchanged. Composes with
+  `TypedArithmetic` for fully type-checked measure lambdas.
+
+### Library — refactors
+
+- **#106 / #107** — `PredicateOps.FieldRefOps` implicit class — infix
+  typed predicate operators. `carrier === "AA"`, `pax > 500L`,
+  `carrier.isNotNull`, `carrier contains "AB"`, `carrier
+  startsWith "A"`, `carrier endsWith "A"`, `tags arrayContains
+  "vip"`, `carrier isin Seq("AA", "DL")`, `carrier notin
+  Seq(...)`. The implicit class is parameterized on
+  `SemanticField[T]` (the parent of `SemanticDimension` and
+  `SemanticMeasure`), so a single implicit step covers both kinds
+  of refs. Methods delegate to the existing `Predicate.Compare`
+  / `Predicate.In` / `Predicate.IsNull` case classes. The verbose
+  factory form (`Predicate.Eq(...)`, `Predicate.Gt(...)`, etc.)
+  continues to work unchanged.
+
+### MCP server
+
+No source changes; `serverInfo` now reports `0.1.8`.
+
+### CLI
+
+CLI banner now reports `0.1.8`. No behavior change.
+
+### Docs
+
+- **Typed field-reference pattern** — full walkthrough in
+  `docs/guide.md`. The "declare once, use everywhere" pattern
+  (phantom tags in a `Refs` object, implicit witnesses as the only
+  place a field name is hard-coded, typed refs at every call site),
+  with a table of what the pattern catches vs what it doesn't.
+- **Infix typed predicate** — GLOSSARY entry; updated
+  `PredicateOps._` cheat-sheet in `guide.md`.
+- **`queryAs[T]` surface** — already shipped in v0.1.7; carried
+  forward unchanged.
+
+### Examples
+
+- All example templates updated to the infix predicate form
+  (`operations-analytics` Q2, `window-analytics` Q1, plus the
+  starter Q1-Q11). README tables updated to mention the infix
+  form. The other examples (customer-analytics, hospital,
+  pipeline, telco-analytics) don't use semanticdf predicates in
+  their query chains — no change needed.
+
+### Test count
+
+**453 tests** (381 library + 72 MCP), all green on Spark 3.5.8
+(default) and Spark 4.1.1 (`-Pspark4`). Up from 425 in v0.1.7:
+  - `TypedArithmeticSpec` (5 new tests) for the typed arithmetic
+    ops.
+  - `TypedMeasureSpec` (5 new tests) for the typed-measure
+    factory.
+  - `PredicateOpsSpec` (18 new tests across two PRs) for the infix
+    predicate DSL (comparison, null, string, array, membership).
+  - The starter `Q11` exercises the typed measure end-to-end.
+
+### Compatibility
+
+No breaking changes. The visitor migration was internal-only.
+`queryAs[T]`, `Measure.typed[T]`, `TypedArithmetic.*`, and
+`PredicateOps.*` are all additive. The verbose predicate form
+(`Predicate.Eq(...)`, `Predicate.Gt(...)`, etc.) continues to
+work in every existing call site.
+
+
 
 ## v0.1.7 — `queryAs[T]`, internal visitor migration, double-walk fix, docs polish
 

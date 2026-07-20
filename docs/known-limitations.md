@@ -272,4 +272,4 @@ For the architectural decisions behind these deferrals, see
 
 ---
 
-*This document is updated each release. Last updated: v0.1.7.*
+*This document is updated each release. Last updated: v0.1.8.*
