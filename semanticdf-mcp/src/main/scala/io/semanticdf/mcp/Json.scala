@@ -4,6 +4,7 @@ import io.modelcontextprotocol.json.McpJsonMapper
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult
 import io.modelcontextprotocol.spec.McpSchema.JsonSchema
 import io.modelcontextprotocol.spec.McpSchema.TextContent
+import io.semanticdf.{ModelStatus, SemanticTable}
 import java.util.{List => JList}
 
 /** Result envelope — every tool's `data` payload travels inside this.
@@ -101,4 +102,27 @@ object Handlers {
     java.util.Map.of(),
     java.util.Map.of(),
   )
+
+  /** Build a lifecycle warning list for a single model.
+    *
+    * Takes the registry key (canonical name the agent called the model
+    * with) — not `t.name`, because `t.name` may be empty for anonymous
+    * models or differ from the registry key.
+    *
+    * Returns `Nil` for `Published` (the default; no signal). Returns one
+    * display-text string per non-Published status. Wire-stable lowercase
+    * strings intended for LLM consumption; see recipe §4 for the format
+    * contract.
+    *
+    * Used by Query.handle, Query.explain, ListModels.handle (per-model),
+    * DescribeModel.handle. All four call sites share this single helper.
+    */
+  def lifecycleWarnings(modelName: String, status: ModelStatus): List[String] = status match {
+    case ModelStatus.Deprecated =>
+      List(s"model '$modelName' is deprecated")
+    case ModelStatus.Draft =>
+      List(s"model '$modelName' is in draft; shape may change")
+    case ModelStatus.Published =>
+      Nil
+  }
 }

@@ -89,7 +89,7 @@ final class Query(
 
     Envelope.ok(
       data,
-      warnings = Nil,
+      warnings = Handlers.lifecycleWarnings(request.model, t.status),
       meta = io.semanticdf.mcp.Meta(elapsed_ms = elapsed, model = Some(request.model)),
     )
   }
@@ -110,7 +110,11 @@ final class Query(
         timeRange  = request.time_range,
       )
     val planText = st.explainSemantic(spark)
-    Envelope.ok(planText, meta = io.semanticdf.mcp.Meta(model = Some(request.model)))
+    Envelope.ok(
+      planText,
+      warnings = Handlers.lifecycleWarnings(request.model, t.status),
+      meta = io.semanticdf.mcp.Meta(model = Some(request.model)),
+    )
   }
 }
 
