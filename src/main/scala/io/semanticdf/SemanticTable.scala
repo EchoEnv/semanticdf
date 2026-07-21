@@ -253,121 +253,37 @@ final class SemanticTable private[semanticdf] (
     //    (watermarked) data.
     val foreachBatchFn = opts.foreachBatch
     val queryPlan: DataFrame = root match {
-      case agg @ SemanticAggregateOp(source, keys, measureNames) if opts.window.isDefined =>
-        val w = opts.window.get
-        // Build the streaming aggregation:
-        //   groupBy(window(col(w.column), w.duration), keys*)
-        //   .agg(measure1, measure2, ...)
-        // Each measure's `expr: SemanticScope => Column` is invoked against
-        // a MeasureScope over the watermarked source to produce the aggregate
-        // column. This is a direct translation of the batch compile path's
-        // base-measure pass into the streaming engine.
-        // Collect all declared measures via a visitor (allMeasures() is
-        // private[semanticdf] but we're in the same package).
-        val collectedMeasures = scala.collection.mutable.ListBuffer.empty[(String, Measure)]
-        val measCollector = new SemanticOpVisitor {
+      case SemanticAggregateOp(_, keys, _) if opts.window.isDefined =>
+        // Existing path: user wrote `.groupBy(...).aggregate(...)` in the
+        // Scala DSL. Aggregate-op becomes the windowed agg root; keys come
+        // from the op tree.
+        val collected = scala.collection.mutable.ListBuffer.empty[(String, Measure)]
+        new SemanticOpVisitor {
           override def enter(op: SemanticOp): Unit = op match {
-            case t: SemanticTableOp =>
-              t.measures.foreach { case (n, m) => collectedMeasures += ((n, m)) }
-            case s: SemanticStreamingTableOp =>
-              s.measures.foreach { case (n, m) => collectedMeasures += ((n, m)) }
-            case _ => ()
+            case t: SemanticTableOp          => t.measures.foreach { case (n, m) => collected += ((n, m)) }
+            case s: SemanticStreamingTableOp => s.measures.foreach { case (n, m) => collected += ((n, m)) }
+            case _                           => ()
           }
-        }
-        measCollector.visit(this.root)
-        val measuresByName: Map[String, Measure] = collectedMeasures.toMap
-        val aggregateColumns: Seq[Column] = collectedMeasures.toSeq.flatMap { case (name, measure) =>
-          val scope = new MeasureScope(
-            df = withWatermark,
-            knownMeasures = collectedMeasures.map(_._1).toSet,
-          )
-          try {
-            Some(measure.expr(scope).as(name))
-          } catch {
-            case _: Throwable => None  // skip measures that can't be translated against the source
-          }
-        }
-        val windowCol = window(col(w.column), w.duration)
-        val groupCols: Seq[Column] = windowCol +: keys.filter(_ != w.column).map(col)
-        val mainAgg = if (aggregateColumns.isEmpty) {
-          // No aggregate expressions produced (e.g., all measures were calc
-          // references that didn't translate). Fall back to per-batch.
-          withWatermark
-        } else {
-          withWatermark.groupBy(groupCols: _*).agg(aggregateColumns.head, aggregateColumns.tail: _*)
-        }
+        }.visit(this.root)
+        compileWindowedAggregation(
+          sourceWatermarked = withWatermark,
+          groupKeys         = keys,
+          collectedMeasures = collected.toSeq,
+          measuresByName    = collected.toMap,
+          w                 = opts.window.get,
+        )
 
-        // Windowed-totals support. For calc measures that use t.all(...),
-        // build a second aggregation per window (no other group keys) that
-        // gives the per-window grand totals. Cross-join this with the main
-        // aggregation, then evaluate the t.all-using calc measures against
-        // the cross-joined DataFrame.
-        val totalUsers = StreamingSupport.StreamingValidator.findTotalUsers(collectedMeasures.toSeq)
-        if (totalUsers.nonEmpty) {
-          // For per-window totals: the t.all-using calc measures reference
-          // BASE measures like "sum_value". Compute the same base measures,
-          // but per window only (no other group keys), giving the per-window
-          // grand totals. Cross-join with mainAgg to expose totals to the
-          // calc measures via totalsScope.
-
-          // 1. Compute base-measure columns over the source (no totalsResolver).
-          def asBaseColumn(name: String, m: Measure): Option[Column] = {
-            val scope = new MeasureScope(
-              df = withWatermark,
-              knownMeasures = collectedMeasures.map(_._1).toSet,
-            )
-            try Some(m.expr(scope).as(name))
-            catch { case _: Throwable => None }
-          }
-          // 2. Separate base measures from calc (t.all-using) measures.
-          val allNames = collectedMeasures.map(_._1).toSet
-          val baseMeasures = collectedMeasures.toSeq.filterNot { case (name, _) =>
-            val probe = new MeasureProbeScope(allNames)
-            try { measuresByName(name).expr(probe) } catch { case _: Throwable => () }
-            probe.referencedTotals.nonEmpty
-          }
-          val calcUsingAll = collectedMeasures.toSeq.filter { case (name, _) =>
-            val probe = new MeasureProbeScope(allNames)
-            try { measuresByName(name).expr(probe) } catch { case _: Throwable => () }
-            probe.referencedTotals.nonEmpty
-          }
-          val baseCols: Seq[Column] = baseMeasures.flatMap { case (n, m) =>
-            asBaseColumn(n, m).map(c => c.as(n))
-          }
-          if (baseCols.isEmpty || calcUsingAll.isEmpty) {
-            mainAgg
-          } else {
-            // Per-window totals: same base measures, grouped by window only.
-            val totalsCols: Seq[Column] = baseMeasures.flatMap { case (n, m) =>
-              asBaseColumn(n, m).map(c => c.as("__total__" + n))
-            }
-            // Rename the totalsDf window column to avoid clash with mainAgg.
-            val totalsDf = withWatermark
-              .groupBy(windowCol.as("__window__"))
-              .agg(totalsCols.head, totalsCols.tail: _*)
-            // Equi-join on window (both sides come from the same stream,
-            // so the window always matches). We avoid crossJoin here because
-            // two streaming aggregations cannot be cross-joined; an equi-join
-            // is allowed under Spark's stream-stream join semantics.
-            val withTotals = mainAgg.join(
-              org.apache.spark.sql.functions.broadcast(totalsDf),
-              mainAgg("window") === totalsDf("__window__"),
-              "inner")
-            val totalsScope = new MeasureScope(
-              df = withTotals,
-              knownMeasures = allNames,
-              totalsResolver = Some((name: String) => withTotals("__total__" + name)),
-            )
-            val derived: Seq[Column] = calcUsingAll.map { case (name, measure) =>
-              measure.expr(totalsScope).as(name)
-            }
-            withTotals.select(
-              (withTotals.columns.map(col) ++ derived): _*
-            )
-          }
-        } else {
-          mainAgg
-        }
+      case s: SemanticStreamingTableOp if opts.window.isDefined && opts.groupKeys.nonEmpty =>
+        // New path: a streaming source root with group keys declared in the
+        // operator's `StreamingConfig`. Same pipeline as the aggregate-op
+        // case — only the source of (groupKeys, collectedMeasures) differs.
+        compileWindowedAggregation(
+          sourceWatermarked = withWatermark,
+          groupKeys         = opts.groupKeys,
+          collectedMeasures = s.measures.toSeq,
+          measuresByName    = s.measures,
+          w                 = opts.window.get,
+        )
 
       case j: SemanticJoinOp =>
         // Static-stream join. Identify which side is the
@@ -1869,7 +1785,8 @@ final class SemanticTable private[semanticdf] (
     * wrappers (where/orderBy/limit/row-filter). Used by the catalog accessors
     * (`dimensions`, `measures`, `findDimension`, `findMeasure`). */
   private def resolveRootModel: MergedSemanticModel = root match {
-    case t: SemanticTableOp => MergedSemanticModel(t.dimensions, t.measures, t.name, t.description)
+    case t: SemanticTableOp          => MergedSemanticModel(t.dimensions, t.measures, t.name, t.description)
+    case s: SemanticStreamingTableOp => MergedSemanticModel(s.dimensions, s.measures, s.name, s.description)
     case j: SemanticJoinOp  => j.mergedModel
     case SemanticAggregateOp(src, _, _) =>
       new SemanticTable(src).resolveRootModel
@@ -1881,6 +1798,139 @@ final class SemanticTable private[semanticdf] (
     case SemanticHintOp(src, _, _) => new SemanticTable(src).resolveRootModel
     // Transforms are transparent — they don't change the declared model.
     case SemanticTransformsOp(src, _) => new SemanticTable(src).resolveRootModel
+  }
+
+  /** Build the streaming windowed-aggregation pipeline that the
+    * `foreachBatch` callback receives as `batchDf`.
+    *
+    * Used by both the `SemanticAggregateOp + window` case (existing
+    * path: the user wrote `.groupBy(...).aggregate(...)` in the Scala DSL)
+    * AND the new `SemanticStreamingTableOp + window + groupKeys` case
+    * (new path: a YAML-declared streaming model whose group keys live in
+    * the operator's `StreamingConfig`). Both paths share the same windowed
+    * aggregation + windowed-totals cross-join algorithm so behavior is
+    * identical regardless of whether grouping was declared in the model
+    * or in the operator config.
+    *
+    * @param sourceWatermarked the streaming source with `.withWatermark(...)`
+    *                          applied (if a watermark is configured).
+    * @param groupKeys         additional source-column group keys to add to
+    *                          `groupBy` alongside the window column. The
+    *                          window column is filtered out if it appears
+    *                          here (deduplication).
+    * @param collectedMeasures all measures declared on the model that
+    *                          need to be evaluated (already collected by
+    *                          the caller — visitor-walked for the
+    *                          aggregate-op case, direct from the streaming
+    *                          op's `measures` field for the streaming-root
+    *                          case).
+    * @param measuresByName    lookup of measure name → measure. Used by
+    *                          the totals-probe step that distinguishes
+    *                          base measures from calc measures that
+    *                          reference `t.all(...)`.
+    * @param w                 the window spec (column + duration).
+    * @return the compiled streaming aggregation `DataFrame` whose columns
+    *         include `window`, the additional group keys, and the
+    *         computed measures (including any `t.all(...)-using calc
+    *         measures`).
+    */
+  private def compileWindowedAggregation(
+      sourceWatermarked: DataFrame,
+      groupKeys: Seq[String],
+      collectedMeasures: Seq[(String, Measure)],
+      measuresByName: Map[String, Measure],
+      w: StreamingSupport.WindowSpec,
+  ): DataFrame = {
+    import org.apache.spark.sql.functions._
+    // 1. Compute one aggregate column per declared measure. Each measure's
+    //    `expr: SemanticScope => Column` is invoked against a MeasureScope
+    //    over the watermarked source to produce the aggregate column.
+    val aggregateColumns: Seq[Column] = collectedMeasures.flatMap { case (name, measure) =>
+      val scope = new MeasureScope(
+        df = sourceWatermarked,
+        knownMeasures = collectedMeasures.map(_._1).toSet,
+      )
+      try {
+        Some(measure.expr(scope).as(name))
+      } catch {
+        case _: Throwable => None  // skip measures that can't be translated against the source
+      }
+    }
+    val windowCol = window(col(w.column), w.duration)
+    val groupCols: Seq[Column] = windowCol +: groupKeys.filter(_ != w.column).map(col)
+    val mainAgg = if (aggregateColumns.isEmpty) {
+      // No aggregate expressions produced (e.g., all measures were calc
+      // references that didn't translate). Fall back to per-batch.
+      sourceWatermarked
+    } else {
+      sourceWatermarked.groupBy(groupCols: _*).agg(aggregateColumns.head, aggregateColumns.tail: _*)
+    }
+
+    // 2. Windowed-totals support. For calc measures that use t.all(...),
+    //    build a second aggregation per window (no other group keys) that
+    //    gives the per-window grand totals. Cross-join this with the main
+    //    aggregation, then evaluate the t.all-using calc measures against
+    //    the cross-joined DataFrame.
+    val totalUsers = StreamingSupport.StreamingValidator.findTotalUsers(collectedMeasures)
+    if (totalUsers.isEmpty) {
+      mainAgg
+    } else {
+      // For per-window totals: the t.all-using calc measures reference
+      // BASE measures like "sum_value". Compute the same base measures,
+      // but per window only (no other group keys), giving the per-window
+      // grand totals. Cross-join with mainAgg to expose totals to the
+      // calc measures via totalsScope.
+      def asBaseColumn(name: String, m: Measure): Option[Column] = {
+        val scope = new MeasureScope(
+          df = sourceWatermarked,
+          knownMeasures = collectedMeasures.map(_._1).toSet,
+        )
+        try Some(m.expr(scope).as(name))
+        catch { case _: Throwable => None }
+      }
+      val allNames = collectedMeasures.map(_._1).toSet
+      val baseMeasures = collectedMeasures.filterNot { case (name, _) =>
+        val probe = new MeasureProbeScope(allNames)
+        try { measuresByName(name).expr(probe) } catch { case _: Throwable => () }
+        probe.referencedTotals.nonEmpty
+      }
+      val calcUsingAll = collectedMeasures.filter { case (name, _) =>
+        val probe = new MeasureProbeScope(allNames)
+        try { measuresByName(name).expr(probe) } catch { case _: Throwable => () }
+        probe.referencedTotals.nonEmpty
+      }
+      if (baseMeasures.isEmpty || calcUsingAll.isEmpty) {
+        mainAgg
+      } else {
+        // Per-window totals: same base measures, grouped by window only.
+        val totalsCols: Seq[Column] = baseMeasures.flatMap { case (n, m) =>
+          asBaseColumn(n, m).map(c => c.as("__total__" + n))
+        }
+        // Rename the totalsDf window column to avoid clash with mainAgg.
+        val totalsDf = sourceWatermarked
+          .groupBy(windowCol.as("__window__"))
+          .agg(totalsCols.head, totalsCols.tail: _*)
+        // Equi-join on window (both sides come from the same stream,
+        // so the window always matches). We avoid crossJoin here because
+        // two streaming aggregations cannot be cross-joined; an equi-join
+        // is allowed under Spark's stream-stream join semantics.
+        val withTotals = mainAgg.join(
+          broadcast(totalsDf),
+          mainAgg("window") === totalsDf("__window__"),
+          "inner")
+        val totalsScope = new MeasureScope(
+          df = withTotals,
+          knownMeasures = allNames,
+          totalsResolver = Some((name: String) => withTotals("__total__" + name)),
+        )
+        val derived: Seq[Column] = calcUsingAll.map { case (name, measure) =>
+          measure.expr(totalsScope).as(name)
+        }
+        withTotals.select(
+          (withTotals.columns.map(col) ++ derived): _*
+        )
+      }
+    }
   }
 
   override def toString: String = s"SemanticTable(${root.getClass.getSimpleName})"
