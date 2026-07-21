@@ -71,6 +71,22 @@ object StreamingSupport {
     /** Watermark (event-time lateness). Optional but recommended for any
       * streaming query that uses event-time windows. */
     watermark: Option[WatermarkSpec] = None,
+    /** Additional group keys when windowed-aggregation is run against a
+      * streaming source WITHOUT an explicit SemanticAggregateOp in the op
+      * tree (e.g., a YAML-loaded streaming model where the groupBy is
+      * declared in the operator's `StreamingConfig`, not in the model).
+      *
+      * Each entry names a SOURCE column (not a dimension name) to add to
+      * `groupBy` alongside the window column. When `window.isDefined` AND
+      * `groupKeys.nonEmpty` AND the root is a `SemanticStreamingTableOp`,
+      * the streaming terminal builds a windowed aggregation using these
+      * keys. Empty by default — existing call sites (which already use
+      * `.groupBy(...).aggregate(...)` in code) are unchanged.
+      *
+      * For complex grouping (typed dimensions, calc-measure-driven keys)
+      * or join-aware windowed aggregation, compose `.groupBy(...).aggregate(...)`
+      * on the `SemanticTable` directly. */
+    groupKeys: Seq[String] = Seq.empty,
   )
 
   /** Thrown when a model uses features the streaming terminal doesn't support
@@ -132,6 +148,10 @@ object StreamingSupport {
       watermark: Option[WatermarkSpec] = None,
       outputMode: String = "append",
       checkpointLocation: Option[String] = None,
+      /** Additional source-column group keys for windowed aggregation
+        * against a streaming source whose op tree has no explicit
+        * SemanticAggregateOp. See [[StreamingQueryOptions.groupKeys]]. */
+      groupKeys: Seq[String] = Seq.empty,
   ) {
     /** Translate this config into the lower-level [[StreamingQueryOptions]]
       * that `SemanticTable.toStreamingQuery` consumes. */
@@ -150,6 +170,7 @@ object StreamingSupport {
         foreachBatch       = sinkCb,
         window             = window,
         watermark          = watermark,
+        groupKeys          = groupKeys,
       )
     }
   }

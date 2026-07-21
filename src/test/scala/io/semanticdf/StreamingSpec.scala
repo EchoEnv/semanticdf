@@ -231,6 +231,51 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
       s"expected some aggregated rows across micro-batches, got total=$total")
   }
 
+  test("toStreamingQuery: windowed aggregation with groupKeys on streaming root (no explicit aggregate op)") {
+    // Streaming source + declared dimensions/measures, but NO `.groupBy(...).aggregate(...)`
+    // in the op tree. Group keys are provided via `StreamingQueryOptions.groupKeys`.
+    // Exercises the new `SemanticStreamingTableOp + window + groupKeys` path —
+    // the same code path a YAML-loaded streaming model uses when its operator
+    // sets `StreamingConfig.groupKeys`.
+    implicit val s: SparkSession = spark
+    val stream = s.readStream
+      .format("rate")
+      .option("rowsPerSecond", 5)
+      .load()
+
+    // Add a synthetic column to give us a 2-column group key at the source.
+    val enriched = stream.withColumn("bucket", (col("value") % 3).cast("string"))
+
+    val model = toStreamingSemanticTable(enriched, name = Some("rate_windowed_groupkeys"))
+      .withDimensions(
+        Dimension("timestamp", t => t("timestamp")),
+        Dimension("bucket",    t => t("bucket")),
+      )
+      .withMeasures(Measure("count", t => count(lit(1))))
+
+    val collected = scala.collection.mutable.ListBuffer.empty[Long]
+    val query = model.toStreamingQuery(s, StreamingQueryOptions(
+      trigger            = Some(Trigger.ProcessingTime("500 milliseconds")),
+      window             = Some(WindowSpec("timestamp", "1 second")),
+      watermark          = Some(WatermarkSpec("timestamp", "1 second")),
+      outputMode         = "update",
+      groupKeys          = Seq("timestamp", "bucket"),  // <-- the new path
+      foreachBatch       = (df: DataFrame) => {
+        if (!df.rdd.isEmpty()) collected += df.count()
+      },
+    ))
+
+    Thread.sleep(4000)
+    query.stop()
+    query.awaitTermination()
+
+    assert(collected.nonEmpty,
+      s"expected at least one windowed micro-batch from groupKeys path, got 0")
+    val total = collected.sum
+    assert(total > 0L,
+      s"expected aggregated rows from groupKeys path, got total=$total")
+  }
+
 
   test("validator rejects stream-stream joins") {
     implicit val s: SparkSession = spark
