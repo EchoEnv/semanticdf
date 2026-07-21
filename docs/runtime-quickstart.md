@@ -87,9 +87,9 @@ the parent, `cd` into the directory, and run. Each demonstrates a different patt
 
 The canonical "hello world". Loads YAML models, runs **seven queries** including
 basic group-by, percent-of-total, joins, time-grain aggregation, filter + aggregate,
-top-N via window functions, and month-over-month change via `lag`. PR #10 added a
-typed-queries showcase (the `groupByDimensions` / `aggregateMeasures` / sealed
-`Compare.Gt` patterns).
+top-N via window functions, month-over-month change via `lag`, and a typed-queries
+showcase (the `groupByDimensions` / `aggregateMeasures` / sealed `Compare.Gt`
+patterns).
 
 ```bash
 cd examples/starter

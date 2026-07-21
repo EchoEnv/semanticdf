@@ -456,7 +456,7 @@ Each phase ends green (`mvn test`) and cites the concrete BSL test file whose ou
 4. **Naming collisions across joined models.** Reproduce BSL's prefix scheme (`model.field`) and unique-suffix resolution; verify Spark's column-qualifying (`df("model.field")` needs backtick-quoted identifiers) — may need an aliasing strategy.
 5. **Spark 3.5 vs 4 API drift.** A few functions we lean on differ between lines (e.g. `arbitrary()` availability, AQE/window defaults, Spark 4's variant type). The `-Pspark4` leg (Phase 7) is where these surface; isolate version-specific calls behind a thin shim rather than scattering `if` checks.
 6. **Maven + Scala incremental compilation.** `scala-maven-plugin`'s incremental compiler is less polished than sbt's; cold builds are fine, but watch for stale-output surprises — IntelliJ (with the Scala plugin) is the expected IDE and must keep its Maven import in sync.
-7. **Per-batch analysis cost (streaming only, future).** Each micro-batch re-analyzes/re-optimizes the Catalyst plan, so deep op trees and the calc `select` depth are paid *per batch*, not once. The §4.4/§6.1 invariants (single `select`, no cached internals) keep this bounded; the streaming terminal (ADR 0002) is where high-throughput plan cost would first show up and get benchmarked.
+7. **Per-batch analysis cost (streaming only, future).** Each micro-batch re-analyzes/re-optimizes the Catalyst plan, so deep op trees and the calc `select` depth are paid *per batch*, not once. The §4.4/§6.1 invariants (single `select`, no cached internals) keep this bounded; the streaming terminal is where high-throughput plan cost would first show up and get benchmarked.
 
 ---
 
