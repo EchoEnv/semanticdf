@@ -1,5 +1,123 @@
 # Release notes
 
+## v0.1.9 — Structured Streaming terminal end-to-end
+
+A **streaming + doc + ergonomic** release. The library gains a first-class Structured Streaming terminal that shares the op tree, builders, typed DSL, validator, and implicit-SparkSession ergonomics with the batch terminal. Lifecycle (when to start, how long to run, when to stop) stays with the operator's program — by design, not by accident.
+
+Library, MCP server, and CLI consumer are at
+
+```
+io.semanticdf:semanticdf_2.13:0.1.9
+io.semanticdf:semanticdf-mcp_2.13:0.1.9
+com.example:semanticdf-cli_2.13:0.1.9
+```
+
+Test count: 404 library + 72 MCP, green on Spark 3.5.8 and 4.1.1.
+
+### Library — features
+
+- **Streaming terminal** (`SemanticTable.toStreamingQuery(spark, opts)`).
+  The streaming counterpart to `toDataFrame`. Same DSL builders
+  (`groupBy` / `where` / `join_one` / `groupByDimensions` /
+  `aggregateMeasures` / typed `Predicate` factories) work on
+  streaming-rooted models. `StreamingValidator` rejects the patterns
+  the streaming engine can't handle (limit, orderBy, stream-stream
+  joins, groupBy+aggregate without a window, `t.all(...)` without a
+  window) before the query starts, naming the offending pattern.
+- **`SemanticStreamingTableOp`** — the streaming counterpart to
+  `SemanticTableOp`. The op tree walks it transparently; the
+  streaming terminal + the YAML loader + the typed DSL all
+  converge on the same op node shape.
+- **YAML streaming routing** — `YamlLoader.load(...)` auto-routes
+  `df.isStreaming == true` to `toStreamingSemanticTable`. The model
+  file declares the streaming source name (`table: events_stream`)
+  + dimensions/measures/calc; operator wire-up happens in code.
+- **Windowed aggregation + per-window totals (`t.all(...)`)** —
+  `m.groupBy(...).aggregate(...)` over a streaming source with a
+  `WindowSpec` translates to a Spark `groupBy(window(...)).agg(...)`
+  pipeline. Calc measures using `t.all("name")` get per-window
+  grand totals via a stream-stream join (operationally requires
+  append output mode + `~window.duration + watermark.delay` runtime
+  before the first batch emits).
+- **Static-stream `join_one`** — one side batch, the other streaming,
+  works through the same `join_one` DSL.
+- **Default watermark + checkpoint** — when a `WindowSpec` is set but
+  no `WatermarkSpec`, the framework defaults the watermark to
+  `window.column + "10 minutes"` (keeps the pipeline well-formed).
+  When no `checkpointLocation` is set, a per-query temp dir is used —
+  fine for prototyping; production callers should pass a durable path.
+- **Typed operator-side config shapes**:
+  `StreamingConfig`, `OutputSink` sealed trait (Noop / Console / Parquet
+  / Csv / Custom), `WindowSpec`, `WatermarkSpec`, all in
+  `io.semanticdf.StreamingSupport`. `StreamingConfig.toQueryOptions`
+  translates to the lower-level `StreamingQueryOptions`. Operators
+  compose these in code; the library never reads them from YAML.
+- **YAML `streaming:` block — intentionally NOT supported.**
+  Operational config (window / watermark / output sink) lives in the
+  operator's program; the model file is for semantic shape only. This
+  preserves the semantic-layer / operator-lifecycle boundary.
+- **Implicit-SparkSession ergonomics parity** — the streaming
+  terminal gets the same implicit-spark pattern as the batch terminal:
+  `model.toStreamingQuery()` and `model.toStreamingQuery(cfg)` both
+  pick up an `implicit val spark: SparkSession` from scope. Existing
+  `model.toStreamingQuery(spark, opts)` callers are unchanged
+  (forwarded to the same canonical implementation).
+
+### Worked example — `examples/streaming-events/`
+
+Mirrors the structure of the batch templates (`starter`, `hospital`,
+`customer-analytics`). `models/events.yml` declares a streaming
+model with dims/measures; `Main.scala` constructs `StreamingConfig`
+in code, calls `model.toStreamingQuery`, runs for N seconds, calls
+`.stop()`. The example's README documents the operator/semantic-layer
+boundary explicitly, including a worked `t.all(...)` config snippet
+that requires append mode + longer runtime.
+
+### Docs across all four surfaces
+
+- **Scala DSL** — `docs/guide.md` §*The terminal — batch and streaming
+  share the op tree* with a 15-line worked example, plus a new
+  §*Where streaming runs in the stack* mapping each surface (YAML /
+  Scala DSL / MCP / CLI / operator program) to what it does with
+  streaming.
+- **YAML** — covered through `examples/streaming-events/models/events.yml`
+  + the example's README.
+- **MCP** — new §*Streaming models — the agent surface is intentionally
+  model-only* in `docs/agents/mcp-contract.md`: per-tool behavior
+  table, how to identify streaming roots (`SemanticStreamingTableOp`
+  vs `SemanticTableOp`), worked-shape describe / query examples,
+  rationale for no streaming-query terminal.
+- **CLI** — new §*Streaming models over `sdf`* in
+  `examples/cli-consumer/README.md`: sample list / describe / query
+  runs, the validator's filter-only answer for streaming
+  aggregations, the boundary pointer to the streaming-events
+  example.
+- **Denoise pass** — ADR/provenance cleanup across code + tests
+  (no `ADR 0002 stage N`, no `since v0.1.X`), user-facing docs
+  (no stale "not supported" claims, no `PR #N` / `v0.1.X` inline
+  provenance), and the last two stragglers (DESIGN.md §9 item 7,
+  runtime-quickstart.md).
+
+### Test count
+
+- 402 → **404** library tests on Spark 3.5.8 + 4.1.1
+- 72/72 MCP tests on both
+- Worked `examples/streaming-events` runs end-to-end against the
+  bumped v0.1.9 jar
+
+### Compatibility notes
+
+- The library's public API is source-compatible with v0.1.8. New
+  overloads were added with default args; existing call sites
+  continue to compile.
+- The example projects' template versions (`examples/*/pom.xml`'s
+  own `<version>` — e.g., `0.1.2`) were left as-is. Only the
+  library version (`io.semanticdf:semanticdf_2.13`) and the MCP
+  module version (`io.semanticdf:semanticdf-mcp_2.13`) were bumped,
+  along with the example's `<semanticdf.version>` dependency
+  property. The cli-consumer example's own version also bumped
+  since the cli-binary is part of the release surface.
+
 ## v0.1.8 — typed arithmetic, infix predicates, typed-measure factory
 
 A **feature + refactor** release. Six PRs since v0.1.7 (`#103`–`#108`):

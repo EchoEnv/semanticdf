@@ -6,7 +6,7 @@
 
     <groupId>io.semanticdf</groupId>
     <artifactId>semanticdf-mcp_2.13</artifactId>
-    <version>0.1.8</version>
+    <version>0.1.9</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-mcp</name>
@@ -19,7 +19,7 @@
         <scala.version>2.13.18</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semanticdf.version>0.1.2</semanticdf.version>
+        <semanticdf.version>0.1.9</semanticdf.version>
         <mcp.sdk.version>0.18.3</mcp.sdk.version>
 
         <!-- Same JVM flags as the example projects. Required for Spark 3.x on JDK 17. -->
