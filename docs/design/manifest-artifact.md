@@ -1,6 +1,6 @@
 # Design Recipe: Manifest Artifact (`SemanticManifest.toJson` / `fromJson`)
 
-**Status:** DRAFT (recipe — no code yet)
+**Status:** ACCEPTED (recipe is implementation-ready — open questions resolved by review)
 **Library version that would emit this shape:** `0.1.9-manifest`
 **Scope:** Single, additive feature (`SemanticManifest` object + `tools.Main manifest` route + tests). No op-tree changes. No new dependencies.
 
@@ -35,9 +35,7 @@ A **manifest** is the semantic model's *static definition* serialized as JSON. I
 
   "model": {
     "name": "events",
-    "versionMajor": 0,
-    "versionMinor": 1,
-    "versionPatch": 9,
+    "version": 9,
     "status": "published",
     "description": "Real-time events arriving on the events topic.",
     "sourceTable": "events_stream"
@@ -113,7 +111,7 @@ A **manifest** is the semantic model's *static definition* serialized as JSON. I
 |---|---|---|---|
 | `schemaVersion` string | `"v0.1.9-manifest"` (library version + shape) | Tracks "what library version produced this artifact" | Rename to semver-style? `0.1.9-manifest.v1`? |
 | `kind` field | `"semanticdf-model-manifest"` | Future-proof: if we add a different artifact (e.g., manifest-diff), `kind` discriminates | Should we drop and only use `schemaVersion`? |
-| `versionMajor` / `versionMinor` / `versionPatch` (3 fields) | Separate fields | Avoids semver-string parsing; library has the parts as `Int` already | Combine into one `"1.4.2"` string? Existing `model.version: Int` is too thin to express semver; if we extend to (Int,Int,Int) we make a breaking change. Recommendation: keep `version: Int` in the API, **add `versionMajor/Minor/Patch` to the manifest only**. So the manifest is more expressive than the in-memory model — a user reading a manifest gets version components, but the library API isn't broken. |
+| `version` (single `Int`) | Matches `SemanticTable.version: Int` exactly | Round-trip is exact (no lossy coercion) | Couldn't we have `versionMajor/Minor/Patch`? Future semver split — requires both API + manifest changes, defer |
 | `status` field | `"draft" \| "published" \| "deprecated"` | Matches the proposal + governance gap | Default `"published"`; `"deprecated"` causes a loud failure at load time; `"draft"` is informational. PICK: I implement this as a separate PR (status field on `Model.status`). The manifest references it but doesn't introduce it. |
 | `digest` block | Top-level cheap counters | `jq` consumers want a one-look summary | Reasonable design. Should `digest` be a separate file (`flights.json + flights.digest.json`)? NO — one artifact, more atomic. |
 | `dimensions[].kind` field | `"time" \| "entity" \| "categorical" \| "derived-time"` | Distinguishes 4 cases | Simpler as 2 fields (`isTimeDimension: bool`, `isEntity: bool`, `isDerived: bool`)? PICK: `kind` is cleaner for non-tooling consumers; if you reject `kind`, the 3 bools default. |
@@ -170,7 +168,10 @@ That's it. Two methods. The `case class` for the exception makes catch-and-repor
 `SemanticManifest.toJson` is **lossy** in one important dimension:
 
 - **Lose:** `Dimension.expr: SemanticScope => Column` (the lambda). Lambdas aren't serializable.
+- **Lose:** `Dimension.metadata: Map[String,String]` and `Measure.metadata: Map[String,String]`. Same reason — the metadata map is consumed by in-process tools (`Introspector`, `DescribeModel`, OKF gen) that already have direct access to the `SemanticTable`. The manifest is the cross-tool schema-only artifact; metadata is in-process-only.
 - **Preserve:** `Dimension.exprString: Option[String]` — the YAML/DSL string form.
+
+**Streaming detection rule.** The `digest.isStreaming: bool` flag walks the op tree the same way `SemanticTable.toStreamingQuery`'s `findStream` helper does (`SemanticTable.scala:96–108`): it descends through `SemanticAggregateOp` / `SemanticFilterOp` / `SemanticRowFilterOp` / `SemanticOrderByOp` / `SemanticLimitOp` / `SemanticHintOp` / `SemanticTransformsOp` until it hits a `SemanticStreamingTableOp` (true) or a `SemanticTableOp` (false). Without this rule, the digest would falsely report `false` for the common case where a streaming-root model is wrapped in `.groupBy(...).aggregate(...)`. Pinned by test `streaming-source-walks-aggregate-wrapper` below.
 
 **The rule:**
 - If `exprString` is `Some(s)`, the manifest carries `s`. The user can round-trip.
@@ -238,6 +239,7 @@ That's it. **No new CLI verb beyond `manifest` and `validate-manifest`.** No fla
 | `missing-required-fields-error` | Parsing a JSON without `model.name` throws `ManifestParsingException` with a clear message |
 | `schema-mismatch-error` | Parsing a JSON with `"schemaVersion": "v0.2.0-manifest"` (hypothetical future) throws `ManifestParsingException` |
 | `streaming-source-recorded` | `SemanticStreamingTableOp` root → manifest records `sourceTable` + `isStreaming: true` |
+| `streaming-source-walks-aggregate-wrapper` | `SemanticAggregateOp(SemanticStreamingTableOp(...))` root → manifest's `digest.isStreaming` correctly walks through `SemanticAggregateOp` to find the streaming op (rule from §5) |
 | `calc-measure-dependsOn-recorded` | A `t.all("total")` calc measure has `dependsOn: ["total"]` |
 
 These 10 tests run as part of the library's normal `mvn test` cycle.
@@ -260,11 +262,13 @@ These 10 tests run as part of the library's normal `mvn test` cycle.
 4. **Should `manifest --yaml` also accept a `.semantic-manifest.json` from disk?** (i.e., a no-op passthrough or chainable tool). **My pick:** no. It's `yaml → json`; the opposite direction isn't built yet. If a user wants that, they can fork.
 5. **Schema version embedded in the file name or only in the JSON body?** **My pick:** body only. The library has stable identities (path resolved by user); the schema version is metadata inside the artifact.
 6. **`fromJson` should reject unknown `kind`?** Currently plan accepts `"semanticdf-model-manifest"` only. Anything else → error. **My pick:** reject mismatched kind (no future-proofing here).
+7. **`SemanticTable.version: Int` vs future semver.** For v0.1.9 the manifest emits a single `version: int` matching the existing API. A future semver split (`versionMajor/Minor/Patch`) requires coordinated change on both the API surface AND the manifest; defer until a real consumer needs three-part versioning. Today, recipe choice #3 is the conservative single-Int pick — section 5's lossier rules cover it without a manifest break.
 
 ## 10. Anti-scope (reaffirmed)
 
 This PR does NOT include:
 
+- **Single-table models only.** `SemanticJoinOp`-rooted tables (`examples/pipeline/models/*.yml` joined shape) are out of scope for this PR. The manifest's `model.sourceTable` + `model.name` shape doesn't fit a `SemanticJoinOp` root, and we have no consumer asking for joined-model persistence yet. Joined models serialize as a separate, additive follow-up when a real consumer emerges.
 - Schema evolution / negotiation
 - Cross-model references in the manifest
 - Embedded computed views (`explainSemantic` output, full lineage graph)
