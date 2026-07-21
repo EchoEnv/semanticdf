@@ -264,4 +264,38 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     // Should not throw.
     StreamingValidator.validate(joined)
 }
+  test("ADR 0002 stage 4: validator accepts t.all(...) in streaming when window is specified") {
+    implicit val s: SparkSession = spark
+    val stream = s.readStream.format("rate").load()
+    val model = toStreamingSemanticTable(stream, name = Some("rate"))
+      .withDimensions(Dimension("timestamp", t => t("timestamp")))
+      .withMeasures(
+        Measure("numerator", t => sum(t("value"))),
+        Measure("denominator", t => sum(t("value"))),
+        Measure("pct", t => t("numerator") / t.all("denominator")),
+      )
+      .groupBy("timestamp")
+      .aggregate("pct")
+    val options = StreamingQueryOptions(
+      window = Some(WindowSpec("timestamp", "1 second")),
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+      outputMode = "update",
+    )
+    // Should NOT throw: t.all(...) is allowed in streaming when a window
+    // spec is provided (the framework computes per-window totals).
+    StreamingValidator.validate(model, options)
+
+    // But it DOES throw without a window spec.
+    val noWindow = StreamingQueryOptions(
+      window = None,
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+      outputMode = "update",
+    )
+    val ex = intercept[StreamingUnsupportedError] {
+      StreamingValidator.validate(model, noWindow)
+    }
+    assert(ex.getMessage.contains("t.all"),
+      s"Expected t.all error, got: ${ex.getMessage}")
+  }
+
 }

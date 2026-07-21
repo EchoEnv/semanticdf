@@ -113,8 +113,13 @@ object StreamingSupport {
       collector.visit(model.root)
       val totalUsers = findTotalUsers(measures.toSeq)
       if (totalUsers.nonEmpty) {
-        violations += s"t.all(...) used in measures: ${totalUsers.mkString(", ")} " +
-          "(requires windowed-totals — ADR 0002 stage 4)"
+        // t.all(...) is allowed in streaming IF a window is specified —
+        // the framework computes per-window totals (ADR 0002 stage 4).
+        if (options.window.isEmpty) {
+          violations += s"t.all(...) used in measures: ${totalUsers.mkString(", ")} " +
+            "(requires windowed-totals — set StreamingQueryOptions.window, " +
+            "ADR 0002 stage 4)"
+        }
       }
       if (violations.nonEmpty) {
         throw new StreamingUnsupportedError(
