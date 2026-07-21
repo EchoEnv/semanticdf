@@ -32,7 +32,7 @@ Pick one team/use case. Not all consumers are equal at this stage.
 | Factor | Why it matters |
 |---|---|
 | **Data has nulls, skew, type variation** | The test fixtures are clean. Real data breaks clean assumptions. |
-| **Query complexity matches Phase 1–5** | Basic group-by + calc + joins. Avoid streaming (not built yet) and derived time dimensions (not built yet). |
+| **Query complexity matches Phase 1–5** | Basic group-by + calc + joins. The streaming terminal ships (PRs #110–#121, landed for v0.1.9), so streaming workloads are valid; derived time dimensions are still partial. |
 | **Consumer has tolerance for early-stage rough edges** | Error messages are improving but not polished. They need to be willing to report back. |
 | **Consumer can be blocked for < 1 day** | When they hit a bug, you need to be able to respond quickly. |
 | **Real business value at stake** | They won't invest effort in feedback if there's nothing riding on it. |
@@ -45,7 +45,7 @@ Pick one team/use case. Not all consumers are equal at this stage.
 
 ### Bad candidates (for now)
 
-- Streaming workloads (not built)
+- Streaming workloads with strict low-latency SLAs (the streaming terminal ships, but its operational status is "ready for evaluation, not v1 SLA")
 - Multi-hop join chains (3+ tables) — edge cases unverified
 - External customers (not ready to expose rough edges externally)
 
@@ -82,7 +82,7 @@ Each script: data setup → semantic model → 3–5 queries → expected output
 
 `docs/known-limitations.md` — written for a non-author. Before they start, they should know:
 
-- Streaming is not supported
+- Streaming terminal is supported but has known limitations — see `docs/known-limitations.md`
 - `===` / `=!=` for comparisons (not `==` / `!=`)
 - No metastore / view registration yet
 - Division by zero → null (unless using `safeDivide`)
@@ -203,7 +203,7 @@ While the consumer is soaking, improve the areas most likely to need work:
 - **Publishing to Maven Central** — that's a later step. First consumer is internal.
 - **Multi-tenant security** — not designed in yet. First consumer should be a single team with shared data access.
 - **Schema evolution** — if their source schema changes, there's no invalidation. That's a future feature.
-- **Streaming** — not in scope for first consumer.
+- **Streaming** — the streaming terminal ships but its first-consumer fit is open. Producer/consumer-team operational stability (SLA, restart safety, source-of-truth for window/watermark choices) is the consumer's call; the library provides the model DSL + lifecycle-shape primitives.
 
 ---
 

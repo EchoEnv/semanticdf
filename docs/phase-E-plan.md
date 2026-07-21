@@ -277,5 +277,5 @@ Total: **~2 weeks**. No API breaks. All new variants coexist with existing code.
 ## Relationship to future phases
 
 - **Phase F (typed predicates):** If E2/E3 are done and real consumers want `"carrier" > 600` to be a compile error, E2's phantom types provide the foundation. Deferred until real consumer demand.
-- **Phase F (streaming):** `query[T]` on a streaming source returns `Dataset[T]` identically. E1 extends cleanly.
+- **Phase F (streaming):** Streaming terminal shipped separately from Phase E (PRs #110–#121). The streaming op-tree share the same builders as batch (`groupBy`, `aggregate`, etc.), but `query[T]: Dataset[T]` does not fit streaming's micro-batch model — `queryAs[T]` stays batch-only. Operators consume streaming results via the `foreachBatch` callback in `StreamingQueryOptions`.
 - **Phase F (data catalog metadata):** Typed `Dimension` / `Measure` carry the phantom type alongside metadata. Non-blocking.

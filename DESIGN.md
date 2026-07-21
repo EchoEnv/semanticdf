@@ -4,7 +4,7 @@
 
 This document records: what BSL is, the architectural mapping to Spark/Scala, the hard problems and how we solve them on the JVM, the proposed DSL, module layout, build strategy, and a phased delivery plan.
 
-> **Execution scope (batch now, streaming-shaped).** v0.1 targets **batch** `DataFrame`s. The DSL and op tree are designed **source-agnostic** so that **Structured Streaming shares the same model definition** — batch and streaming diverge only at the *execution terminal* (§4.5), mirroring Spark's own `df.write` vs `df.writeStream`. Streaming *execution* is deferred (ADR 0002); the *interface unification* is built in from the start, so enabling streaming later adds a terminal, not a second API.
+> **Execution scope (batch and streaming).** v0.1.* targets **batch** `DataFrame`s **and** Structured Streaming `StreamingQuery`s. The DSL and op tree are **source-agnostic** — batch and streaming diverge only at the *execution terminal* (§4.5), mirroring Spark's own `df.write` vs `df.writeStream`. The streaming terminal (`SemanticTable.toStreamingQuery(spark, opts)`) shipped via PRs #110–#121; `SemanticStreamingTableOp` is the streaming counterpart to `SemanticTableOp`, and the rest of the op tree walks both op types transparently. *Interface unification from day one* — adding streaming required a terminal, not a second API.
 
 ---
 
@@ -181,7 +181,7 @@ streaming without paying streaming machinery into the v0.1 batch model:
 - `.toDataFrame(spark): DataFrame` — **batch terminal** (v0.1). Requires a
   non-streaming source; returns a batch `DataFrame`.
 - `.toStreamingQuery(spark, options): StreamingQuery` — **streaming terminal**
-  (deferred, ADR 0002). Same op tree; validates streaming constraints at the terminal,
+  (shipped, v0.1.9 — PRs #110–#121). Same op tree; validates streaming constraints at the terminal,
   then returns a `StreamingQuery`.
 
 This mirrors Spark's own design — one `Dataset`/`DataFrame` DSL, two sinks
@@ -199,8 +199,8 @@ construction) — so they never burden the batch path:
 - `limit`, and stream×stream `join_many` pre-aggregation → rejected unless time-bounded.
 
 Full analysis of what ports, what's forbidden, and the trigger to implement the
-streaming terminal is in **ADR 0002**. The point recorded here: the architecture is
-**batch-first but streaming-shaped** — the unification is structural, not an
+streaming terminal is **shipped** in v0.1.9 (PRs #110–#121; ADR 0002 records the design). The point recorded here: the architecture is
+**source-agnostic from day one** — the unification is structural, not an
 afterthought.
 
 ---

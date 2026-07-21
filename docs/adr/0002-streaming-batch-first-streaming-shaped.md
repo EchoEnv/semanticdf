@@ -1,6 +1,7 @@
 # ADR 0002 — Structured Streaming: batch-first, streaming-shaped (deferred execution terminal)
 
-- **Status:** Accepted (streaming execution deferred; interface unification accepted now)
+- **Status:** Accepted → **implementation shipped** in v0.1.9 (PRs #110–#121). The TL;DR design decision (one DSL, one op tree, two terminals) is unchanged; only the streaming-execution gate has been removed.
+- **Historical note:** ADR body uses past-tense "deferred" / "is deferred" because that's what the document recorded on 2026-07-08, before the streaming terminal landed. The current state is the streaming terminal is available — see `docs/guide.md` *The terminal — batch and streaming share the op tree* and `docs/feature-roadmap.md` §2.3 (now `Status: DONE`) for what shipped and what remains deferred.
 - **Date:** 2026-07-08
 - **Context:** `DESIGN.md` §4.5. The question was whether semanticdf should support
   Structured Streaming for big-volume data, and if so whether batch and streaming should
@@ -13,8 +14,9 @@
   `groupBy`, `aggregate`, `filter`, `join_one`, …). They diverge only at the *execution
   terminal*: `.toDataFrame()` (batch) vs `.toStreamingQuery()` (streaming).
   This mirrors Spark's own `df.write` vs `df.writeStream` — one Dataset, two sinks.
-- **v0.1 ships the batch terminal only.** The streaming terminal is deferred behind an
-  explicit trigger. But because the DSL and op tree are **source-agnostic by design**
+- **v0.1 originally shipped the batch terminal only; v0.1.9 added the streaming terminal.**
+  The streaming execution was deferred behind an explicit trigger that has since passed
+  (`feature-roadmap.md` §2.3). Because the DSL and op tree are **source-agnostic by design**
   (`DESIGN.md` §4.1), enabling streaming later adds a terminal + a validation pass, **not
   a second API**. The unification is structural, not retrofitted.
 - **The flagship feature (`t.all(...)` percent-of-total) is architecturally incompatible
