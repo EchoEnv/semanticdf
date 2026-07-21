@@ -482,6 +482,59 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     StreamingValidator.validate(stringModel, opts)  // should not throw
     StreamingValidator.validate(typedModel,  opts)  // should not throw
   }
+
+  // -------------------------------------------------------------------------
+  // Implicit-SparkSession variants of toStreamingQuery
+  // -------------------------------------------------------------------------
+  //
+  // Mirrors `toDataFrame(implicit spark)` ergonomics — callers with an
+  // `implicit val spark: SparkSession` in scope can write
+  // `model.toStreamingQuery()` or `model.toStreamingQuery(cfg)` without
+  // passing spark positionally.
+
+  test("toStreamingQuery picks up implicit SparkSession — both overloads (opts / config)") {
+    // The fixture provides `def spark: SparkSession`; we declare a local
+    // implicit-typed alias so the new `toStreamingQuery(...)(implicit spark)`
+    // overloads can pick it up out of scope.
+    implicit val impl: SparkSession = spark
+    val stream = spark.readStream.format("rate").load()
+    val model = toStreamingSemanticTable(stream, name = Some("implicit_spark"))
+      .withDimensions(Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")))
+      .withMeasures(Measure("c", t => count(lit(1))))
+
+    // opts overload — no explicit spark, no explicit opts (defaults to empty)
+    val q1 = model.toStreamingQuery()
+    assert(q1.isInstanceOf[org.apache.spark.sql.streaming.StreamingQuery])
+    q1.stop()
+
+    // opts overload — explicit opts, implicit spark
+    val q2 = model.toStreamingQuery(
+      StreamingQueryOptions(window = Some(WindowSpec("timestamp", "1 second"))),
+    )
+    assert(q2.isInstanceOf[org.apache.spark.sql.streaming.StreamingQuery])
+    q2.stop()
+
+    // config overload — explicit config, implicit spark
+    val q3 = model.toStreamingQuery(StreamingConfig(
+      outputSink = OutputSink.Noop,
+      window     = Some(WindowSpec("timestamp", "1 second")),
+    ))
+    assert(q3.isInstanceOf[org.apache.spark.sql.streaming.StreamingQuery])
+    q3.stop()
+  }
+
+  test("explicit-spark overloads still work (no implicit-pass would only compile if spark is in scope)") {
+    // Backward-compat check — the explicit-spark forms are unchanged.
+    val s: SparkSession = spark
+    val stream = s.readStream.format("rate").load()
+    val model = toStreamingSemanticTable(stream, name = Some("explicit_still_works"))
+      .withDimensions(Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")))
+      .withMeasures(Measure("c", t => count(lit(1))))
+
+    val q = model.toStreamingQuery(s, StreamingQueryOptions())
+    assert(q.isInstanceOf[org.apache.spark.sql.streaming.StreamingQuery])
+    q.stop()
+  }
 }
 
 /** Phantom tags + implicit refs used by the typed-DSL equivalence test.
