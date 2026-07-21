@@ -12,6 +12,7 @@
 #   name (exposed as 'customer_name'), city, country
 
 orders:
+    status: published
     table: orders_csv
     description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
 

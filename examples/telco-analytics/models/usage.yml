@@ -13,6 +13,7 @@
 # below would look the same.
 
 usage:
+    status: published
     table: usage_csv
     description: "Per-customer usage events (calls, data, SMS) with plan + promotion context"
 

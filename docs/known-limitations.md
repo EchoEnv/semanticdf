@@ -95,24 +95,21 @@ need a third, chain `join_one`/`join_many` results and verify outputs
 against a known-good query.
 **Roadmap:** Multi-hop join testing + a documented collision policy.
 
-### Time dimensions: truncate, don't derive
+### Time dimensions: derive year/month/day from a single declaration
 
-`Dimension.time(..., derived_dimensions = Seq("year", "month", "day"))`
-— auto-generating year/month/day from a timestamp — is not yet
-implemented. `atTimeGrain()` truncation is the supported path.
+`Dimension.time("ts", ..., derive = Seq("year", "month", "day"))`
+auto-materializes sibling dims using Spark date-part functions on the
+source column. The YAML equivalent:
 
-**Workaround today:** Declare each time dimension explicitly:
-
-```scala
-.withDimensions(
-  Dimension.time("ts",        t => t("ts"), smallestTimeGrain = Some("day")),
-  Dimension("year",  t => year(t("ts"))),
-  Dimension("month", t => month(t("ts"))),
-)
+```yaml
+ts:
+  type: time
+  expr: ts
+  smallest_time_grain: day
+  derived_dimensions: [year, month, day]
 ```
 
-**Roadmap:** Auto-derived parts (`year`/`month`/`day`) from a single
-`Dimension.time(...)` declaration.
+`atTimeGrain()` truncation remains available for ad-hoc groupings.
 
 ### NULL semantics in calc formulas
 

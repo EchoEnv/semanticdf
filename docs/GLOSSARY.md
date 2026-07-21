@@ -185,6 +185,14 @@ list as new concepts land.
   string columns become dimensions, numeric become measures,
   timestamp-keyed columns become time dimensions, names matching
   `_id` / `_key` become entity dimensions.
+- **`status:` (YAML) / `ModelStatus` (Scala)** — lifecycle marker
+  for a model. One of `draft` / `published` / `deprecated`. Defaults
+  to `published` for back-compat with models that pre-date the field.
+  Surfaces in MCP `describe_model` (`data.status`) and the manifest
+  artifact (`model.status`). The library never fails queries on
+  `Deprecated`; consumers (MCP server, agent framework) enforce policy.
+  Wire-stable lowercase strings; renaming is a breaking change across
+  MCP + manifest + YAML + Scala companion.
 
 ## Streaming terminal
 

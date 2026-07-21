@@ -2,8 +2,9 @@
 type: SemanticTable
 title: Plans
 description: "Service plans offered (Basic, Standard, Premium, Family)"
+status: published
 resource: file://examples/telco-analytics/models/plans.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [semantic-table]
 ---
 

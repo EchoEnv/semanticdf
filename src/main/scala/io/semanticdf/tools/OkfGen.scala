@@ -4,6 +4,8 @@ import scala.jdk.CollectionConverters._
 import java.io.File
 import org.yaml.snakeyaml.Yaml
 
+import io.semanticdf.ModelStatus
+
 
 /** Generate an Open Knowledge Format (OKF) bundle from semanticdf YAML model files.
   *
@@ -120,6 +122,7 @@ class OkfGen {
         metadata    = parseMetaOf(modelMap.get("metadata")),
         sourcePath  = path,
         version     = parseVersion(modelName, modelMap),
+        status      = parseStatus(modelName, modelMap),
       )
     }
   }
@@ -206,6 +209,25 @@ class OkfGen {
     }
   }
 
+  /** Read the optional `status:` field from the YAML model map. Defaults to
+    * `"published"` for back-compat with v0.1.x models that didn't declare it.
+    * Unknown values raise — same policy as `YamlLoader.parseStatus`. */
+  private def parseStatus(modelName: String, modelMap: java.util.Map[String, Any]): String = {
+    val s = modelMap.get("status")
+    if (s == null) "published"
+    else s match {
+      case str: String =>
+        ModelStatus.fromString(str) match {
+          case Some(ms) => ms.asString
+          case None    => throw new IllegalArgumentException(
+            s"Model '$modelName': 'status' must be one of ${ModelStatus.all.map(_.asString).mkString("|")}, got '$str'")
+        }
+      case other =>
+        throw new IllegalArgumentException(
+          s"Model '$modelName': 'status' must be a string, got ${other.getClass.getSimpleName}")
+    }
+  }
+
   private def parseMeta(v: Any): Map[String, String] =
     if (v == null) Map.empty
     else v match {
@@ -229,6 +251,7 @@ class OkfGen {
     parts += "title"       -> titleCase(m.name)
     if (m.version > 0) parts += "version" -> m.version.toString
     parts += "description" -> truncate(m.description.getOrElse(""), max = 200)._1
+    parts += "status"      -> m.status
     parts += "resource"    -> resourcePath
     timestamp(m).foreach(t => parts += "timestamp" -> t)
     val tags = computeTags(m)
@@ -632,6 +655,10 @@ class OkfGen {
     metadata: Map[String, String],
     sourcePath: String,
     version: Int = 0,
+    /** Lifecycle status, mirrored from the YAML `status:` field. Defaults
+      * to `published` for back-compat with v0.1.x models that didn't
+      * declare it. Wire-stable lowercase string. */
+    status: String = "published",
   )
 
   /** Read the optional `filters:` block from the YAML model map. */

@@ -2,8 +2,9 @@
 type: SemanticTable
 title: Events
 description: "Real-time events arriving on the events topic, rolled up per 30-second window."
+status: published
 resource: file://examples/streaming-events/models/events.yml
-timestamp: 2026-07-21T09:54:58Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [categorical, semantic-table]
 ---
 

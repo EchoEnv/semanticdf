@@ -8,6 +8,7 @@
 # why this split exists.
 
 flights:
+    status: published
     table: flights_csv
     description: "Flight facts: per-flight distance and passenger counts over 3 months"
 

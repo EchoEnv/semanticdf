@@ -3,8 +3,9 @@ type: SemanticTable
 title: Flights
 version: 1
 description: "Flight facts: per-flight distance and passenger counts"
+status: published
 resource: file://examples/starter/models/flights.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [airline, airport, identifier, semantic-table]
 ---
 

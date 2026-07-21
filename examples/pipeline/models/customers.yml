@@ -4,6 +4,7 @@
 # Joined to orders via the orders.yml `joins:` block.
 
 customers:
+    status: published
     table: customers_csv
     description: "Cleaned customer reference data"
 

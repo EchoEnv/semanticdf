@@ -4,6 +4,7 @@
 #   customer_id, name, email, signup_date, city
 
 customers:
+    status: published
     table: customers_csv
     description: "Customer master data with signup dates and city"
 

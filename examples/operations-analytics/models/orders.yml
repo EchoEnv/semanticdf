@@ -5,6 +5,7 @@
 #   + ship_days, on_time_flag (computed via the `transforms:` block below)
 
 orders:
+    status: published
     table: orders_csv
     description: "Per-order data with fulfillment timestamps and amount"
 

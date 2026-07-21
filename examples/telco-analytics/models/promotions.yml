@@ -3,6 +3,7 @@
 # Reference data: the active promotional offers.
 
 promotions:
+    status: published
     table: promotions_csv
     description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
 

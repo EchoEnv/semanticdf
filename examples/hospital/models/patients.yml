@@ -8,6 +8,7 @@
 # missing MRN. See Main.scala for the cleansing steps.
 
 patients:
+    status: published
     table: patients_clean_csv
     description: "Cleansed patient master data"
 

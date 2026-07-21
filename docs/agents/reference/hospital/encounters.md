@@ -2,8 +2,9 @@
 type: SemanticTable
 title: Encounters
 description: "Patient hospital encounters (admissions)"
+status: published
 resource: file://examples/hospital/models/encounters.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [semantic-table]
 ---
 

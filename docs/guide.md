@@ -1132,5 +1132,13 @@ You've read the narrative. Now choose:
 - **You want to add an MCP tool:** read
   [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) and
   [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md).
+- **You want a portable JSON snapshot of a model:** see the
+  [manifest artifact recipe](design/manifest-artifact.md) — serialises a
+  `SemanticTable` to a JSON artifact for cross-tool consumption and
+  version-pinning without re-parsing YAML.
+- **You want to mark a model as `draft` / `deprecated`:** declare
+  `status:` in the YAML or call `model.status(ModelStatus.X)` from
+  the Scala DSL. The status surfaces in MCP `describe_model` and in the
+  manifest artifact.
 - **You want to understand why a design choice was made:** read
   [`DESIGN.md`](../DESIGN.md) and the three [`docs/adr/`](adr/) files.

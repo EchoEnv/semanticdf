@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.3 shipped (Jackson Scala module wiring, REST test infra fixes, CLI consumer debut at `examples/cli-consumer/`); plus four post-tag fixes/features on `main` (PR `#61`: `Introspect.handle()` `warnings` end-to-end + `field_inventory.skipped` agrees with `warnings.length`; PR `#62`: clean `toJoinYaml` placeholder names — `_model` is gone for `id`-typed columns, and longer entity suffixes like `_uuid` / `_code` / `_key` strip cleanly; PR `#63`: docs refresh — version/test-count references across README + `feature-roadmap.md` + `known-limitations.md` + `mcp-contract.md` + `DESIGN.md`; retire limitations fixed by earlier PRs; PR `#64`: `ResultDecoder.derive[T]` Scala 2 macro for case classes with primitive fields — closes the typeclass derivation deferral noted in `docs/phase-E-plan.md` §E1). 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.3 shipped (Jackson Scala module wiring, REST test infra fixes, CLI consumer debut at `examples/cli-consumer/`); plus four post-tag fixes/features on `main` ( `Introspect.handle()` `warnings` end-to-end + `field_inventory.skipped` agrees with `warnings.length`;  clean `toJoinYaml` placeholder names — `_model` is gone for `id`-typed columns, and longer entity suffixes like `_uuid` / `_code` / `_key` strip cleanly;  docs refresh — version/test-count references across README + `feature-roadmap.md` + `known-limitations.md` + `mcp-contract.md` + `DESIGN.md`; retire limitations fixed by earlier PRs;  `ResultDecoder.derive[T]` Scala 2 macro for case classes with primitive fields — closes the typeclass derivation deferral noted in `docs/phase-E-plan.md` §E1). 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -82,7 +82,7 @@ Emits a starter YAML file the user can edit.
 - `Scope.scala`: the pre-existing calc-layer `UnknownFieldError` already had "Did you mean" via the shared `closestMatch`
 - **Bug fix (incidental):** Measures with column typos (e.g. `t("flight_cont")`) were misclassified as base measures. Now caught in Pass 1 and retried via `MeasureScope` in Pass 2, surfacing the suggestion correctly
 
-**Tests:** 4 new tests in `HardeningSpec.scala` (unknown measure suggestion, close-but-wrong names, nothing-close guard, atTimeGrain dimension suggestion). Phase 1b pre-existing calc-typo test now passes. **278/278 total.**
+**Tests:** 4 new tests in `HardeningSpec.scala` (unknown measure suggestion, close-but-wrong names, nothing-close guard, atTimeGrain dimension suggestion). the pre-existing calc-typo test now passes. **278/278 total.**
 
 **Effort:** 2-3 person-days
 **Impact:** Medium — every error path benefits.
@@ -254,7 +254,7 @@ materializations:
 
 ### 2.3 Streaming source support
 
-**Status:** ✅ **DONE** — landed across PRs #110, #111, #112, #114, #115, #116, #117, #118, #119, #120, #121 (target: v0.1.9).
+**Status:** ✅ **DONE** — shipped in v0.1.9.
 
 **What shipped:**
 - `SemanticStreamingTableOp` (in `SemanticOp.scala`) — the streaming counterpart to `SemanticTableOp`. The op tree walks it transparently (`resolveRootModel`, `findStream`, etc.).
@@ -275,14 +275,18 @@ materializations:
 
 ### 2.4 Model versioning + lineage
 
-**Status:** 🟡 **PARTIAL** — model-level versioning shipped; lineage track deferred.
+**Status:** 🟡 **PARTIAL** — model-level versioning + lifecycle shipped; lineage track deferred.
 
-**Shipped (Phase E partial):**
+**Shipped (model-level versioning + lifecycle):**
 - `SemanticTable.version: Int` field (defaults to `0` = unversioned) and `.version(v: Int)` setter.
 - `version:` block in YAML models (e.g. `flights: { version: 1 }`).
 - Version propagates through `where` / `having` / `groupBy().aggregate()` / `withTransforms`-on-join.
 - `YamlLoader` parses and propagates the YAML version.
-- The library is permissive — it never fails on a version mismatch; consumers (MCP server, OKF generator, agent framework) read `version` and apply their own policy.
+- `SemanticTable.status: ModelStatus` (`Draft` / `Published` / `Deprecated`) with `.status(s)` setter.
+- `status:` block in YAML models; defaults to `Published` for back-compat.
+- Status propagates through every fluent op (`withDimensions` / `withMeasures` / `withRowFilter` / `orderBy` / `limit` / `hint` / `withTransforms` / `groupBy().aggregate()`).
+- Lifecycle surfaces in MCP `describe_model` (`data.status`) and the manifest artifact (`model.status`).
+- The library is permissive — it never fails on a version mismatch or on a `Deprecated` status; consumers (MCP server, OKF generator, agent framework) read these fields and apply their own policy.
 
 **Problem (the still-open part):** when a YAML model changes, downstream consumers (dashboards, APIs, other models) break silently. No way to know "who uses total_revenue?"
 
@@ -487,7 +491,7 @@ If we want a rough sequence to discuss:
 ## Decision log
 
 - **2024-XX:** This document created. T1 features identified as universal wins. T2-T4 features gated on consumer feedback.
-- **2026-07:** v0.1.1 shipped four PRs (typed withMeasures + SortKey.asc/desc overloads; ExpressionValidator for dims/transforms/measures/filters; CalcExpr.validateReferences for calculated_measures). The YAML load-time validation pass is now complete — every `expr` field in the YAML model schema has consistent fail-fast validation with explicit, documented visibility rules. The library is at 294 tests on both Spark 3.5.8 and 4.1.1; MCP server at 35 tests.
+- **2026-07:** v0.1.1 shipped (typed withMeasures + SortKey.asc/desc overloads; ExpressionValidator for dims/transforms/measures/filters; CalcExpr.validateReferences for calculated_measures). The YAML load-time validation pass is now complete — every `expr` field in the YAML model schema has consistent fail-fast validation with explicit, documented visibility rules. The library is at 294 tests on both Spark 3.5.8 and 4.1.1; MCP server at 35 tests.
 - **2026-07:** v0.1.2 shipped the `LazyTransformsOp` refactor (lazy compile contract for `withTransforms` on join models — no more `SparkSession.active` side effect).
-- **2026-07:** v0.1.3 shipped six PRs (`#54` Jackson Scala module registered for case-class JSON; `#55` shared `SparkFixture` across MCP specs; `#56` `OrderByParser` accepts Scala `Map`; `#57` `examples/cli-consumer/` standalone CLI for the REST API; `#58` `Dimension`/`Measure` carry `exprString` so `describe_model` surfaces real expressions; `#59` CLI README "What building this surfaced" section closed).
+- **2026-07:** v0.1.3 shipped (`#54` Jackson Scala module registered for case-class JSON; `#55` shared `SparkFixture` across MCP specs; `#56` `OrderByParser` accepts Scala `Map`; `#57` `examples/cli-consumer/` standalone CLI for the REST API; `#58` `Dimension`/`Measure` carry `exprString` so `describe_model` surfaces real expressions; `#59` CLI README "What building this surfaced" section closed).
 - **2026-07:** Post-v0.1.3: PR `#61` (wiring `# WARN:` lines through `Introspect.handle()`; `field_inventory.skipped` agrees with `warnings.length`). PR `#62` (clean entity placeholder names in `Introspector.toJoinYaml` — bare `id` → `id_model:`, `_uuid`/`_code`/`_key` suffixes strip cleanly). Library at 329 tests; MCP at 72 tests. PR `#63` (docs refresh — version/test-count references + retire limitations fixed earlier). PR `#64` (`ResultDecoder.derive[T]` Scala 2 macro for case classes with primitive fields; closes the typeclass derivation deferral noted in `docs/phase-E-plan.md` §E1). Library at 335 tests; MCP at 72 tests; 407 total. PR `#65` (README + DESIGN + phase-E-plan + feature-roadmap docs surface `ResultDecoder.derive[T]`). PR `#66` (README intro rewrite — status banner replaced with educational intro). PR `#67` (T1 — new `docs/GLOSSARY.md` + `docs/DOCS_MAP.md` + README section reorder). PR `#68` (T2 — new `examples/README.md` central index with reader journeys). PR `#69` (T3-A — new `docs/guide.md` narrative walkthrough companion to DESIGN.md). PR `#70` (T3-B — expand `docs/guide.md` with worked examples per section + trim README Capabilities by relocating tutorial-length subsections to `guide.md`).

@@ -6,6 +6,7 @@
 #   + los_days (per-row, computed via the `transforms:` block below)
 
 encounters:
+    status: published
     table: encounters_clean_csv
     description: "Patient hospital encounters (admissions)"
 
