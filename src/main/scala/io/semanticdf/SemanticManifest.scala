@@ -288,10 +288,41 @@ object SemanticManifest {
       e <- optStringField(node, "expr")
     } yield {
       val isSentinel = e == LambdaSentinel
-      // Same lossiness as dims: calc-measure placeholder lambda. Metadata
-      // (the dependsOn list, name, expr) is recoverable; behavior is not.
-      (n, Measure(name = n, expr = _ => org.apache.spark.sql.functions.lit(1),
-        exprString = if (isSentinel) None else Some(e)))
+      // When the original lambda was serializable (exprString was set at
+      // write time), the persisted `expr` string IS the measure's body —
+      // we can rebuild a working measure by parsing the string into a
+      // Spark Column. This is the common case for base measures
+      // (e.g. `sum(amount)`, `count(1)`) which are typically written by
+      // the YAML loader with the `expr:` string in scope.
+      //
+      // When the original lambda was a bare Scala closure with no hint
+      // (exprString was None at write time), the manifest stores
+      // LambdaSentinel = "<lambda>" — we cannot reconstruct the
+      // behavior, so the measure body is a placeholder `lit(0)` and a
+      // loud runtime error fires on first query. The recipe documents
+      // this lossiness; consumers needing the original lambda behavior
+      // must re-load from YAML.
+      val exprString = if (isSentinel) None else Some(e)
+      val measureBody: SemanticScope => org.apache.spark.sql.Column =
+        if (isSentinel) {
+          scope => throw new IllegalStateException(
+            s"manifest measure '$n' was a bare lambda at write time (no exprString hint); " +
+            s"the original behavior is not recoverable from the manifest. " +
+            s"Re-load from YAML to recover. " +
+            s"See docs/design/manifest-artifact.md §5.")
+        } else {
+          // We need a measure body that evaluates the expression against
+          // the source DataFrame. `F.expr` parses the string into a
+          // Column, then we just resolve any unresolved references at
+          // compile time. Simple base-measure expressions like
+          // `sum(amount)` and `count(1)` round-trip cleanly. Calc-measure
+          // expressions that reference other measures (e.g. `total /
+          // count`) require measure-substitution at compile time, which
+          // we do via the existing transitive-dep walker in the
+          // SemanticTable's aggregate compilation.
+          scope => org.apache.spark.sql.functions.expr(e)
+        }
+      (n, Measure(name = n, expr = measureBody, exprString = exprString))
     }
   }
 
