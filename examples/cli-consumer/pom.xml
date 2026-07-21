@@ -38,6 +38,18 @@
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
         </dependency>
+
+        <!-- Test scope: ScalaTest + JDK's built-in com.sun.net.httpserver.HttpServer.
+             The HTTP server is in the `jdk.httpserver` JDK module (always
+             available; no extra dep). We use it as an in-process fixture
+             so tests exercise the actual wire path of `Main.run` against
+             realistic MCP server responses. -->
+        <dependency>
+            <groupId>org.scalatest</groupId>
+            <artifactId>scalatest_${scala.binary.version}</artifactId>
+            <version>3.2.19</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -52,6 +64,12 @@
                     <execution>
                         <goals>
                             <goal>compile</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>scala-test-compile</id>
+                        <goals>
+                            <goal>testCompile</goal>
                         </goals>
                     </execution>
                 </executions>
@@ -75,6 +93,27 @@
                 <configuration>
                     <mainClass>com.example.sdfcli.Main</mainClass>
                 </configuration>
+            </plugin>
+
+            <!-- ScalaTest plugin. No JVM flags needed (this module has no Spark dep). -->
+            <plugin>
+                <groupId>org.scalatest</groupId>
+                <artifactId>scalatest-maven-plugin</artifactId>
+                <version>2.2.0</version>
+                <configuration>
+                    <suffixes>Spec</suffixes>
+                    <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+                    <junitxml>.</junitxml>
+                    <filereports>semanticdf-cli-test-suite.txt</filereports>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>test</id>
+                        <goals>
+                            <goal>test</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
