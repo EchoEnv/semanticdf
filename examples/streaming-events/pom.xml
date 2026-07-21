@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>semanticdf-streaming-events_2.13</artifactId>
+    <version>0.1.0</version>
+    <packaging>jar</packaging>
+
+    <name>semanticdf-streaming-events</name>
+    <description>Streaming-events example: real-time event-count dashboard from a YAML-declared streaming model. Lifecycle stays with the operator program (this Main); the semantic layer provides model + config.</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <scala.version>2.13.18</scala.version>
+        <scala.binary.version>2.13</scala.binary.version>
+        <spark.version>3.5.8</spark.version>
+        <semanticdf.version>0.1.8</semanticdf.version>
+
+        <!-- JVM flags for the forked Scala app JVM — same as other templates. -->
+        <spark.run.jvmArgs>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</spark.run.jvmArgs>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf_2.13</artifactId>
+            <version>${semanticdf.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_${scala.binary.version}</artifactId>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <sourceDirectory>src/main/scala</sourceDirectory>
+
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>4.9.2</version>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>compile</goal>
+                            <goal>run</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <scalaVersion>${scala.version}</scalaVersion>
+                    <args>
+                        <arg>-deprecation</arg>
+                    </args>
+                    <jvmArgs>
+                        <arg>--add-opens=java.base/java.lang=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.lang.invoke=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.lang.reflect=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.io=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.net=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.nio=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util.concurrent=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.nio.cs=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.security.action=ALL-UNNAMED</arg>
+                        <arg>--add-opens=java.base/sun.util.calendar=ALL-UNNAMED</arg>
+                    </jvmArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <version>3.7.1</version>
+                <configuration>
+                    <descriptorRefs>
+                        <descriptorRef>jar-with-dependencies</descriptorRef>
+                    </descriptorRefs>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
