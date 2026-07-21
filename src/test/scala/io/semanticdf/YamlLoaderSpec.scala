@@ -7,6 +7,8 @@ import org.apache.spark.sql.functions.{col, lit}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+import io.semanticdf.StreamingSupport._
+
 /** Tests for the YAML model loader.
   *
   * These verify that YAML-defined models produce IDENTICAL results to the Scala DSL
@@ -1174,5 +1176,44 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     flights.dimensions("carrier").isEntity         shouldBe true
     flights.dimensions("origin").exprString        shouldBe Some("origin")
     flights.dimensions("origin").isTimeDimension   shouldBe true
+  }
+
+  test("YamlLoader routes to toStreamingSemanticTable when the source DataFrame is streaming") {
+    // YAML streaming auto-routing: passing a streaming DataFrame (the result
+    // of `spark.readStream.*`) via the `tables` Map produces a streaming
+    // model. The factory used internally must be `toStreamingSemanticTable`,
+    // not `toSemanticTable`, otherwise `toStreamingQuery` rejects the model
+    // with "could not find SemanticStreamingTableOp at the root".
+    val stream = spark.readStream.format("rate").load()
+
+    val f = File.createTempFile("yaml-streaming", ".yml")
+    f.deleteOnExit()
+    val w = new PrintWriter(f)
+    try {
+      w.write(
+        """rate_events:
+          |  table: rate_tbl
+          |  dimensions:
+          |    ts: timestamp
+          |  measures:
+          |    event_count: "count(1)"
+          |""".stripMargin)
+    } finally { w.close() }
+
+    val models = YamlLoader.load(f.getAbsolutePath, Map("rate_tbl" -> stream))
+    val m = models("rate_events")
+
+    // The model has the streaming root op (so toStreamingQuery accepts it).
+    val root = m.root
+    assert(root.isInstanceOf[SemanticStreamingTableOp],
+      s"expected SemanticStreamingTableOp root, got ${root.getClass.getSimpleName}")
+
+    // Validator accepts the streaming model with a window + watermark spec.
+    val options = StreamingQueryOptions(
+      window     = Some(WindowSpec("timestamp", "1 second")),
+      watermark  = Some(WatermarkSpec("timestamp", "10 minutes")),
+      outputMode = "append",
+    )
+    StreamingValidator.validate(m, options)
   }
 }
