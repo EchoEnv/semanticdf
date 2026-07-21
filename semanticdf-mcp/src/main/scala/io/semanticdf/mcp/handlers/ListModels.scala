@@ -33,11 +33,18 @@ final class ListModels {
   final case class ModelSummary(
       name: String,
       description: String,
+      /** Lifecycle status — `"draft"` / `"published"` / `"deprecated"`.
+        * Wire-stable lowercase string mirroring `SemanticTable.status`. */
+      status: String,
   )
 
   def handle(registry: io.semanticdf.mcp.Models): Envelope[Data] = {
+    // Alphabetical order on the registry key for deterministic response
+    // shape — both the `models` list and the warnings list are sorted,
+    // so snapshot tests can rely on stable ordering.
+    val sorted = registry.all.toList.sortBy(_._1)
     val data = Data(
-      models = registry.all.map { case (modelName, t) =>
+      models = sorted.map { case (modelName, t) =>
         // The YamlLoader map key is the YAML top-level key — that's the
         // canonical model name. Use it directly; fall back to the
         // SemanticTable's own name field only if the loader key is empty
@@ -45,12 +52,16 @@ final class ListModels {
         val name = if (modelName.nonEmpty) modelName
                    else t.name.getOrElse("<unnamed>")
         ModelSummary(
-          name = name,
+          name        = name,
           description = t.description.getOrElse(""),
+          status      = t.status.asString,
         )
       },
     )
-    Envelope.ok(data)
+    val warnings = sorted.flatMap { case (modelName, t) =>
+      Handlers.lifecycleWarnings(modelName, t.status)
+    }.toList
+    Envelope.ok(data, warnings = warnings)
   }
 }
 

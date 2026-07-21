@@ -122,6 +122,43 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
   }
 
   // ===========================================================================
+  // (3c) Lifecycle warnings — describe_model carries warnings on the envelope
+  // ===========================================================================
+
+  test("describe-warns-deprecated: envelope warnings include deprecation string") {
+    val stub = stubModel(key = "flights", name = "flights",
+      status = io.semanticdf.ModelStatus.Deprecated)
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.warnings shouldBe List("model 'flights' is deprecated")
+  }
+
+  test("describe-warns-draft: envelope warnings include the draft-specific wording") {
+    val stub = stubModel(key = "flights", name = "flights",
+      status = io.semanticdf.ModelStatus.Draft)
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.warnings shouldBe List("model 'flights' is in draft; shape may change")
+  }
+
+  test("describe-does-not-warn-published: published model returns warnings == Nil") {
+    val stub = stubModel(key = "flights", name = "flights",
+      status = io.semanticdf.ModelStatus.Published)
+    val env = new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+    env.warnings shouldBe Nil
+  }
+
+  test("draft-warning-text-distinct-from-deprecated: both wordings differ") {
+    val draftStub = stubModel(key = "draft_m", name = "draft_m",
+      status = io.semanticdf.ModelStatus.Draft)
+    val depStub   = stubModel(key = "old_m", name = "old_m",
+      status = io.semanticdf.ModelStatus.Deprecated)
+    val draftWarn = new DescribeModel().handle(draftStub, stubOkf(), "draft_m", includeOkf = false).warnings
+    val depWarn   = new DescribeModel().handle(depStub,   stubOkf(), "old_m",   includeOkf = false).warnings
+    draftWarn shouldBe List("model 'draft_m' is in draft; shape may change")
+    depWarn   shouldBe List("model 'old_m' is deprecated")
+    (draftWarn ++ depWarn).distinct.size shouldBe 2  // two distinct strings
+  }
+
+  // ===========================================================================
   // (4) Join one-liner format — single key, composite key, cross
   // ===========================================================================
 

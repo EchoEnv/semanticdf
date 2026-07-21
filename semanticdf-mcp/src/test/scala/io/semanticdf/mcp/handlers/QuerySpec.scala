@@ -47,6 +47,15 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
     new Models(Map("flights" -> table), DataConfig(Map.empty))
   }
 
+  /** Build a registry with one flights model and a chosen status. */
+  private def registryWithStatus(s: io.semanticdf.ModelStatus): Models = {
+    val table = toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+      .status(s)
+    new Models(Map("flights" -> table), DataConfig(Map.empty))
+  }
+
   private def baseRequest = QueryRequest(
     model      = "flights",
     measures   = Seq("flight_count"),
@@ -356,5 +365,42 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
     val m: Map[String, Any] = Map("field" -> "carrier", "direction" -> "desc")
     val ob = OrderByParser.parse(m)
     assert(ob == OrderBy("carrier", "desc"))
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle warnings — query/explain surface model lifecycle on the envelope
+  // ---------------------------------------------------------------------------
+
+  test("query-warns-deprecated-model: query against Deprecated model carries warning") {
+    val reg = registryWithStatus(io.semanticdf.ModelStatus.Deprecated)
+    val env = new Query(spark).handle(reg, baseRequest)
+    env.warnings shouldBe List("model 'flights' is deprecated")
+  }
+
+  test("query-warns-draft-model: query against Draft model carries draft-specific warning") {
+    val reg = registryWithStatus(io.semanticdf.ModelStatus.Draft)
+    val env = new Query(spark).handle(reg, baseRequest)
+    env.warnings shouldBe List("model 'flights' is in draft; shape may change")
+  }
+
+  test("query-does-not-warn-published: query against Published model returns warnings == Nil") {
+    val env = new Query(spark).handle(registryWithStatus(io.semanticdf.ModelStatus.Published), baseRequest)
+    env.warnings shouldBe Nil
+  }
+
+  test("query-explains-warns-deprecated: explain() follows the same warning policy as handle()") {
+    val reg = registryWithStatus(io.semanticdf.ModelStatus.Deprecated)
+    val env = new Query(spark).explain(reg, baseRequest)
+    env.warnings shouldBe List("model 'flights' is deprecated")
+  }
+
+  test("error-envelope-codes-unchanged: closed error-code list unaffected by lifecycle") {
+    // Regression: lifecycle states produce success envelopes with warnings,
+    // never error envelopes. Verify the model-not-found path still uses
+    // the existing error code (not a new MODEL_DEPRECATED etc.).
+    val ex = intercept[io.semanticdf.mcp.ModelNotFound] {
+      new Query(spark).handle(registry, baseRequest.copy(model = "ghost"))
+    }
+    ex.getMessage should include("ghost")
   }
 }

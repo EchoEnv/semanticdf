@@ -136,7 +136,7 @@ final class DescribeModel {
       },
       okf_markdown = if (includeOkf) okf(modelName) else None,
     )
-    Envelope.ok(data)
+    Envelope.ok(data, warnings = Handlers.lifecycleWarnings(modelName, t.status))
   }
 
   /** `MeasureKind.Base` → `"base"`, `MeasureKind.Calc` → `"calc"`.

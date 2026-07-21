@@ -270,13 +270,15 @@ dimension/measure typo recovery. Do not invent suggestions in the MCP layer.
 ```json
 {
  "models": [
- {"name": "flights", "description": "Flight facts: per-flight distance and passenger counts"},
- {"name": "carriers", "description": "Airline carrier reference data (lookup)"}
+ {"name": "flights",  "description": "Flight facts: per-flight distance and passenger counts", "status": "published"},
+ {"name": "carriers", "description": "Airline carrier reference data (lookup)",          "status": "published"}
  ]
 }
 ```
 
-**Library call:** `models.keys.map { n => (n, models(n).root.name) }` plus description via `models(n).root.description`.
+**Library call:** `models.keys.map { n => (n, models(n).root.name) }` plus description via `models(n).root.description` plus `models(n).status.asString`.
+
+**Status values:** each `models[]` entry carries a `status` string — `"draft"` / `"published"` / `"deprecated"`. See [Lifecycle warnings](#lifecycle-warnings) below.
 
 ---
 
@@ -560,6 +562,39 @@ val yaml = Introspector(spark = spark).fromFile(
 
 `field_inventory` is parsed from the YAML header comments; `warnings` is the
 list of strings the Introspector emits when it can't classify a field.
+
+---
+
+## Lifecycle warnings
+
+Every successful tool response carries an optional `warnings: List[String]`
+field on the envelope. Lifecycle warnings appear here when the tool touched
+a model whose `status` is not `Published`:
+
+| Model status    | Warning string                                              |
+|-----------------|-------------------------------------------------------------|
+| `Deprecated`    | `"model '<name>' is deprecated"`                            |
+| `Draft`         | `"model '<name>' is in draft; shape may change"`            |
+| `Published`     | *(none)*                                                    |
+
+The `Envelope's` `warnings` array already exists in v3; populating it for
+lifecycle is **additive wire change** — clients that ignore the field
+keep working. The closed MCP error-code list is **unchanged**: lifecycle
+states produce success envelopes with warnings, **never** error envelopes
+or refusal responses. The library terminals (`toDataFrame`,
+`toStreamingQuery`, `execute`) remain permissive; this is a server-side
+consumer-enforcement layer only.
+
+**Consumers SHOULD:**
+- render the warnings to end-users / pass to LLMs verbatim (they're display text)
+- read `list_models.data.models[].status` to pre-filter before issuing a `query` or `describe_model`
+- treat the strings as informational, not as identifiers for pattern-matching
+
+**Consumers SHOULD NOT:**
+- treat lifecycle states as errors — they are success envelopes
+- pattern-match on exact warning substrings (use the structured `data.status` field for routing)
+
+The string format is **wire-stable**. Renaming is a breaking change.
 
 ---
 
