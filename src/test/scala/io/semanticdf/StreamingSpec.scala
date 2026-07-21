@@ -426,4 +426,71 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
       rm(checkpointDir)
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Typed-DSL equivalence
+  // -------------------------------------------------------------------------
+  //
+  // The streaming terminal walks the op tree (groupBy → aggregate → window,
+  // join_one source-side / stream-side, etc.) and decides what to do based
+  // on op-tree shape, NOT on which DSL method built the op. So the typed DSL
+  // (`groupByDimensions/aggregateMeasures`) and the string DSL
+  // (`groupBy/aggregate`) MUST produce the same op-tree shape, and the
+  // streaming terminal must accept both.
+
+  test("typed groupByDimensions/aggregateMeasures produces same op-tree shape as string DSL on streaming") {
+    implicit val s: SparkSession = spark
+    val rateStream = s.readStream.format("rate").load()
+      .withColumn("type",   lit("any"))
+      .withColumn("bucket", (col("value") % 3).cast("string"))
+
+    import TypedRefSupport._
+    val baseModel = toStreamingSemanticTable(rateStream, name = Some("dsl_eq"))
+      .withDimensions(
+        Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")),
+        Dimension("type",   t => t("type")),
+        Dimension("bucket", t => t("bucket")),
+      )
+      .withMeasures(Measure("event_count", t => count(lit(1))))
+
+    val stringModel = baseModel.groupBy("type", "bucket").aggregate("event_count")
+    val typedModel  = baseModel.groupByDimensions(typeRef, bucketRef).aggregateMeasures(countRef)
+
+    // Same op type under both APIs.
+    assert(stringModel.root.isInstanceOf[SemanticAggregateOp])
+    assert(typedModel.root.isInstanceOf[SemanticAggregateOp])
+
+    // Same keys + same measures, in the same order.
+    val sa = stringModel.root.asInstanceOf[SemanticAggregateOp]
+    val ta = typedModel.root.asInstanceOf[SemanticAggregateOp]
+    assert(sa.keys        == ta.keys,
+      s"keys differ:\n  string: ${sa.keys}\n  typed:  ${ta.keys}")
+    assert(sa.keys        == Seq("type", "bucket"),
+      s"unexpected keys: ${sa.keys}")
+    assert(sa.measureNames == ta.measureNames,
+      s"measures differ:\n  string: ${sa.measureNames}\n  typed:  ${ta.measureNames}")
+
+    // Same source op (SemanticStreamingTableOp) underneath.
+    assert(sa.source.isInstanceOf[SemanticStreamingTableOp])
+    assert(ta.source.isInstanceOf[SemanticStreamingTableOp])
+
+    // StreamingValidator accepts both with the same window spec.
+    val opts = StreamingQueryOptions(
+      window    = Some(WindowSpec("timestamp", "1 second")),
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+    )
+    StreamingValidator.validate(stringModel, opts)  // should not throw
+    StreamingValidator.validate(typedModel,  opts)  // should not throw
+  }
+}
+
+/** Phantom tags + implicit refs used by the typed-DSL equivalence test.
+  * Kept at file scope so it's visible to StreamingSpec, not a class member. */
+object TypedRefSupport {
+  sealed trait TypeCol
+  sealed trait BucketCol
+  sealed trait EventCount
+  implicit val typeRef:   SemanticDimension[TypeCol]   = SemanticDimension.of[TypeCol]("type")
+  implicit val bucketRef: SemanticDimension[BucketCol] = SemanticDimension.of[BucketCol]("bucket")
+  implicit val countRef:  SemanticMeasure[EventCount]  = SemanticMeasure.of[EventCount]("event_count")
 }
