@@ -2,8 +2,9 @@
 type: SemanticTable
 title: Customers
 description: Customer master data with signup dates and city
+status: published
 resource: file://examples/customer-analytics/models/customers.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [semantic-table]
 ---
 

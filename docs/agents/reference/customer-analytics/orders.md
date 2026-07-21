@@ -2,8 +2,9 @@
 type: SemanticTable
 title: Orders
 description: Per-order line items with amount and order date
+status: published
 resource: file://examples/customer-analytics/models/orders.yml
-timestamp: 2026-07-14T19:42:54Z
+timestamp: 2026-07-21T18:59:26Z
 tags: [semantic-table]
 ---
 
