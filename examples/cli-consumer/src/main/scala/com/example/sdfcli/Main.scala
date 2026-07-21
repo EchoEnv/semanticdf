@@ -106,6 +106,18 @@ object Main {
     sys.env.getOrElse("SDF_URL", "http://localhost:8080")
 
   // ---------------------------------------------------------------------------
+  // Lifecycle warnings — rendered to stderr so they don't pollute --json
+  // ---------------------------------------------------------------------------
+
+  /** Print lifecycle warnings to stderr. Wire-stable strings from the MCP
+    * server (PR #136 contract). Format: one `WARN: <message>` line per
+    * warning. Printed before the command's main output so the human
+    * reader sees them in context. */
+  private def printWarnings(warnings: List[String]): Unit = warnings.foreach { w =>
+    System.err.println(s"WARN: $w")
+  }
+
+  // ---------------------------------------------------------------------------
   // Commands
   // ---------------------------------------------------------------------------
 
@@ -114,14 +126,16 @@ object Main {
     if (cfg.json) { println(resp.body); return }
     val root = resp.parseJson
     if (root.errorPath(cfg)) return
+    printWarnings(root.warningsPath)
     val models = root.dataPath.field("models").elemList
     if (models.isEmpty) { println("(no models loaded)"); return }
     val rows = models.map { m =>
       val name = m.field("name").text
       val desc = m.field("description").text
-      List(name, desc)
+      val status = m.field("status").text
+      List(name, desc, status)
     }
-    println(Table.render(List("MODEL", "DESCRIPTION"), rows))
+    println(Table.render(List("MODEL", "STATUS", "DESCRIPTION"), rows))
   }
 
   private def cmdDescribe(cfg: Config, args: List[String]): Int = args match {
@@ -132,6 +146,7 @@ object Main {
       if (cfg.json) { println(resp.body); return 0 }
       val root = resp.parseJson
       if (root.errorPath(cfg)) return 1
+      printWarnings(root.warningsPath)
       printDescribe(root.dataPath)
       0
     case _ =>
@@ -141,6 +156,8 @@ object Main {
   private def printDescribe(d: JsonNode): Unit = {
     println(s"Model:        ${d.field("model").text}")
     println(s"Version:      ${d.field("version").text}")
+    val status = d.field("status").textOption
+    status.foreach(s => println(s"Status:       $s"))
     val src = d.field("source_table").textOption
     src.foreach(s => println(s"Source table: $s"))
     println()
@@ -183,6 +200,7 @@ object Main {
         if (cfg.json) { println(resp.body); return 0 }
         val root = resp.parseJson
         if (root.errorPath(cfg)) return 1
+        printWarnings(root.warningsPath)
         if (explain) {
           // /explain returns Envelope[String] — the plan text is `data`.
           println(root.dataPath.text)
@@ -359,6 +377,16 @@ object Main {
         if (cfg.json) println(body) else System.err.println(s"sdf: $code: $msg")
         true
       } else false
+    }
+
+    /** Lifecycle warnings carried on the envelope. The MCP server emits
+      * these when a tool touched a Deprecated or Draft model (PR #136);
+      * the field is additive for tolerant JSON clients and absent on older
+      * server versions, in which case this returns Nil. */
+    def warningsPath: List[String] = {
+      val arr = node.path("warnings")
+      if (arr == null || !arr.isArray) Nil
+      else arr.iterator.asScala.toList.map(_.asText(""))
     }
 
     def body: String = node.toString

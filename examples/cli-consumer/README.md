@@ -71,14 +71,15 @@ sdf explain <model> -d <dim> -m <m> show the semantic plan (no execution)
 
 ```bash
 $ sdf list
-MODEL     DESCRIPTION
---------  ---------------------------------------
-carriers  Airline carrier reference data (lookup)
-flights
+MODEL     STATUS     DESCRIPTION
+--------  ---------  ---------------------------------------
+carriers  published  Airline carrier reference data (lookup)
+flights   published
 
 $ sdf describe flights
 Model:        flights
 Version:      0
+Status:       published
 
 Dimensions:
 NAME           EXPR
@@ -175,6 +176,34 @@ deploy
 
 The streaming terminal (`model.toStreamingQuery(spark, cfg)`) lives in the operator's program. The `sdf` CLI has no opinion on lifecycle. For the canonical operator workflow — opening the source, constructing `StreamingConfig`, calling `toStreamingQuery`, running for N seconds, calling `.stop()` — see [`examples/streaming-events`](../streaming-events/).
 
+## Lifecycle warnings
+
+When the MCP server touches a model whose `status` is `Deprecated` or `Draft`, the response envelope carries a `warnings: List[String]` field. `sdf` prints these to **stderr** as `WARN:` lines (one per warning), so they don't pollute `--json` output on stdout:
+
+```bash
+$ sdf describe legacy_flights
+WARN: model 'legacy_flights' is deprecated
+Model:        legacy_flights
+Version:      3
+Status:       deprecated
+...
+```
+
+`list` shows one `WARN:` line per non-Published model in the registry, and adds a `STATUS` column to the table:
+
+```bash
+$ sdf list
+WARN: model 'legacy_flights' is deprecated
+WARN: model 'draft_metrics' is in draft; shape may change
+MODEL          STATUS      DESCRIPTION
+-------------  ----------  --------------------------------------
+draft_metrics  draft       (no description)
+legacy_flights deprecated  Pre-2024 flight aggregation
+flights        published   Flight facts
+```
+
+`query` and `explain` carry the warning before the result table / plan text. The strings are display text (LLM-readable), not identifiers — see `mcp-contract.md` §"Lifecycle warnings" for the full contract.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -189,10 +218,12 @@ The streaming terminal (`model.toStreamingQuery(spark, cfg)`) lives in the opera
 `sdf` was built to **probe the REST API as a real client would**. As of v0.1.3
 it has fulfilled that purpose and surfaced two issues, now both fixed:
 
-1. `order_by` over REST was broken (regression from PR #54's Jackson Scala
-   module) — fixed in PR #56.
-2. `describe_model` `expr` serialised as opaque lambda addresses — fixed in
-   PR #58; `Dimension`/`Measure` now carry `exprString`.
+1. `order_by` over REST was broken (regression from the Jackson Scala-module
+   wiring) — `OrderByParser` now accepts both `java.util.Map` (legacy
+   SDK-direct callers) and `scala.Map` (Jackson-Scala-module callers).
+2. `describe_model` `expr` serialised as opaque lambda addresses — `Dimension`/
+   `Measure` now carry `exprString` so the JSON shows the original expression
+   string instead of `Lambda$.../0x...`.
 
 `sdf` continues to serve as a **regression witness for the REST contract**:
 re-run it against the live server after any change to `RestServer.scala` or
