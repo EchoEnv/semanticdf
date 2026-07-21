@@ -126,6 +126,55 @@ PLAN SUMMARY
 ...
 ```
 
+## Streaming models over `sdf`
+
+The `sdf` binary is **model-only** with respect to streaming. Lifecycle (start / stop / hold a stream for an unbounded time) is the operator's program — there is no `sdf start`, `sdf stop`, no implicit streaming query. What the five verbs (`list` / `describe` / `query` / `explain` / `introspect`) DO is interact with streaming-rooted models through their static schema, identically to batch:
+
+```bash
+# Streaming model wired into the example data-config
+$ sdf list
+MODEL     DESCRIPTION
+--------  --------------------------------------
+flights   Flight facts ...
+events    Real-time events arriving on the events topic.
+
+$ sdf describe events
+Model:        events
+Version:      0
+Source table: events_stream          ← streaming read name
+
+Dimensions:
+NAME             EXPR
+---------------  ----------------
+event_type       type
+timestamp_bucket timestamp
+
+Measures:
+NAME         KIND  EXPR
+-----------  ----  --------
+event_count  base  count(1)
+total_value  base  sum(value)
+
+$ sdf query events -d event_type -m event_count
+ERROR streaming-terminal: groupBy(...).aggregate(...) requires a window spec
+in StreamingQueryOptions (set StreamingQueryOptions.window)
+```
+
+The error message is the *correct* answer, not a silent failure. `sdf query` ran the streaming terminal's validator against the op tree — the same validator the library runs — and it correctly rejected an aggregation against a streaming model that has no window spec (`sdf` doesn't carry operator-side `StreamingQueryOptions`, so aggregation is operator-only).
+
+For streaming models, prefer filter-only queries:
+
+```bash
+$ sdf query events --where "event_type = 'deploy'"
+event_type
+---------
+deploy
+```
+
+(filter-only returns rows matching the filter at the moment of the call; useful for spot-checks, *not* a continuous tail.)
+
+The streaming terminal (`model.toStreamingQuery(spark, cfg)`) lives in the operator's program. The `sdf` CLI has no opinion on lifecycle. For the canonical operator workflow — opening the source, constructing `StreamingConfig`, calling `toStreamingQuery`, running for N seconds, calling `.stop()` — see [`examples/streaming-events`](../streaming-events/).
+
 ## Exit codes
 
 | Code | Meaning |

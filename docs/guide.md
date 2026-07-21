@@ -694,6 +694,20 @@ for what's not yet supported in streaming (stream-stream joins,
 `orderBy`/`limit`, calc measures requiring transitive deps at
 the streaming stage).
 
+### Where streaming runs in the stack
+
+The 15-line example above is *the* Scala-side streaming terminal. The streaming story touches three other surfaces too:
+
+| Surface | What it does with streaming | Where the boundary lives |
+|---|---|---|
+| **YAML** | `YamlLoader.load(path, tables)` auto-routes a streaming source (`df.isStreaming == true`) to `toStreamingSemanticTable` — same loader API as batch. The model file holds the semantic shape (dims/measures/calc/filters) only; a `streaming:` block is intentionally **not** supported — operational config (window / watermark / output sink) lives in code. | Worked example: [`examples/streaming-events/models/events.yml`](../../examples/streaming-events/models/events.yml) |
+| **Scala DSL** | Every builder (`groupBy`, `aggregate`, `where`, `join_one`, `groupByDimensions`, `aggregateMeasures`, the typed-`Predicate` factories) works on streaming-rooted models. The terminal that commits to streaming is `model.toStreamingQuery(spark, opts)` or `(spark, cfg)` — the typed `StreamingConfig` overload mirrors how operators construct it. | The 15-line example above |
+| **MCP tools** | `list_models` / `describe_model` / `query` / `explain` / `introspect` all work on streaming models identically. *No* `start_stream` / `stop_stream` / `list_streams` tool — by design. The contract says: model-only on the agent side; lifecycle on the operator side. | [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) §*Streaming models* |
+| **CLI** (`sdf`) | Same five verbs, same model-only surface. `sdf query <streaming-model>` runs the filter-only path against the streaming source. The `sdf` binary never starts, stops, or holds a stream. | [`examples/cli-consumer/README.md`](../../examples/cli-consumer/README.md) §*Streaming models* |
+| **Operator program** | Owns `StreamingConfig` construction, the `toStreamingQuery` call, `awaitTermination()` / `query.stop()`. *Not* a library surface; *not* an MCP/CLI surface. | The 15-line example above is the canonical operator workflow. |
+
+One model file, four read-only surfaces, one operator surface. The semantic-layer / operator-lifecycle boundary is structural — see [`docs/feature-roadmap.md`](feature-roadmap.md) §2.3 for the rationale.
+
 ### `queryAs[T]` — typed one-shot bundle
 
 `queryAs[T]` is the typed-flavor sibling of `query(...)`: same
