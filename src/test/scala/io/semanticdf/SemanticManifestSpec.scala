@@ -59,6 +59,7 @@ class SemanticManifestSpec
         version       = 7,
         description   = Some("the kpi facts table"),
         sourceTable   = Some("kpi_facts_raw"),
+        status        = "published",
         dimensions    = 1,
         measures      = 1,
         calcMeasures  = 0,
@@ -347,6 +348,56 @@ class SemanticManifestSpec
       val json = SemanticManifest.toJson(model)
       val meta = SemanticManifest.parseMeta(json)
       meta.usesTAll shouldBe false
+    }
+
+    // -- status round-trip ---------------------------------------------------
+
+    it("emits real status (not hardcoded literal) in the manifest") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val draft = toSemanticTable(df, name = Some("draft_model"))
+        .status(ModelStatus.Draft)
+      val json = SemanticManifest.toJson(draft)
+      val meta = SemanticManifest.parseMeta(json)
+      meta.status shouldBe "draft"
+    }
+
+    it("emits deprecated status in the manifest") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val dep = toSemanticTable(df, name = Some("legacy_model"))
+        .status(ModelStatus.Deprecated)
+      val json = SemanticManifest.toJson(dep)
+      val meta = SemanticManifest.parseMeta(json)
+      meta.status shouldBe "deprecated"
+    }
+
+    it("defaults to published when no status is set") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val pub = toSemanticTable(df, name = Some("x"))
+      val json = SemanticManifest.toJson(pub)
+      val meta = SemanticManifest.parseMeta(json)
+      meta.status shouldBe "published"
+    }
+
+    it("streaming model preserves status through groupBy().aggregate()") {
+      val rateDf = spark.readStream.format("rate").load()
+      val model  = toStreamingSemanticTable(rateDf)
+        .withDimensions(Dimension("value", _ => F.col("value")))
+        .withMeasures(Measure("count", _ => F.lit(1)).copy(exprString = Some("count(*)")))
+        .status(ModelStatus.Deprecated)
+        .groupBy("value")
+        .aggregate("count")
+      val json = SemanticManifest.toJson(model)
+      val meta = SemanticManifest.parseMeta(json)
+      meta.status shouldBe "deprecated"
     }
   }
 }

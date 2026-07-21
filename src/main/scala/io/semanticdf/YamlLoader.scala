@@ -386,6 +386,24 @@ object YamlLoader {
     }
     if (declaredVersion != 0) model = model.version(declaredVersion)
 
+    // Optional `status:` field at the top of the model block. Lifecycle marker
+    // surfaced by MCP `describe_model`, the manifest artifact, and OKF gen.
+    // Defaults to Published (matches v0.1.x implicit-publication semantics).
+    // Unknown values throw with the accepted list — strict so a typo doesn't
+    // silently downgrade to Published.
+    cfg.get("status").foreach { statusRaw =>
+      val statusStr = statusRaw match {
+        case s: String => s
+        case other     => throw new IllegalArgumentException(
+          s"Model '$name': 'status' must be a string, got ${other.getClass.getSimpleName}")
+      }
+      ModelStatus.fromString(statusStr) match {
+        case Some(s) => model = model.status(s)
+        case None    => throw new IllegalArgumentException(
+          s"Model '$name': 'status' must be one of ${ModelStatus.all.map(_.asString).mkString("|")}, got '$statusStr'")
+      }
+    }
+
     // Source columns form the base visibility set. Every expression in
     // dimensions / transforms / measures must resolve against this set
     // (or against earlier transforms, in the case of later transforms /
