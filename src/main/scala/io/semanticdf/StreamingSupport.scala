@@ -1,6 +1,7 @@
 package io.semanticdf
 
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.functions._
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 
 /** Streaming-terminal support.
@@ -77,6 +78,81 @@ object StreamingSupport {
     * adjust the model without consulting an internal spec. */
   class StreamingUnsupportedError(msg: String)
     extends RuntimeException(s"Streaming terminal: $msg")
+
+  // -------------------------------------------------------------------------
+  // Declarative streaming config — the shape an MCP / CLI / YAML surface
+  // presents to the user. Holds everything needed to start a streaming
+  // query except the source `DataFrame` itself (the source comes from the
+  // data-config).
+  // -------------------------------------------------------------------------
+
+  /** Output sink for the streaming query. Each variant names a Spark-native
+    * destination; the framework derives the `foreachBatch` callback from
+    * this and the underlying `StreamingQueryOptions.outputMode`.
+    *
+    * The default [[Noop]] discards every micro-batch (useful for tests; the
+    * agent or operator can still observe via `list_streams`). */
+  sealed trait OutputSink {
+    /** A short, human-readable label for `list_streams` reports. */
+    def label: String
+  }
+  object OutputSink {
+    /** Discard every micro-batch; the streaming pipeline still runs. */
+    case object Noop extends OutputSink { val label = "noop" }
+    /** Print a sample of each micro-batch to the server log. */
+    final case class Console(limit: Int = 20) extends OutputSink {
+      val label = s"console(limit=$limit)"
+    }
+    /** Write each micro-batch to a parquet directory in append mode. */
+    final case class Parquet(path: String) extends OutputSink {
+      val label = s"parquet(path='$path')"
+    }
+    /** Write each micro-batch as CSV files. */
+    final case class Csv(path: String) extends OutputSink {
+      val label = s"csv(path='$path')"
+    }
+    /** Custom sink — pass a raw `DataFrame => Unit` callback. Used by tools
+      * that wire streaming results into a downstream pipeline outside the
+      * library's built-in sinks. */
+    final case class Custom(label: String, write: DataFrame => Unit) extends OutputSink {
+      val customLabel: String = label
+    }
+  }
+
+  /** Declarative streaming config. Built by the YAML loader from the
+    * `streaming:` block in a model file; consumed by the MCP server's
+    * auto-start path (and any other surface that wants the same shape).
+    *
+    * The fields map 1-for-1 onto [[StreamingQueryOptions]] except
+    * `foreachBatch` (derived from `outputSink`) and `trigger` (defaults
+    * to 5-second ProcessingTime). */
+  final case class StreamingConfig(
+      outputSink: OutputSink,
+      window: Option[WindowSpec] = None,
+      watermark: Option[WatermarkSpec] = None,
+      outputMode: String = "append",
+      checkpointLocation: Option[String] = None,
+  ) {
+    /** Translate this config into the lower-level [[StreamingQueryOptions]]
+      * that `SemanticTable.toStreamingQuery` consumes. */
+    def toQueryOptions: StreamingQueryOptions = {
+      val sinkCb: DataFrame => Unit = outputSink match {
+        case OutputSink.Noop             => _ => ()
+        case c @ OutputSink.Console(_)    => (df: DataFrame) => df.show(c.limit, false)
+        case p @ OutputSink.Parquet(_)    => (df: DataFrame) => df.write.mode("append").parquet(p.path)
+        case c @ OutputSink.Csv(_)        => (df: DataFrame) => df.write.mode("append").csv(c.path)
+        case OutputSink.Custom(_, write)  => write
+      }
+      StreamingQueryOptions(
+        trigger            = Some(Trigger.ProcessingTime("5 seconds")),
+        outputMode         = outputMode,
+        checkpointLocation = checkpointLocation,
+        foreachBatch       = sinkCb,
+        window             = window,
+        watermark          = watermark,
+      )
+    }
+  }
 
   /** Validates that the op tree is compatible with the streaming terminal.
     *

@@ -220,6 +220,19 @@ list as new concepts land.
   not supported, stream-stream joins not supported), and throws a
   `StreamingUnsupportedError` that names the offending pattern.
   Failing loudly at the terminal prevents silent wrong results.
+- **`StreamingConfig`** — the declarative shape for starting a
+  streaming query. Combines an `OutputSink` (noop / console /
+  parquet / csv) with optional `WindowSpec`, `WatermarkSpec`,
+  `outputMode`, and `checkpointLocation`. Operators translate a
+  `StreamingConfig` into `StreamingQueryOptions` and pass it to
+  `model.toStreamingQuery(spark, config)`. The YAML `streaming:`
+  block parses one-for-one.
+- **`OutputSink`** — sealed trait for the streaming result sink.
+  Variants: `Noop` (discard), `Console(limit)` (log sample),
+  `Parquet(path)`, `Csv(path)`, `Custom(label, write)` (raw
+  `DataFrame => Unit`; not expressible in YAML). Operators pick one
+  per model; the framework turns the variant into the matching
+  `foreachBatch` callback.
 
 ## MCP / REST surfaces
 
