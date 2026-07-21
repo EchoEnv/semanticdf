@@ -2,7 +2,17 @@
 
 **Status:** ACCEPTED (recipe is implementation-ready — open questions resolved by review)
 **Library version that would emit this shape:** `0.1.9-manifest`
-**Scope:** Single, additive feature (`SemanticManifest` object + `tools.Main manifest` route + tests). No op-tree changes. No new dependencies.
+**Scope:** Single, additive feature (`SemanticManifest` object + `tools.Main manifest` route + tests). No op-tree changes. No new framework dependencies.
+
+> **Implementation note (carried from PR #132):** The recipe originally
+> said "no new external dependencies." The implementation took a small
+> deviation: it uses **`jackson-databind` + `jackson-module-scala_2.13`**
+> (already a project dep via `semanticdf-mcp`, pinned to 2.15.2 to match
+> Spark's bundled Jackson) instead of a hand-rolled JSON serializer. The
+> trade-off was ~250 LOC of hand-rolled parse/serialize + edge-case
+> handling vs. one explicit library-pom dep declaration. The dep itself
+> is unchanged in semanticdf-mcp; only the library pom now declares it
+> explicitly instead of relying on Spark's transitive `provided` scope.
 
 ## 1. What this is (and what it isn't)
 
