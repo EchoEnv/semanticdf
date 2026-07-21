@@ -167,7 +167,7 @@ final class SemanticTable private[semanticdf] (
     */
   def toStreamingQuery(
       spark: SparkSession,
-      opts: StreamingSupport.StreamingQueryOptions = StreamingSupport.StreamingQueryOptions(),
+      opts: StreamingSupport.StreamingQueryOptions,
   ): org.apache.spark.sql.streaming.StreamingQuery = {
     import StreamingSupport._
     import org.apache.spark.sql.functions._
@@ -381,6 +381,33 @@ final class SemanticTable private[semanticdf] (
       spark: SparkSession,
       config: StreamingSupport.StreamingConfig,
   ): org.apache.spark.sql.streaming.StreamingQuery =
+    toStreamingQuery(spark, config.toQueryOptions)
+
+  /** Implicit-SparkSession variant of [[toStreamingQuery]] — mirrors
+    * `toDataFrame(implicit spark)` so the same DSL ergonomics (call
+    * sites without the explicit `spark` arg) work for both terminals.
+    *
+    * Callsite:
+    * {{{
+    *   implicit val spark: SparkSession = ...
+    *   val query = model.toStreamingQuery(StreamingConfig(...))   // spark picked up implicitly
+    *   val query2 = model.toStreamingQuery()                       // defaults + implicit spark
+    * }}}
+    *
+    * Forwarded to the canonical explicit-SparkSession overload, so
+    * behavior is identical. The forward is important — it keeps the
+    * validator / pipeline logic in exactly one place.
+    */
+  def toStreamingQuery(
+      opts: StreamingSupport.StreamingQueryOptions = StreamingSupport.StreamingQueryOptions(),
+  )(implicit spark: SparkSession): org.apache.spark.sql.streaming.StreamingQuery =
+    toStreamingQuery(spark, opts)
+
+  /** Implicit-SparkSession variant of the declarative-`StreamingConfig`
+    * overload — same ergonomics as above for the typed-config path. */
+  def toStreamingQuery(
+      config: StreamingSupport.StreamingConfig,
+  )(implicit spark: SparkSession): org.apache.spark.sql.streaming.StreamingQuery =
     toStreamingQuery(spark, config.toQueryOptions)
 
   /** Typed terminal — compile the op tree, collect the rows, decode each
