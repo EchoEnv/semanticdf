@@ -225,9 +225,19 @@ final class SemanticTable private[semanticdf] (
     // 3. The user-visible query name (for Spark UI / logs).
     val queryName = sourceTable.getOrElse("semanticdf_streaming_model")
 
-    // 4. Apply watermark FIRST (if specified). Watermarks require event-time
-    //    columns, and the watermark must be set before any aggregation.
-    val withWatermark: DataFrame = opts.watermark match {
+    // 4. Apply watermark FIRST (if specified or defaulted). Watermarks
+    //    require event-time columns, and the watermark must be set before
+    //    any aggregation.
+    //    ADR 0002 stage 5: when a window is set but the user did not
+    //    provide a watermark, default it to the window column with a
+    //    10-minute delay. This bounds streaming state and keeps the
+    //    pipeline well-formed.
+    val resolvedWatermark: Option[WatermarkSpec] = opts.watermark match {
+      case w @ Some(_) => w
+      case None        =>
+        opts.window.map(w => WatermarkSpec(w.column, "10 minutes"))
+    }
+    val withWatermark: DataFrame = resolvedWatermark match {
       case Some(w) => source.withWatermark(w.column, w.delay)
       case None    => source
     }
@@ -428,7 +438,15 @@ final class SemanticTable private[semanticdf] (
 
     val writerWithCheckpoint = opts.checkpointLocation match {
       case Some(loc) => writer.option("checkpointLocation", loc)
-      case None      => writer
+      // ADR 0002 stage 5: default the checkpoint to a per-query temp dir.
+      // Production callers should always pass `checkpointLocation`
+      // explicitly to a durable path; this default is for prototyping.
+      case None      =>
+        val dir = java.io.File.createTempFile(
+          "semanticdf-checkpoints-", "").getAbsoluteFile
+        dir.delete()
+        dir.mkdirs()
+        writer.option("checkpointLocation", dir.getAbsolutePath)
     }
 
     writerWithCheckpoint.start()
