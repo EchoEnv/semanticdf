@@ -613,6 +613,93 @@ between v1 and v2:
 
 ---
 
+## Streaming models — the agent surface is intentionally model-only
+
+The streaming terminal (`SemanticTable.toStreamingQuery(spark, opts)`) is library-side, **not** an MCP-tool surface. The MCP server's relationship with streaming models is *the same five tools* as for batch models — there is no separate streaming protocol, no `start_stream` / `stop_stream` / `list_streams` tool. By design.
+
+What that means for each tool:
+
+| Tool | Streaming-model behavior |
+|---|---|
+| `list_models` | Streaming models appear alongside batch models in the `models` array. Same metadata (`name`, `description`, `version`); source-table name is the streaming `readStream` name (e.g., `events_stream`). |
+| `describe_model` | Returns the streaming model's dimensions, measures, calc measures, filters, joins — same shape as for batch. The server reports the streaming-rooted source (`source_table` is the streaming-read name); the *kind* of source (streaming vs batch) is implicit from context — see *Identifying streaming roots* below. |
+| `query` | Runs the filter-only path against the streaming source. The agent can filter rows but cannot aggregate / window / `orderBy` / `limit` via this tool — those move to the operator program (see "Why no streaming-query terminal"). Returns the rows matching the filter at the moment of the call. |
+| `explain` | Walks the streaming model's op tree. Window / watermark spec (passed in `StreamingQueryOptions`, *not* the model) is not surfaced here — the model's static shape is. |
+| `introspect` | Inspects the model's measure / dimension dependencies. Identical to batch. |
+
+### Identifying streaming roots
+
+A streaming-rooted model has `SemanticStreamingTableOp` at the root of its op tree; the library exposes this via the model surface. Two ways for the adapter (or a future MCP field) to surface it:
+
+```scala
+model.root.isInstanceOf[SemanticStreamingTableOp]   // true for streaming-rooted
+model.root.isInstanceOf[SemanticTableOp]           // true for batch-rooted
+```
+
+The MCP server does not currently expose a `kind: "streaming" | "batch"` field on the model envelope; it's identifiable by the source-table shape alone today. If the agent needs to distinguish, filter on `source_table` against the YAML's `table:` field — streaming models name their `readStream` (e.g., `events_stream`), batch models name their static source.
+
+### Worked shape — `describe_model` on a streaming model
+
+A minimal streaming model (`examples/streaming-events/models/events.yml`):
+
+```yaml
+events:
+  table: events_stream
+  description: "Real-time events arriving on the events topic."
+  dimensions:
+    event_type:       { expr: type, description: "Type of event" }
+    timestamp_bucket: { expr: timestamp, is_time_dimension: true, smallest_time_grain: second }
+  measures:
+    event_count: { expr: "count(1)", description: "Number of events in the window" }
+    total_value: { expr: "sum(value)", description: "Sum of value for events in the window" }
+```
+
+The MCP server (or `sdf describe events`) returns:
+
+```
+Model:        events
+Version:      0
+Source table: events_stream          ← streaming read name
+
+Dimensions:
+NAME             EXPR
+---------------  ----------------
+event_type       type
+timestamp_bucket timestamp
+
+Measures:
+NAME         KIND  EXPR
+-----------  ----  --------
+event_count  base  count(1)
+total_value  base  sum(value)
+
+Filters: (none)
+Joins:   (none)
+```
+
+Compare to a batch model's output: same shape, same fields. The streaming nature is implicit in `source_table = "events_stream"` (operator wired that streaming `readStream` into the `tables` map).
+
+### Worked shape — `query` against a streaming model
+
+`tool_call: query_model, model="events", dimensions=["event_type"], measures=["event_count"]` is the natural LLM-shaped query. The MCP server replies with the *deferred* error of the streaming terminal's validator:
+
+```
+ERROR streaming-terminal: groupBy(...).aggregate(...) requires a window spec
+in StreamingQueryOptions (set StreamingQueryOptions.window)
+```
+
+That's the *right* answer for the streaming boundary: aggregation/windowing happens in the operator program, not via the MCP tool. The agent should propose a filter-only query (`query_model, model="events", where="event_type = 'deploy'"`) for streaming models, or recommend the operator program for the aggregation case.
+
+For batch models the same request works as expected. The streaming model's behavior is a deterministic, schema-stable result, not a silent wrong answer.
+
+### Why no streaming-query terminal in the contract
+
+The MCP/CLI surfaces are *intentionally* read-only about model semantics and operational queries; lifecycle (start / stop / hold a stream for an unbounded time) is the operator's program. From the SDK-API perspective, this corresponds to `SemanticTable.toDataFrame` / `toStreamingQuery` being the two *terminals* of the same DSL — `toStreamingQuery` is operator-only by design (it blocks for streaming). Forcing a streaming terminal into the MCP wire format would couple the agent to a long-running connection, error recovery, checkpoint semantics, and source rebalancing — none of which belong in a stateless model-query tool.
+
+The streaming terminal at the boundary is `model.toStreamingQuery(spark, cfg)` in the operator's program. See [`examples/streaming-events`](../../examples/streaming-events/) for the canonical operator workflow and the boundary rule.
+
+---
+
 ## What's still open (v2 → server implementation)
 
 None blocking. Two minor follow-ups tracked separately:
