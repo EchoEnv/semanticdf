@@ -59,7 +59,7 @@ package object semanticdf {
     *
     * Mirrors BSL's `to_semantic_table`. The `table` may be a batch DataFrame today;
     * the construction surface is identical for a streaming source once the streaming
-    * terminal lands (ADR 0002).
+    * terminal ships.
     *
     * @param table       the base DataFrame
     * @param name        optional model name (used later for join prefixing)
@@ -81,7 +81,7 @@ package object semanticdf {
     )
 
   /** Construct a [[SemanticTable]] from a streaming source for use with
-    * [[SemanticTable.toStreamingQuery]] (ADR 0002).
+    * [[SemanticTable.toStreamingQuery]]. The streaming source must come from spark.readStream.
     *
     * Parallel to [[toSemanticTable]] but for streaming. The `stream` must
     * come from `spark.readStream` (i.e. `stream.isStreaming` is true).

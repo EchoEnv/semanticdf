@@ -82,9 +82,9 @@ final case class ValidationResult(
   *
   * A `SemanticTable` is *not* a Spark `DataFrame`; it is a deferred, source-agnostic
   * definition that compiles to a DataFrame at an execution terminal. The batch terminal
-  * is [[SemanticTable.toDataFrame]] / [[SemanticTable.execute]]; a future streaming
-  * terminal (`toStreamingQuery`) is described in ADR 0002 — the same definition, a
-  * different sink, mirroring Spark's own `df.write` vs `df.writeStream`.
+  * is [[SemanticTable.toDataFrame]] / [[SemanticTable.execute]]; the streaming
+  * terminal is [[SemanticTable.toStreamingQuery]]. Same definition, different sink,
+  * mirroring Spark's own `df.write` vs `df.writeStream`.
   */
 final class SemanticTable private[semanticdf] (
     private[semanticdf] val root: SemanticOp,
@@ -128,17 +128,18 @@ final class SemanticTable private[semanticdf] (
     */
   def execute(implicit spark: SparkSession): DataFrame = toDataFrame(spark)
 
-  /** Streaming terminal (ADR 0002) — compile the op tree as a Structured
+  /** Streaming terminal — compile the op tree as a Structured
     * Streaming query. Parallel to [[toDataFrame]] / [[execute]]; the
     * API shape is the same (one terminal call, one StreamingQuery back).
     *
-    * '''Scope of this PR (PR 1):''' only `where` filters on streaming
-    * sources are supported. The validator ([[StreamingSupport.StreamingValidator]])
-    * rejects op trees that use `groupBy + aggregate`, `orderBy`, `limit`,
-    * `t.all(...)`, or joins — each with a clear message pointing at the
-    * ADR 0002 stage that would enable it. The validator fails LOUDLY
-    * before the query starts; the user's `foreachBatch` callback never
-    * sees a partial / wrong result.
+    * Supported in streaming: `where` filters, windowed `groupBy +
+    * aggregate` (when a `WindowSpec` is set), static-stream `join_one`,
+    * and `t.all(...)` windowed-totals (when a `WindowSpec` is set).
+    * The validator ([[StreamingSupport.StreamingValidator]]) rejects
+    * op trees that use `orderBy`, `limit`, or stream-stream joins, and
+    * each violation names the offending pattern. The validator fails
+    * LOUDLY before the query starts; the user's `foreachBatch` callback
+    * never sees a partial / wrong result.
     *
     * Each micro-batch is processed by `foreachBatch`: the streaming
     * source is replaced with the batch `DataFrame`, the existing
@@ -227,8 +228,7 @@ final class SemanticTable private[semanticdf] (
 
     // 4. Apply watermark FIRST (if specified or defaulted). Watermarks
     //    require event-time columns, and the watermark must be set before
-    //    any aggregation.
-    //    ADR 0002 stage 5: when a window is set but the user did not
+    //    any aggregation. When a window is set but the user did not
     //    provide a watermark, default it to the window column with a
     //    10-minute delay. This bounds streaming state and keeps the
     //    pipeline well-formed.
@@ -297,18 +297,18 @@ final class SemanticTable private[semanticdf] (
           withWatermark.groupBy(groupCols: _*).agg(aggregateColumns.head, aggregateColumns.tail: _*)
         }
 
-        // Windowed-totals support (ADR 0002 stage 4). For calc measures that
-        // use t.all(...), build a second aggregation per window (no other
-        // group keys) that gives the per-window grand totals. Cross-join
-        // this with the main aggregation, then evaluate the t.all-using
-        // calc measures against the cross-joined DataFrame.
+        // Windowed-totals support. For calc measures that use t.all(...),
+        // build a second aggregation per window (no other group keys) that
+        // gives the per-window grand totals. Cross-join this with the main
+        // aggregation, then evaluate the t.all-using calc measures against
+        // the cross-joined DataFrame.
         val totalUsers = StreamingSupport.StreamingValidator.findTotalUsers(collectedMeasures.toSeq)
         if (totalUsers.nonEmpty) {
-          // For per-window totals (ADR 0002 stage 4): the t.all-using calc
-          // measures reference BASE measures like "sum_value". Compute the
-          // same base measures, but per window only (no other group keys),
-          // giving the per-window grand totals. Cross-join with mainAgg to
-          // expose totals to the calc measures via totalsScope.
+          // For per-window totals: the t.all-using calc measures reference
+          // BASE measures like "sum_value". Compute the same base measures,
+          // but per window only (no other group keys), giving the per-window
+          // grand totals. Cross-join with mainAgg to expose totals to the
+          // calc measures via totalsScope.
 
           // 1. Compute base-measure columns over the source (no totalsResolver).
           def asBaseColumn(name: String, m: Measure): Option[Column] = {
@@ -370,7 +370,7 @@ final class SemanticTable private[semanticdf] (
         }
 
       case j: SemanticJoinOp =>
-        // Static-stream join (ADR 0002 stage 3). Identify which side is the
+        // Static-stream join. Identify which side is the
         // stream (only one side can be a streaming source per the validator).
         val streamingIsLeft = StreamingSupport.StreamingValidator.hasStreamingSource(j.left)
         // The static side's root is always a SemanticTableOp (the non-streaming
@@ -438,7 +438,7 @@ final class SemanticTable private[semanticdf] (
 
     val writerWithCheckpoint = opts.checkpointLocation match {
       case Some(loc) => writer.option("checkpointLocation", loc)
-      // ADR 0002 stage 5: default the checkpoint to a per-query temp dir.
+      // Default the checkpoint to a per-query temp dir.
       // Production callers should always pass `checkpointLocation`
       // explicitly to a durable path; this default is for prototyping.
       case None      =>
@@ -875,7 +875,7 @@ final class SemanticTable private[semanticdf] (
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable)
 
-      // Streaming source (ADR 0002): dims attach to the streaming model.
+      // Streaming source: dims attach to the streaming model.
       case s: SemanticStreamingTableOp =>
         new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable)
 
@@ -973,7 +973,7 @@ final class SemanticTable private[semanticdf] (
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable)
 
-      // Streaming source (ADR 0002): measures attach to the streaming model.
+      // Streaming source: measures attach to the streaming model.
       case s: SemanticStreamingTableOp =>
         new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable)
 
