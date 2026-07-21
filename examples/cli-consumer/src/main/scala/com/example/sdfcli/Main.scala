@@ -46,19 +46,30 @@ object Main {
     sys.exit(exit)
   }
 
-  /** Pure (testable) entry point — returns an exit code instead of calling sys.exit. */
+  /** Pure (testable) entry point — returns an exit code instead of calling sys.exit.
+    *
+    * Wraps each subcommand call in a TransportFailure catch so transport
+    * errors (connection refused, timeout) return exit code 3 cleanly,
+    * even when the JVM is being driven by a test harness. */
   def run(args: List[String]): Int = args match {
     case Nil | ("-h" :: _) | ("--help" :: _) | ("help" :: _) =>
       printUsage(); 0
     case ("-v" :: _) | ("--version" :: _) =>
       println("sdf 0.1.8 (semanticdf CLI client)"); 0
-    case ("list" :: rest)       => withGlobalConfig(rest) { (cfg, rem) => cmdList(cfg);      0 }
-    case ("describe" :: rest)   => withGlobalConfig(rest) { (cfg, rem) => cmdDescribe(cfg, rem) }
-    case ("query" :: rest)      => withGlobalConfig(rest) { (cfg, rem) => cmdQuery(cfg, rem, explain = false) }
-    case ("explain" :: rest)    => withGlobalConfig(rest) { (cfg, rem) => cmdQuery(cfg, rem, explain = true) }
+    case ("list" :: rest)       => withGlobalConfig(rest) { (cfg, rem) => safeRun { cmdList(cfg); 0 } }
+    case ("describe" :: rest)   => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdDescribe(cfg, rem)) }
+    case ("query" :: rest)      => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdQuery(cfg, rem, explain = false)) }
+    case ("explain" :: rest)    => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdQuery(cfg, rem, explain = true)) }
     case other :: _ =>
       System.err.println(s"sdf: unknown command '$other'. Run 'sdf --help'."); 2
   }
+
+  /** Run a subcommand with TransportFailure caught — returns 3 on transport
+    * error. The detail message is already printed to stderr by [[Client.send]],
+    * so this is silent on the success path. */
+  private def safeRun(f: => Int): Int =
+    try f
+    catch { case _: Client.TransportFailure => 3 }
 
   // ---------------------------------------------------------------------------
   // Global config: --url and --json can appear anywhere; strip them first so
@@ -350,12 +361,23 @@ object Main {
         Response(resp.statusCode(), resp.body())
       } catch {
         case e: java.net.ConnectException =>
+          // Print to stderr and rethrow as a typed exception. The caller
+          // (Main.run) catches it and returns exit code 3. We don't call
+          // sys.exit here because that would kill the test JVM when
+          // CliIntegrationSpec exercises Main.run directly.
           System.err.println(s"sdf: could not connect to ${req.uri} (is the server running?)")
-          sys.exit(3)
+          throw new TransportFailure(req.uri.toString, e)
         case e: Exception =>
           System.err.println(s"sdf: request failed: ${e.getClass.getSimpleName}: ${e.getMessage}")
-          sys.exit(3)
+          throw new TransportFailure(req.uri.toString, e)
       }
+
+    /** Raised by [[send]] on any HTTP transport error (connect refused,
+      * timeout, malformed response). [[Main.run]] catches this and returns
+      * exit code 3 so the CLI's behaviour is testable end-to-end without
+      * the JVM dying via `sys.exit`. */
+    class TransportFailure(uri: String, cause: Throwable)
+      extends RuntimeException(s"transport failure for $uri", cause)
   }
 
   /** Thin wrapper over a Jackson JsonNode tree to make the response-walking
