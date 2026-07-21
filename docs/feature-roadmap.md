@@ -254,19 +254,22 @@ materializations:
 
 ### 2.3 Streaming source support
 
-**Problem:** The op tree is source-agnostic (DESIGN §4.4), but `SemanticTableOp` only accepts batch `DataFrame`. Streaming sources fail.
+**Status:** ✅ **DONE** — landed across PRs #110, #111, #112, #114, #115, #116, #117, #118, #119, #120, #121 (target: v0.1.9).
 
-**Solution:** Add a `SemanticStreamOp` that wraps a `StreamingQuery`, produces incremental updates to a semantic table. Composite stream + batch (e.g., fact table is streaming, dimension table is batch).
+**What shipped:**
+- `SemanticStreamingTableOp` (in `SemanticOp.scala`) — the streaming counterpart to `SemanticTableOp`. The op tree walks it transparently (`resolveRootModel`, `findStream`, etc.).
+- `toStreamingSemanticTable(spark.readStream...)` package-level factory. `YamlLoader.load(...)` auto-routes `df.isStreaming == true` to it.
+- `SemanticTable.toStreamingQuery(spark, opts): StreamingQuery` — the streaming terminal (parallel to `toDataFrame`). Validates the op tree, builds the streaming query, returns the runner. Same op tree as batch; only the *terminal* (§4.5 in DESIGN) differs.
+- `StreamingValidator` rejects unsupported patterns (limit, orderBy, groupBy+agg without window, stream-stream joins, `t.all` without window) before the query starts. Each error names the offending pattern.
+- `StreamingQueryOptions` / `StreamingConfig` / `OutputSink` typed shapes (in `StreamingSupport.scala`).
+- Worked streaming example: `examples/streaming-events/` mirroring the batch templates.
 
-**Effort:** 3-4 weeks
-**Impact:** High — unlocks real-time use cases.
+**What did NOT ship** (still deferred):
+- Dynamic/late-arriving dimensions (e.g., `attributable join_one` whose static side changes mid-stream). Static-stream joins work (one side batch, one side streaming).
+- Multi-source stream-stream joins. Spark itself constrains these to append mode; we accept but don't surface the constraint explicitly.
+- Tighter MCIP surfacing of streaming — MCP/CLI tools focus on semantic logic; lifecycle (start/stop) is the operator's program.
 
-**Files to change:**
-- `src/main/scala/io/semanticdf/SemanticOp.scala` — add `SemanticStreamOp`
-- New: `src/main/scala/io/semanticdf/StreamingTerminal.scala`
-- New: `SemanticTable.toStreamingQuery(spark): StreamingQuery`
-
-**Consumer gate:** Once a consumer explicitly asks for streaming/real-time. Until then, batch is enough.
+**Outcome:** the streaming terminal is available for evaluation in v0.1.9. Operational hardening (restart safety, checkpoint policy, SLA-grade watermarks) is the operator's responsibility, surfaced in `examples/streaming-events/README.md`'s *Going to production* section.
 
 ---
 
