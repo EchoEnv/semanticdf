@@ -112,6 +112,67 @@ class SemanticManifestSpec
       round.dimensions("kind").isTimeDimension shouldBe false
     }
 
+    // -- 2b. measure bodies round-trip (regression for the lit(1) bug) ----
+
+    it("round-trips measure BODIES, not just classifications (regression: lit(1) placeholder)") {
+      // Regression test for the bug where every measure lambda body was
+      // replaced with `_ => lit(1)` regardless of the original expr.
+      // Before the fix: every measure returned 1, so the loaded model
+      // was structurally correct but semantically broken. After the fix:
+      // the original `expr:` string is parsed back into a working Column
+      // and queries return real aggregates.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(
+          Row(1, 10.0), Row(2, 20.0), Row(3, 30.0), Row(4, 40.0), Row(5, 50.0),
+        )),
+        StructType(Seq(
+          StructField("id", IntegerType),
+          StructField("amount", org.apache.spark.sql.types.DoubleType),
+        ))
+      )
+      val model = toSemanticTable(df, name = Some("orders"))
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withMeasures(
+          Measure("order_count", _ => F.lit(1), exprString = Some("count(1)")),
+          Measure("order_amount", _ => F.lit(1), exprString = Some("sum(amount)")),
+        )
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+
+      val q1 = round.groupBy().aggregate("order_count", "order_amount").execute(spark)
+        .collect().head
+      q1.getAs[Long]("order_count") shouldBe 5L          // count(1) over 5 rows
+      q1.getAs[Double]("order_amount") shouldBe 150.0     // 10+20+30+40+50
+    }
+
+    it("lambda-only measures (no exprString) throw a loud error on first query") {
+      // Anti-scope contract: a measure built from a bare lambda with
+      // no exprString hint is stored as LambdaSentinel in the manifest.
+      // The loader cannot reconstruct behavior; query-time surfaces a
+      // clear, actionable error.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df, name = Some("m"))
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withMeasures(Measure("bare", _ => F.lit(1)))  // no exprString hint
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      val ex = intercept[Exception] {
+        round.groupBy().aggregate("bare").execute(spark).collect()
+      }
+      val msg = Option(ex.getMessage).getOrElse("")
+      val allMsgs = Iterator
+        .iterate(Option[Throwable](ex.getCause))(_.flatMap(t => Option(t.getCause)))
+        .takeWhile(_.isDefined)
+        .flatten
+        .map(t => Option(t.getMessage).getOrElse(""))
+        .mkString(" | ")
+      val combined = msg + " | " + allMsgs
+      combined should (include("bare") and include("manifest"))
+    }
+
     // -- 3. round-trip-preserves-classification -------------------------------
 
     it("round-trips a calc measure with dependsOn set") {

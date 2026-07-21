@@ -46,6 +46,10 @@ self-contained once you've done `starter/`.
 1. `starter/`
 2. [`telco-analytics/`](telco-analytics/) — carriers, plans, promotions
 
+### "I want to load a pre-built model artifact (CI / version-pinning)"
+1. `starter/`
+2. [`manifest-load/`](manifest-load/) — `SemanticManifest.fromJson` end-to-end. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md); shows the runtime half of the build/load workflow.
+
 ## What each example shows
 
 | Example | Demonstrates |
@@ -58,6 +62,7 @@ self-contained once you've done `starter/`.
 | [`hospital/`](hospital/) | Data-quality workflow: messy source → clean schema (with sidecar OKF docs in `hospital-ok/`) |
 | [`telco-analytics/`](telco-analytics/) | Telco domain: carriers, plans, promotions |
 | [`cli-consumer/`](cli-consumer/) | Standalone CLI client (`sdf`) for the REST API — uses no Spark, no SemanticDF dep |
+| [`manifest-load/`](manifest-load/) | Load a pre-built `SemanticManifest` JSON artifact and reconstruct a `SemanticTable`. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md) |
 
 ## Prerequisites
 
