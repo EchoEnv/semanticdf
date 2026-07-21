@@ -353,7 +353,18 @@ object YamlLoader {
     val description = cfg.get("description").collect { case s: String => s }
     val df = resolveTable(tableName)
 
-    var model = toSemanticTable(df, name = Some(name), description = description, sourceTable = Some(tableName))
+    // Route to the streaming factory when the source is a streaming DataFrame
+    // (the result of `spark.readStream.*`). Batch DataFrames go through the
+    // existing `toSemanticTable` path; the model DSL, dimensions, measures,
+    // calc measures, and joins all work identically once the right root op
+    // is in place. `sourceTable` is propagated either way.
+    var model =
+      if (df.isStreaming)
+        toStreamingSemanticTable(df, name = Some(name), description = description,
+          sourceTable = Some(tableName))
+      else
+        toSemanticTable(df, name = Some(name), description = description,
+          sourceTable = Some(tableName))
 
     // Cumulative set of columns visible at the current evaluation point. Starts
     // with the source DataFrame's columns; grows as transforms are declared.
