@@ -452,6 +452,21 @@ final class SemanticTable private[semanticdf] (
     writerWithCheckpoint.start()
   }
 
+  /** Declarative overload of [[toStreamingQuery]] — takes a
+    * [[StreamingSupport.StreamingConfig]] (the shape the YAML /
+    * MCP / CLI surfaces use) and translates it into the lower-level
+    * [[StreamingSupport.StreamingQueryOptions]] before delegating.
+    *
+    * Same return type and same runtime semantics. The two methods share
+    * the underlying implementation — this overload is just sugar for the
+    * declarative shape.
+    */
+  def toStreamingQuery(
+      spark: SparkSession,
+      config: StreamingSupport.StreamingConfig,
+  ): org.apache.spark.sql.streaming.StreamingQuery =
+    toStreamingQuery(spark, config.toQueryOptions)
+
   /** Typed terminal — compile the op tree, collect the rows, decode each
     * into `T` via the implicit [[ResultDecoder]]. The decoder is the
     * caller's responsibility (supply an implicit instance or use one of

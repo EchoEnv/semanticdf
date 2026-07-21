@@ -1,5 +1,6 @@
 package io.semanticdf
 
+import io.semanticdf.StreamingSupport.{OutputSink, StreamingConfig, WatermarkSpec, WindowSpec}
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.expr
 import org.yaml.snakeyaml.Yaml
@@ -187,6 +188,32 @@ object YamlLoader {
     models
   }
 
+  /** Parse the optional `streaming:` block from a single model in a YAML file.
+    *
+    * Returns `None` when the model has no `streaming:` block. Throws when the
+    * block is present but malformed. The shape mirrors [[StreamingConfig]]
+    * (the typed representation the operator program passes to
+    * `SemanticTable.toStreamingQuery`).
+    *
+    * Operator programs typically do:
+    *
+    * {{{
+    *   val models = YamlLoader.loadDir(modelsDir, streamMap)
+    *   val cfg    = YamlLoader.streamingConfig(modelYaml, "rate_events")
+    *   val q      = models("rate_events").toStreamingQuery(spark, cfg.get)
+    * }}}
+    *
+    * This is the read-only "how should this model be streamed?" companion to
+    * `load(...)`. The library never starts the query from this method —
+    * lifecycle stays with the operator.
+    */
+  def streamingConfig(path: String, modelName: String): Option[StreamingConfig] = {
+    val cfg = parseYaml(path).get(modelName).getOrElse(
+      throw new IllegalArgumentException(
+        s"No model named '$modelName' in YAML file '$path'"))
+    cfg.get("streaming").map(parseStreamingConfig(modelName, _))
+  }
+
   /** Parse each YAML file, merge into a single config map. Fails fast if any
     * file fails to parse, with the offending file named in the error message. */
   private def mergeConfigs(files: Seq[java.io.File]): Map[String, Map[String, Any]] = {
@@ -294,6 +321,116 @@ object YamlLoader {
       jl.asScala.map(e => toScalaVal(e.asInstanceOf[AnyRef])).toSeq
     case null => null
     case other => other
+  }
+
+  // -------------------------------------------------------------------------
+  // Streaming config parsing — operator's companion to the model load.
+  //
+  // Reads the YAML `streaming:` block (optional) and parses it into a
+  // typed [[StreamingConfig]]. We keep this parsing here (not in the MCP
+  // server) so operators running their own Spark programs have the same
+  // surface as MCP/CLI — one YAML file, two readers (model, config).
+  // -------------------------------------------------------------------------
+
+  /** Parse a streaming block from a model's YAML config into a typed
+    * [[StreamingConfig]]. Mirrors the JSON shape documented in the MCP
+    * contract (so the YAML and JSON shapes stay in lockstep).
+    *
+    * YAML shape:
+    * {{{
+    *   streaming:
+    *     window:     {column: timestamp, duration: "5 minutes"}
+    *     watermark:  {column: timestamp, delay: "10 minutes"}
+    *     output_mode: append
+    *     checkpoint_location: /chkpt/rate
+    *     output_sink:
+    *       kind: parquet       # noop | console | parquet | csv
+    *       path: /out/rate     # required for parquet / csv
+    *       limit: 20           # optional for console
+    * }}}
+    */
+  private def parseStreamingConfig(modelName: String, raw: Any): StreamingConfig = {
+    val m = raw match {
+      case m: Map[_, _]            => m.asInstanceOf[Map[String, Any]]
+      case jm: java.util.Map[_, _] => jm.asScala.toMap.map { case (k, v) =>
+        (k.toString, v.asInstanceOf[Any])
+      }
+      case other =>
+        throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming:` must be a mapping, got ${other.getClass.getSimpleName}")
+    }
+
+    def readSpec[T](key: String, parse: Map[String, Any] => T): Option[T] =
+      m.get(key).map {
+        case s: Map[_, _]            => parse(s.asInstanceOf[Map[String, Any]])
+        case jm: java.util.Map[_, _] => {
+          val converted = jm.asScala.toMap.map { case (k, v) =>
+            (k.toString, v.asInstanceOf[Any]) }
+          parse(converted)
+        }
+        case other =>
+          throw new IllegalArgumentException(
+            s"Model '$modelName' `streaming: $key:` must be a mapping, " +
+            s"got ${other.getClass.getSimpleName}")
+      }
+
+    val window    = readSpec[WindowSpec]("window",    kv =>
+      WindowSpec(
+        column  = kv.getOrElse("column", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.window` missing 'column'")).toString,
+        duration = kv.getOrElse("duration", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.window` missing 'duration'")).toString,
+      ))
+    val watermark = readSpec[WatermarkSpec]("watermark", kv =>
+      WatermarkSpec(
+        column = kv.getOrElse("column", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.watermark` missing 'column'")).toString,
+        delay = kv.getOrElse("delay", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.watermark` missing 'delay'")).toString,
+      ))
+    val outputMode = m.get("output_mode").map(_.toString).getOrElse("append")
+    val checkpointLocation = m.get("checkpoint_location").map(_.toString)
+
+    val outputSink: OutputSink = m.get("output_sink") match {
+      case Some(s: Map[_, _]) => parseOutputSink(modelName, s.asInstanceOf[Map[String, Any]])
+      case Some(jm: java.util.Map[_, _]) => parseOutputSink(modelName,
+        jm.asScala.toMap.map { case (k, v) => (k.toString, v.asInstanceOf[Any]) })
+      case None               => OutputSink.Noop
+      case Some(other) =>
+        throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.output_sink:` must be a mapping, " +
+          s"got ${other.getClass.getSimpleName}")
+    }
+
+    StreamingConfig(
+      outputSink = outputSink,
+      window = window,
+      watermark = watermark,
+      outputMode = outputMode,
+      checkpointLocation = checkpointLocation,
+    )
+  }
+
+  /** Parse the `output_sink:` block of the streaming config. */
+  private def parseOutputSink(modelName: String, m: Map[String, Any]): OutputSink = {
+    val kind = m.getOrElse("kind", throw new IllegalArgumentException(
+      s"Model '$modelName' `streaming.output_sink` missing 'kind'")).toString
+    kind.toLowerCase match {
+      case "noop"    => OutputSink.Noop
+      case "console" => OutputSink.Console(m.get("limit").map(_.toString.toInt).getOrElse(20))
+      case "parquet" => OutputSink.Parquet(
+        m.getOrElse("path", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.output_sink(kind=parquet)` missing 'path'")).toString)
+      case "csv"     => OutputSink.Csv(
+        m.getOrElse("path", throw new IllegalArgumentException(
+          s"Model '$modelName' `streaming.output_sink(kind=csv)` missing 'path'")).toString)
+      case "custom"  => throw new IllegalArgumentException(
+        s"Model '$modelName' `streaming.output_sink(kind=custom)` is not expressible in YAML " +
+        s"(it requires a DataFrame => Unit function); use the typed API instead")
+      case other     => throw new IllegalArgumentException(
+        s"Model '$modelName' `streaming.output_sink.kind='$other'` is not one of " +
+        s"{noop, console, parquet, csv}")
+    }
   }
 
   // -------------------------------------------------------------------------
