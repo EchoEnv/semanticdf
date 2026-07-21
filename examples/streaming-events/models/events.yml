@@ -1,0 +1,76 @@
+# semanticdf model: events
+#
+# A streaming model — same shape as a batch model, just sourced from
+# `spark.readStream.*` instead of a static file. The streaming source
+# name (`events_stream`) is wired up in the operator program
+# (Main.scala) via the `tables` map passed to YamlLoader.load(...).
+#
+# Schema (provided by the streaming source):
+#   timestamp, type, value
+#
+# Features demonstrated:
+#   - Streaming `table:` — YamlLoader auto-routes `df.isStreaming` to
+#     `toStreamingSemanticTable`, so the same model DSL works for both
+#     batch and streaming.
+#   - Time dimension — `timestamp_bucket` with explicit smallest_time_grain
+#     so windowed aggregation picks the right window type.
+#   - Two base measures — `event_count` (count) and `total_value` (sum)
+#     for the demo.
+#   - Streaming aggregation and per-window totals are NOT configured in
+#     YAML — the operator passes a typed StreamingConfig in code.
+#     The `calculated_measures` block (with `t.all(...)`) is supported
+#     but omitted here to keep the example focused — see the README
+#     for the windowed-totals pattern.
+
+events:
+    table: events_stream
+    description: "Real-time events arriving on the events topic, rolled up per 30-second window."
+
+    # Pre-join row-level hygiene on the streaming source. Filters declare
+    # what rows ARE part of this model, before any join or aggregation runs.
+    # Column references must resolve against events_stream (not joined-side
+    # columns, since streaming joins are deferred).
+    filters:
+        require_known_event_type:
+            expr: "type IS NOT NULL"
+            description: "Drop events with null type — flagged by upstream QA rule."
+            metadata:
+                owner: data-platform-team
+                tags: [data-quality]
+
+    dimensions:
+        event_type:
+            expr: type
+            description: "Type of the event (e.g., 'heartbeat', 'deploy', 'error')"
+            metadata:
+                owner: streaming-team
+                tags: [categorical]
+        timestamp_bucket:
+            expr: timestamp
+            description: "Event-time timestamp — driving column for windowed aggregation"
+            is_time_dimension: true
+            smallest_time_grain: second
+
+    measures:
+        event_count:
+            expr: "count(1)"
+            description: "Number of events (rows) arriving in the window"
+            metadata:
+                owner: streaming-team
+                unit: count
+                aggregation: count
+        total_value:
+            expr: "sum(value)"
+            description: "Sum of the value column for events arriving in the window"
+            metadata:
+                owner: streaming-team
+                unit: numeric
+                aggregation: sum
+
+    # Note: `calculated_measures` with `t.all(...)` is supported in streaming
+    # models (each window's per-event-type count, divided by that window's
+    # grand total). It uses append mode internally and is timing-sensitive
+    # (windows must close + watermarks align before output). For a quick
+    # demo we keep the example focused on plain windowed aggregation. To
+    # add the windowed-totals pattern, see the docs under known-limitations
+    # or extend the operator program in Main.scala.
