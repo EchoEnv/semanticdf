@@ -828,7 +828,42 @@ final class SemanticTable private[semanticdf] (
   /** Extend the model with dimensions. Handles single-table and joined roots (Phase 4).
     * Returns a new [[SemanticTable]] (immutable). */
   def withDimensions(dims: Dimension*): SemanticTable = {
-    val extra = dims.map(d => d.name -> d).toMap
+    // Materialize derived-time dims (siblings of any base time-dim with `derived` non-empty).
+    // Fails loud on:
+    //   - `derived` declared on a non-time dim
+    //   - a name in `derived` that's not in {"year", "month", "day"}
+    //   - collisions across declared + derived names
+    val materialized: Seq[Dimension] = dims.flatMap { d =>
+      if (d.derived.isEmpty) Seq(d)
+      else {
+        if (!d.isTimeDimension)
+          throw new IllegalArgumentException(
+            s"dimension '${d.name}' declares derived=[${d.derived.mkString(",")}] but is not a time dimension. " +
+            s"`derived` only applies to Dimension.time.")
+        val siblings: Seq[Dimension] = d.derived.map { part =>
+          val partCol: Column = part match {
+            case "year"  => year(col(d.name))
+            case "month" => month(col(d.name))
+            case "day"   => dayofmonth(col(d.name))
+            case other =>
+              throw new IllegalArgumentException(
+                s"dimension '${d.name}' declares unsupported derived part '$other'. v0.2 supports: year, month, day.")
+          }
+          new Dimension(
+            name        = part,
+            expr        = (_: SemanticScope) => partCol,
+            description = d.description.map(_ + s" (derived from '${d.name}')"),
+          )
+        }
+        d +: siblings
+      }
+    }
+    val allNames = materialized.map(_.name)
+    val collisions = allNames.groupBy(identity).collect { case (n, xs) if xs.size > 1 => n }.toList
+    if (collisions.nonEmpty)
+      throw new IllegalArgumentException(
+        s"dimension names collide across declared + derived dims: ${collisions.mkString(", ")}")
+    val extra = materialized.map(d => d.name -> d).toMap
     root match {
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable)

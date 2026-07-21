@@ -55,6 +55,19 @@ final class Dimension(
       * opaque `toString`. `None` for dimensions built from a bare lambda
       * with no hint; the DescribeModel fallback then shows the lambda. */
     val exprString: Option[String] = None,
+    /** Names of derived-time dimensions to materialize alongside this one.
+      * Only honored on time dimensions; rejected otherwise. Supported
+      * values (v0.2): `"year"`, `"month"`, `"day"`. Each name becomes
+      * a sibling [[Dimension]] in the model's `dimensions` map with the
+      * appropriate Spark date-part function (`year`/`month`/`day`) applied
+      * to the source column named by [[name]]. Empty by default — opt-in.
+      *
+      * The constraint that [[name]] doubles as the source-column reference
+      * is intentional: derived-part SQL needs a concrete column to apply
+      * the function to. For dimensions whose `expr` aliases a different
+      * source column, alias the column to the dim's name OR omit the
+      * `derived:` part and declare the derived dimensions explicitly. */
+    val derived: Seq[String] = Seq.empty,
 ) extends Serializable {
 
   /** Returns a copy of this dimension with zero or more fields replaced.
@@ -77,7 +90,8 @@ final class Dimension(
       isEventTimestamp: Boolean = this.isEventTimestamp,
       smallestTimeGrain: Option[String] = this.smallestTimeGrain,
       exprString: Option[String] = this.exprString,
-  ): Dimension = new Dimension(name, expr, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain, exprString)
+      derived: Seq[String] = this.derived,
+  ): Dimension = new Dimension(name, expr, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain, exprString, derived)
 
   override def equals(that: Any): Boolean = that match {
     case d: Dimension =>
@@ -89,10 +103,11 @@ final class Dimension(
       isEventTimestamp == d.isEventTimestamp &&
       smallestTimeGrain == d.smallestTimeGrain &&
       exprString == d.exprString &&
+      derived == d.derived &&
       expr.toString == d.expr.toString  // functions have no value equality; compare source
     case _ => false
   }
-  override def hashCode(): Int = (name, expr, exprString, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain).##
+  override def hashCode(): Int = (name, expr, exprString, description, metadata, isEntity, isTimeDimension, isEventTimestamp, smallestTimeGrain, derived).##
   override def toString: String = s"Dimension($name,${if (description.isDefined) description.get else "_"})$$"
 }
 
@@ -173,12 +188,20 @@ object Dimension {
       isEventTimestamp: Boolean = false,
       description: Option[String] = None,
       metadata: Map[String, String] = Map.empty,
+      /** Names of derived-time dimensions to materialize alongside this one.
+        * Only honored on time dimensions; supported values (v0.2): `"year"`,
+        * `"month"`, `"day"`. Each name becomes a sibling [[Dimension]] in the
+        * model's `dimensions` map with the appropriate Spark date-part
+        * function applied to the source column named by [[name]]. Empty
+        * by default — opt-in. See [[Dimension.derived]]. */
+      derived: Seq[String] = Seq.empty,
   ): Dimension = new Dimension(
     name, expr, description, metadata,
     isEntity = false,
     isTimeDimension = true,
     isEventTimestamp = isEventTimestamp,
     smallestTimeGrain = smallestTimeGrain,
+    derived = derived,
   )
 
   /** Construct an entity dimension — a column that identifies the distinct
