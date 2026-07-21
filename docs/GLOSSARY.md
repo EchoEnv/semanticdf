@@ -186,6 +186,41 @@ list as new concepts land.
   timestamp-keyed columns become time dimensions, names matching
   `_id` / `_key` become entity dimensions.
 
+## Streaming terminal
+
+- **`SemanticStreamingTableOp`** — the streaming counterpart to
+  `SemanticTableOp`. Wraps a Spark `DataFrame` of a Structured
+  Streaming source plus its dimensions/measures. The streaming
+  root op; downstream `SemanticFilterOp`s, `SemanticAggregateOp`s,
+  and `SemanticJoinOp`s hang off it the same way they do in batch.
+- **`toStreamingSemanticTable(streamingDf, ...)`** — the factory
+  for streaming models. Same builder pattern as `toSemanticTable`
+  (`.withDimensions(...)`, `.withMeasures(...)`, `.groupBy(...)`,
+  `.join_one(...)`, etc.); the only difference is the source
+  argument is a streaming `DataFrame` returned by `spark.readStream`.
+- **`toStreamingQuery(spark, opts)`** — the streaming terminal
+  method, sibling of `.toDataFrame(spark)`. Validates the op tree
+  against streaming constraints, builds the streaming
+  aggregation/join pipeline, and starts a Spark `StreamingQuery`.
+- **`StreamingQueryOptions`** — the parallel of `DataStreamWriter`
+  options: `trigger`, `outputMode`, `checkpointLocation`,
+  `foreachBatch` callback, plus `window` and `watermark` for the
+  windowed-aggregation cases. Watermark defaults to the window
+  column with a 10-minute delay when `window` is set; checkpoint
+  defaults to a per-query temp dir.
+- **`WindowSpec(column, duration)`** — time-window spec for
+  windowed aggregation. `column` is the time column; `duration` is
+  a Spark duration string (`"5 minutes"`, `"1 hour"`, ...).
+  Required when the streaming model uses `groupBy + aggregate`.
+- **`WatermarkSpec(column, delay)`** — event-time watermark. Same
+  shape as `WindowSpec` but the `delay` is the *lateness tolerance*
+  for late-arriving events.
+- **`StreamingValidator`** — the streaming counterpart to the batch
+  validator. Walks the op tree, collects violations (e.g., `orderBy`
+  not supported, stream-stream joins not supported), and throws a
+  `StreamingUnsupportedError` that names the offending pattern.
+  Failing loudly at the terminal prevents silent wrong results.
+
 ## MCP / REST surfaces
 
 - **MCP** — Model Context Protocol. The wire protocol (JSON-RPC over

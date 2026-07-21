@@ -6,10 +6,11 @@ A **semantic layer for Apache Spark** (JVM/Scala), adapted from the
 [Boring Semantic Layer](https://github.com/boringdata/boring-semantic-layer) (Python/Ibis).
 
 A `SemanticTable` is a deferred, source-agnostic definition that compiles to a Spark
-`DataFrame` at a batch terminal (`.toDataFrame(spark)` / `.execute(spark)`). It is *not*
+`DataFrame` at a batch terminal (`.toDataFrame(spark)` / `.execute(spark)`) or a
+`StreamingQuery` at the streaming terminal (`.toStreamingQuery(spark, opts)`). It is *not*
 a `DataFrame` itself — it captures *what* you want (dimensions, measures, joins, filters,
-grains) so the engine can decide *how* to compute it. A future streaming terminal would
-reuse the same definition against a different sink.
+grains) so the engine can decide *how* to compute it. The same definition serves both
+batch and streaming sources; only the terminal differs.
 
 ## What problems SemanticDF solves
 
@@ -35,8 +36,9 @@ guarantee that they're asking for the right thing.
   (`SemanticField[T]` phantom types) catches dimension-vs-measure confusion at the
   call site rather than at first execution. `ResultDecoder.derive[T]` does the same
   for the *result* side of a query.
-- **One model across batch and (eventually) streaming.** The op tree is source-agnostic;
-  only the execution terminal differs.
+- **One model across batch and streaming.** The op tree is source-agnostic;
+  only the execution terminal differs (`.toDataFrame(...)` for batch,
+  `.toStreamingQuery(...)` for Structured Streaming).
 - **A models → agents bridge.** `okfgen` produces OKF markdown an LLM can read;
   the MCP server exposes the tools (`list_models`, `describe_model`, `query`,
   `introspect`) over stdio or REST.
@@ -46,10 +48,10 @@ guarantee that they're asking for the right thing.
 - **Good fit:** small-to-mid data teams with a stable set of business metrics,
   already on Spark 3.5+ (or 4.x), who want one definition everyone shares — including
   LLM agents.
-- **Not yet:** structured-streaming sources (the interface is shaped for it but the
-  streaming terminal ships later); heavy-numeric ML workloads without rollup needs;
-  sub-second interactive dashboards where another tool's tighter latency matters more
-  than metric consistency.
+- **Not yet:** stream-stream joins (only static-stream joins are supported today —
+  `join_one(batchTable, streamingModel, ...)`); heavy-numeric ML workloads without
+  rollup needs; sub-second interactive dashboards where another tool's tighter
+  latency matters more than metric consistency.
 
 ## Where to read next
 
@@ -634,5 +636,5 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 - **[`docs/feature-roadmap.md`](docs/feature-roadmap.md)** — T1-T4 prioritized list of features and performance improvements. T1 ships next; T2-T4 gated on real consumer demand.
 - **[`docs/adr/`](docs/adr/)** — recorded decisions:
   - [0001](docs/adr/0001-adopt-karpathy-guidelines-not-app-design.md) — karpathy guidelines adopted (think-before-coding, simplicity-first, surgical changes, goal-driven execution); app-design plugin/portal rejected.
-  - [0002](docs/adr/0002-streaming-batch-first-streaming-shaped.md) — batch-first, streaming-shaped (DSL/source-agnostic op tree; batch terminal now, streaming terminal deferred).
+  - [0002](docs/adr/0002-streaming-batch-first-streaming-shaped.md) — batch-first, streaming-shaped (DSL/source-agnostic op tree; batch and streaming terminals share the model definition).
   - [0003](docs/adr/0003-re-sequence-calc-proof-first.md) — re-sequence to prove name-based calc compilation early.
