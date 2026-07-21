@@ -442,8 +442,8 @@ val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t(
 - Arities 1–4 are fully type-checked at compile time; the `…All(refs)` overloads do a
   single runtime check for arity 5+ (rare in practice).
 - The `FieldRef[T]` carrier is a value class — no allocation on the hot path.
-- See [Phase E — type safety via typeclasses](docs/phase-E-plan.md) for the design rationale
-  and what's still deferred (the typed-arithmetic DSL of Phase E3 — see
+- See [the typeclass-design rationale](docs/phase-E-plan.md) for the design rationale
+  and what's still deferred (the typed-arithmetic DSL (planned) — see
   [`docs/phase-E-plan.md`](docs/phase-E-plan.md) §E3). The `ResultDecoder[T]`
   typeclass (including macro derivation for case classes via `ResultDecoder.derive[T]`)
   and the `queryAs[T]: Dataset[T]` terminal are shipped.

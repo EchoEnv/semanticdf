@@ -15,6 +15,7 @@
 #   - Joins to the carriers lookup table
 
 flights:
+    status: published
     version: 1
     table: flights_csv
     description: "Flight facts: per-flight distance and passenger counts"

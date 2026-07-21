@@ -6,6 +6,7 @@
 # stays at 2 levels (usage-only).
 
 plans:
+    status: published
     table: plans_csv
     description: "Service plans offered (Basic, Standard, Premium, Family)"
 

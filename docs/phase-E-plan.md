@@ -151,7 +151,7 @@ the `SemanticField[T]` typeclass instead of `Dimension[T]` / `Measure[T]`, becau
 references (not field declarations) were the actual pain point — typos happen at the call
 site (`st.groupBy("carierr")`), not at the declaration.
 
-### Done — typed field references (PR #7)
+### Done — typed field references 
 
 - `SemanticField[T]` phantom-typed typeclass with `SemanticDimension[T]` / `SemanticMeasure[T]` subtypes.
 - `groupByDimensions[D1..D4]` / `aggregateMeasures[M1..M4]` typed overloads; `…All(refs)` for arity 5+.
@@ -159,7 +159,7 @@ site (`st.groupBy("carierr")`), not at the declaration.
 - `FieldRef[T]` carrier is a value-class wrapper — zero runtime overhead on the hot path.
 - 9 regression tests in `SemanticFieldSpec.scala` verifying typed output === string output.
 
-### Done — sealed `Predicate.Compare` ADT (PR #8)
+### Done — sealed `Predicate.Compare` ADT 
 
 - `sealed trait Compare` with sealed `Eq`/`Ne`/`Lt`/`Le`/`Gt`/`Ge` case classes; operator
   choice encoded in the type, not a runtime string.
@@ -167,7 +167,7 @@ site (`st.groupBy("carierr")`), not at the declaration.
 - Each case has its own `compile()` / `describe()` — no string dispatch per compile.
 - 8 regression tests in `PredicateSpec.scala` verifying identical output to the legacy form.
 
-### Done — typed `withMeasures` + `SortKey.asc/desc` overloads (PR #24, v0.1.1)
+### Done — typed `withMeasures` + `SortKey.asc/desc` overloads 
 
 - `SortKey.asc(field: SemanticField[_])` / `SortKey.desc(field: SemanticField[_])` accept the
   typeclass instance directly via subtyping, so the typed overload is picked over
@@ -178,17 +178,17 @@ site (`st.groupBy("carierr")`), not at the declaration.
   `withMeasures0` helper.
 - 4 new tests in `SemanticFieldSpec` (282 total at this point).
 
-### Done — YAML load-time validation pass (PRs #25–#27, v0.1.1)
+### Done — YAML load-time validation pass 
 
-- `ExpressionValidator` (PR #25) parses every `dimensions:`, `transforms:`, and `measures:`
+- `ExpressionValidator`  parses every `dimensions:`, `transforms:`, and `measures:`
   `expr` at load time via Spark's `CatalystSqlParser` and checks that every column
   reference resolves against the visible columns at that point. A typo fails fast at
   model-load time with a clear error, not later at first query time as a cryptic Spark
   `UNRESOLVED_COLUMN.WITH_SUGGESTION`.
-- `CalcExpr.validateReferences` (PR #26) does the same for `calculated_measures:` — parses
+- `CalcExpr.validateReferences`  does the same for `calculated_measures:` — parses
   the CalcExpr DSL and checks every `Ref(name)` and `All(name)` against the visible
   measure set. Calc-of-calc chains validate in declaration order.
-- Filter visibility tightened (PR #27) — `SparkFilterValidator` now sees transform outputs
+- Filter visibility tightened  — `SparkFilterValidator` now sees transform outputs
   (a filter that references a transform output is no longer falsely rejected).
 - 11 new tests in `VersionAndValidatorSpec` covering all four YAML blocks. 294 total
   library tests on both Spark 3.5.8 and 4.1.1.
@@ -277,5 +277,5 @@ Total: **~2 weeks**. No API breaks. All new variants coexist with existing code.
 ## Relationship to future phases
 
 - **Phase F (typed predicates):** If E2/E3 are done and real consumers want `"carrier" > 600` to be a compile error, E2's phantom types provide the foundation. Deferred until real consumer demand.
-- **Phase F (streaming):** Streaming terminal shipped separately from Phase E (PRs #110–#121). The streaming op-tree share the same builders as batch (`groupBy`, `aggregate`, etc.), but `query[T]: Dataset[T]` does not fit streaming's micro-batch model — `queryAs[T]` stays batch-only. Operators consume streaming results via the `foreachBatch` callback in `StreamingQueryOptions`.
+- **Phase F (streaming):** Streaming terminal shipped separately from Phase E. The streaming op-tree share the same builders as batch (`groupBy`, `aggregate`, etc.), but `query[T]: Dataset[T]` does not fit streaming's micro-batch model — `queryAs[T]` stays batch-only. Operators consume streaming results via the `foreachBatch` callback in `StreamingQueryOptions`.
 - **Phase F (data catalog metadata):** Typed `Dimension` / `Measure` carry the phantom type alongside metadata. Non-blocking.

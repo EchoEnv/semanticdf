@@ -32,7 +32,7 @@ Pick one team/use case. Not all consumers are equal at this stage.
 | Factor | Why it matters |
 |---|---|
 | **Data has nulls, skew, type variation** | The test fixtures are clean. Real data breaks clean assumptions. |
-| **Query complexity matches Phase 1–5** | Basic group-by + calc + joins. The streaming terminal ships (PRs #110–#121, landed for v0.1.9), so streaming workloads are valid; derived time dimensions are still partial. |
+| **Query complexity matches Tier 1–2** | Basic group-by + calc + joins. The streaming terminal ships; streaming workloads are valid. |
 | **Consumer has tolerance for early-stage rough edges** | Error messages are improving but not polished. They need to be willing to report back. |
 | **Consumer can be blocked for < 1 day** | When they hit a bug, you need to be able to respond quickly. |
 | **Real business value at stake** | They won't invest effort in feedback if there's nothing riding on it. |

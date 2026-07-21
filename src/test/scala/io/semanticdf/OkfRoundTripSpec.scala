@@ -109,6 +109,13 @@ class OkfRoundTripSpec extends AnyFunSuite {
           }
           assert(fmVersion == yamlVersion,
             s"$modelName: version mismatch. YAML=$yamlVersion, OKF=$fmVersion")
+          // -- status: frontmatter carries the YAML's declared status (default "published") --
+          val yamlStatus = modelYaml.asScala.toMap.get("status") match {
+            case Some(s: String) => s
+            case _               => "published"
+          }
+          assert(fm.get("status").contains(yamlStatus),
+            s"$modelName: status mismatch. YAML=$yamlStatus, OKF=${fm.get("status")}")
           assert(fm.get("resource").exists(_.toString.startsWith("file://")),
             s"$modelName: frontmatter resource must be a file:// URI, got: ${fm.get("resource")}")
 
@@ -206,6 +213,60 @@ class OkfRoundTripSpec extends AnyFunSuite {
       okf.generate("nonexistent/path/to/yaml", Files.createTempDirectory("okf-").toString)
     }
     assert(ex.getMessage.contains("does not exist"))
+  }
+
+  test("OkfGen rejects an unknown status value (same policy as YamlLoader)") {
+    val yml =
+      """flights:
+        |  table: flights_tbl
+        |  status: retired
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin
+    val tmp = Files.createTempDirectory("okf-bad-status-").toFile
+    val inFile  = new java.io.File(tmp, "flights.yml")
+    val outDir  = Files.createTempDirectory("okf-bad-status-out-").toFile
+    java.nio.file.Files.write(inFile.toPath, yml.getBytes("UTF-8"))
+    try {
+      val ex = intercept[IllegalArgumentException] {
+        okf.generate(inFile.getAbsolutePath, outDir.getAbsolutePath)
+      }
+      assert(ex.getMessage.contains("status"),
+        s"Expected status-related error, got: ${ex.getMessage}")
+      assert(ex.getMessage.contains("retired"),
+        s"Expected unknown-value mention, got: ${ex.getMessage}")
+    } finally {
+      outDir.delete(); tmp.delete()
+    }
+  }
+
+  test("OkfGen accepts status: draft and emits it in the frontmatter") {
+    val yml =
+      """flights:
+        |  table: flights_tbl
+        |  status: draft
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin
+    val tmp = Files.createTempDirectory("okf-draft-").toFile
+    val inFile  = new java.io.File(tmp, "flights.yml")
+    val outDir  = Files.createTempDirectory("okf-draft-out-").toFile
+    java.nio.file.Files.write(inFile.toPath, yml.getBytes("UTF-8"))
+    try {
+      val n = okf.generate(inFile.getAbsolutePath, outDir.getAbsolutePath)
+      assert(n == 1, s"Expected 1 model generated, got $n")
+      val md = new String(
+        java.nio.file.Files.readAllBytes(new java.io.File(outDir, "flights.md").toPath),
+        "UTF-8")
+      assert(md.contains("status: draft"),
+        s"Expected 'status: draft' in frontmatter, got:\n$md")
+    } finally {
+      outDir.delete(); tmp.delete()
+    }
   }
 
   test("directory with no .yml files throws") {

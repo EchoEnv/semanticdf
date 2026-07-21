@@ -4,6 +4,7 @@
 # Schema: carrier, name, hub, year_founded
 
 carriers:
+    status: published
     version: 1
     table: carriers_csv
     description: "Airline carrier reference data (lookup)"

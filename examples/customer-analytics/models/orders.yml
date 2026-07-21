@@ -6,6 +6,7 @@
 # The customer_id dimension joins to the customers model on customer_id.
 
 orders:
+    status: published
     table: orders_csv
     description: "Per-order line items with amount and order date"
 

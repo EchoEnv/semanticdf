@@ -64,6 +64,7 @@ output root via the generator's `--out` flag.
 |---|---|---|---|
 | model name (e.g. `flights`) | `title` | yes | PascalCase: `flights_carriers` → `Flights Carriers` (split on `_`, capitalize). If the model already starts with a capital, just title-case the rest. |
 | `description` | `description` | optional | Direct copy. If empty, leave field out — OKF §4.1 says optional. |
+| `status` (`draft` / `published` / `deprecated`) | `status` | optional | Defaults to `published`. OKF consumers can use this to flag authoring-in-progress or end-of-life concepts. |
 | — | `type` | **yes** | Always `SemanticTable`. Producer-defined per OKF §4.1. |
 | YAML file path on disk | `resource` | yes | `file://` URI relative to the project root. The YAML is the asset; OKF is the metadata envelope. |
 | YAML file's last commit ISO timestamp (`git log -1 --format=%aI <file>`) | `timestamp` | optional | Falls back to file mtime if git is unavailable. Falls back to **omitted** if neither is available — the spec allows missing `timestamp`. |
@@ -104,6 +105,8 @@ Frontmatter that the F2 generator emits for `flights.yml`:
 type: SemanticTable
 title: Flights
 description: Flight facts: per-flight distance and passenger counts
+version: 1
+status: published
 resource: file://examples/starter/models/flights.yml
 timestamp: <git log of flights.yml>
 tags: [airline, analytics, count, data-platform-team, identifier, miles, owner:data-platform-team, percent, ratio, semantic-table, sum]

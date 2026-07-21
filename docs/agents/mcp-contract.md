@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors shipped in PR #6 (joins / measureKind / sourceTable), PR #2 (filters), PR #3 (version). Adds `okf_markdown` field + join-prefix one-liner rule.
+**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -41,14 +41,14 @@ Where `--data` is a YAML file like:
 
 ```yaml
 data:
-  flights_csv:
-    path: /data/raw/flights
-    format: parquet          # parquet | csv | json | delta (delta = explicit DataSource lookup)
-    readOptions:
-      # format-specific — see Introspector.fromFile for the supported map
-  carriers_csv:
-    path: /data/raw/carriers.csv
-    format: csv
+ flights_csv:
+ path: /data/raw/flights
+ format: parquet # parquet | csv | json | delta (delta = explicit DataSource lookup)
+ readOptions:
+ # format-specific — see Introspector.fromFile for the supported map
+ carriers_csv:
+ path: /data/raw/carriers.csv
+ format: csv
 ```
 
 The server:
@@ -66,16 +66,16 @@ Every tool returns a JSON object shaped:
 
 ```json
 {
-  "status": "ok",
-  "data": <tool-specific payload>,
-  "warnings": ["..."],
-  "meta": {
-    "elapsed_ms": 123,
-    "rows_in_result": 50,
-    "truncated": false,
-    "rows_scanned": 12000,
-    "model": "flights"
-  }
+ "status": "ok",
+ "data": <tool-specific payload>,
+ "warnings": ["..."],
+ "meta": {
+ "elapsed_ms": 123,
+ "rows_in_result": 50,
+ "truncated": false,
+ "rows_scanned": 12000,
+ "model": "flights"
+ }
 }
 ```
 
@@ -87,52 +87,52 @@ predicates declared on the source table, applied automatically before any join.
 
 ```yaml
 flights:
-  filters:
-    require_origin_and_carrier:
-      expr: "origin IS NOT NULL AND carrier IS NOT NULL"
-      description: "Drop rows with null origin or carrier."
-      metadata:
-        owner: data-platform-team
-        tags: [data-quality]
+ filters:
+ require_origin_and_carrier:
+ expr: "origin IS NOT NULL AND carrier IS NOT NULL"
+ description: "Drop rows with null origin or carrier."
+ metadata:
+ owner: data-platform-team
+ tags: [data-quality]
 ```
 
 ```json
 // describe_model response
 {
-  "model": "flights",
-  "filters": [
-    {
-      "name": "require_origin_and_carrier",
-      "description": "Drop rows with null origin or carrier.",
-      "expr": "origin IS NOT NULL AND carrier IS NOT NULL",
-      "metadata": {"owner": "data-platform-team", "tags": "data-quality"}
-    }
-  ],
-  ...
+ "model": "flights",
+ "filters": [
+ {
+ "name": "require_origin_and_carrier",
+ "description": "Drop rows with null origin or carrier.",
+ "expr": "origin IS NOT NULL AND carrier IS NOT NULL",
+ "metadata": {"owner": "data-platform-team", "tags": "data-quality"}
+ }
+ ],
+ ...
 }
 ```
 
 **Contract:**
 
 - **Source-of-truth:** the YAML `filters:` block. The library stores filters in the
-  op tree as `SemanticRowFilterOp` nodes; `SemanticTable.filters` walks the tree to
-  expose them. MCP `describe_model` reads from the same accessor — one definition,
-  three lenses (YAML / Scala DSL / MCP).
+ op tree as `SemanticRowFilterOp` nodes; `SemanticTable.filters` walks the tree to
+ expose them. MCP `describe_model` reads from the same accessor — one definition,
+ three lenses (YAML / Scala DSL / MCP).
 - **Pre-join semantics:** each `expr:` operates on THIS model's source table only.
-  The YamlLoader validates every `expr:` field via the YAML load-time
-  validation pass (`ExpressionValidator` for dims/transforms/measures,
-  `CalcExpr.validateReferences` for `calculated_measures`,
-  `SparkFilterValidator` for filters) so a misconfigured expression fails
-  at model-load time, not at query time. Each validator parses the
-  expression and rejects references to columns/measures not visible at
-  that point.
+ The YamlLoader validates every `expr:` field via the YAML load-time
+ validation pass (`ExpressionValidator` for dims/transforms/measures,
+ `CalcExpr.validateReferences` for `calculated_measures`,
+ `SparkFilterValidator` for filters) so a misconfigured expression fails
+ at model-load time, not at query time. Each validator parses the
+ expression and rejects references to columns/measures not visible at
+ that point.
 - **Always applied:** the agent doesn't pass `filters` to `query` and doesn't need
-  to know they exist. They're baked into every compiled query automatically.
+ to know they exist. They're baked into every compiled query automatically.
 - **Distinct from query-time `where`:** for cross-table predicates (a filter that
-  references joined-side columns), use the `query` tool's `where` parameter
-  instead. Query-time `where` is composed atop any source filters.
+ references joined-side columns), use the `query` tool's `where` parameter
+ instead. Query-time `where` is composed atop any source filters.
 - **OKF side:** the OKF `# Filters` section renders the same data as a markdown
-  table — the agent can read it without an MCP call.
+ table — the agent can read it without an MCP call.
 
 ### Per-model `version` field
 
@@ -142,23 +142,23 @@ or `0` if the model has no `version:` declared (i.e. the pre-versioning era).
 
 ```yaml
 flights:
-  version: 1      # → version: 1 in describe_model + OKF frontmatter
-  table: ...
+ version: 1 # → version: 1 in describe_model + OKF frontmatter
+ table: ...
 ```
 
 ```json
 // describe_model response
 {
-  "model": "flights",
-  "version": 1,
-  ...
+ "model": "flights",
+ "version": 1,
+ ...
 }
 ```
 
 Semantics:
 - The library never fails on a version mismatch — it only stores and emits the value.
 - Bumping is informational; consumers (this server, agent frameworks) decide
-  what "different" means. See `SemanticTable.version` docstring for the library-side contract.
+ what "different" means. See `SemanticTable.version` docstring for the library-side contract.
 - `0` means "no version committed"; treat as "I don't know what version this is".
 
 ### Per-model `okf_markdown` field
@@ -171,32 +171,32 @@ agent gets it inline; no separate file lookup needed.
 ```json
 // describe_model response
 {
-  "model": "flights",
-  "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n..."
+ "model": "flights",
+ "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n..."
 }
 ```
 
 **Contract:**
 
 - **Source-of-truth:** `OkfGen.generate(modelDir, bundleDir)` — the same tool the
-  CLI exposes. The server runs it once at startup, then caches each model's
-  Markdown string in memory keyed by model name. Live regeneration per request
-  is not required (YAML changes are a server restart).
+ CLI exposes. The server runs it once at startup, then caches each model's
+ Markdown string in memory keyed by model name. Live regeneration per request
+ is not required (YAML changes are a server restart).
 - **Bundle layout:** server config accepts `--models <dir>` (the YAML source
-  directory) and `--okf-bundle <dir>` (where the server can write/check the
-  bundle). At startup: `OkfGen.generate(<models-dir>, <bundle-dir>)` to ensure
-  fresh content; then `Files.readString(<bundle-dir>/<model>.md)` into the cache.
-  See [`docs/agents/okf-mapping.md`](okf-mapping.md) for the mapping rules.
+ directory) and `--okf-bundle <dir>` (where the server can write/check the
+ bundle). At startup: `OkfGen.generate(<models-dir>, <bundle-dir>)` to ensure
+ fresh content; then `Files.readString(<bundle-dir>/<model>.md)` into the cache.
+ See [`docs/agents/okf-mapping.md`](okf-mapping.md) for the mapping rules.
 - **Opt-out:** the request accepts `{"model": "flights", "include_okf": false}`
-  for compact-mode callers. Default is `true` (most agents want it).
+ for compact-mode callers. Default is `true` (most agents want it).
 - **What's in it:** dimensions table, measures table, joins table, filter list,
-  grain, version, and a one-paragraph textual summary — everything an agent
-  needs to author a follow-up query without calling `list_models` +
-  `describe_model` separately.
+ grain, version, and a one-paragraph textual summary — everything an agent
+ needs to author a follow-up query without calling `list_models` +
+ `describe_model` separately.
 - **What it does NOT replace:** `describe_model`'s structured JSON fields
-  (`dimensions`, `measures`, `joins`, `filters`). The Markdown is the **human-
-  readable** mirror; the JSON is the **machine-typed** mirror. Agents building
-  predicates or query parameters must read the JSON, not the Markdown.
+ (`dimensions`, `measures`, `joins`, `filters`). The Markdown is the **human-
+ readable** mirror; the JSON is the **machine-typed** mirror. Agents building
+ predicates or query parameters must read the JSON, not the Markdown.
 
 ### Join one-liner rule
 
@@ -210,10 +210,10 @@ mentally. The format is:
 
 - Single-key join: `flights.carrier → carriers.carrier (one)`
 - Composite-key join: `orders.(order_id, line_id) → line_items.(order_id, line_id) (many)`
-  — when two or more equi-join keys, wrap each side in parens and comma-separate
+ — when two or more equi-join keys, wrap each side in parens and comma-separate
 - Cross join: `a. → b. (cross)` — both key lists empty; omit the leading `.`
 - Anonymous side (no `name: Some(...)` on `SemanticTable`): use the literal
-  `left` / `right` — e.g. `left.customer_id → customers.customer_id (one)`
+ `left` / `right` — e.g. `left.customer_id → customers.customer_id (one)`
 
 **Source-of-truth:** constructed by the MCP adapter from `JoinInfo` fields
 (`cardinality`, `leftName`, `rightName`, `keys`) — the server does not compute it
@@ -227,12 +227,12 @@ For failures:
 
 ```json
 {
-  "status": "error",
-  "error": {
-    "code": "MODEL_NOT_FOUND",
-    "message": "No model named 'flightts' is loaded. Available: flights, carriers.",
-    "hint": "Did you mean 'flights'?"
-  }
+ "status": "error",
+ "error": {
+ "code": "MODEL_NOT_FOUND",
+ "message": "No model named 'flightts' is loaded. Available: flights, carriers.",
+ "hint": "Did you mean 'flights'?"
+ }
 }
 ```
 
@@ -269,10 +269,10 @@ dimension/measure typo recovery. Do not invent suggestions in the MCP layer.
 **Response `data`:**
 ```json
 {
-  "models": [
-    {"name": "flights", "description": "Flight facts: per-flight distance and passenger counts"},
-    {"name": "carriers", "description": "Airline carrier reference data (lookup)"}
-  ]
+ "models": [
+ {"name": "flights", "description": "Flight facts: per-flight distance and passenger counts"},
+ {"name": "carriers", "description": "Airline carrier reference data (lookup)"}
+ ]
 }
 ```
 
@@ -295,83 +295,85 @@ that omit the (potentially large) `okf_markdown` field.
 **Response `data`:**
 ```json
 {
-  "model": "flights",
-  "version": 1,
-  "description": "Flight facts: per-flight distance and passenger counts",
-  "source_table": "flights_csv",
-  "filters": [
-    {
-      "name": "require_origin_and_carrier",
-      "description": "Drop rows with null origin or carrier — flagged in upstream QA rule.",
-      "expr": "origin IS NOT NULL AND carrier IS NOT NULL",
-      "metadata": {"owner": "data-platform-team", "tags": "data-quality"}
-    }
-  ],
-  "dimensions": [
-    {
-      "name": "carrier",
-      "expr": "carrier",
-      "type": "categorical",
-      "is_entity": true,
-      "is_time_dimension": false,
-      "smallest_time_grain": null,
-      "description": "Airline carrier code (IATA two-letter identifier)",
-      "metadata": {"owner": "data-platform-team", "tags": "airline,identifier"}
-    },
-    {
-      "name": "flight_date",
-      "expr": "flight_date",
-      "type": "categorical",
-      "is_entity": false,
-      "is_time_dimension": true,
-      "smallest_time_grain": "day",
-      "description": "Scheduled flight date",
-      "metadata": {}
-    }
-  ],
-  "measures": [
-    {
-      "name": "total_passengers",
-      "kind": "base",
-      "expr": "sum(passengers)",
-      "description": "Total passengers across all flights in the group",
-      "metadata": {"owner": "analytics-team", "unit": "count", "aggregation": "sum"}
-    },
-    {
-      "name": "avg_passengers",
-      "kind": "calc",
-      "expr": "total_passengers / flight_count",
-      "description": "Average passengers per flight",
-      "metadata": {"owner": "analytics-team", "unit": "count"}
-    }
-  ],
-  "joins": [
-    {
-      "name": "carriers",
-      "cardinality": "one",
-      "left": "flights",
-      "right": "carriers",
-      "keys": ["carrier"],
-      "summary": "flights.carrier → carriers.carrier (one)",
-      "extra_dimensions": [],
-      "extra_measures": []
-    }
-  ],
-  "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n…"
+ "model": "flights",
+ "version": 1,
+ "description": "Flight facts: per-flight distance and passenger counts",
+ "source_table": "flights_csv",
+ "status": "published",
+ "filters": [
+ {
+ "name": "require_origin_and_carrier",
+ "description": "Drop rows with null origin or carrier — flagged in upstream QA rule.",
+ "expr": "origin IS NOT NULL AND carrier IS NOT NULL",
+ "metadata": {"owner": "data-platform-team", "tags": "data-quality"}
+ }
+ ],
+ "dimensions": [
+ {
+ "name": "carrier",
+ "expr": "carrier",
+ "type": "categorical",
+ "is_entity": true,
+ "is_time_dimension": false,
+ "smallest_time_grain": null,
+ "description": "Airline carrier code (IATA two-letter identifier)",
+ "metadata": {"owner": "data-platform-team", "tags": "airline,identifier"}
+ },
+ {
+ "name": "flight_date",
+ "expr": "flight_date",
+ "type": "categorical",
+ "is_entity": false,
+ "is_time_dimension": true,
+ "smallest_time_grain": "day",
+ "description": "Scheduled flight date",
+ "metadata": {}
+ }
+ ],
+ "measures": [
+ {
+ "name": "total_passengers",
+ "kind": "base",
+ "expr": "sum(passengers)",
+ "description": "Total passengers across all flights in the group",
+ "metadata": {"owner": "analytics-team", "unit": "count", "aggregation": "sum"}
+ },
+ {
+ "name": "avg_passengers",
+ "kind": "calc",
+ "expr": "total_passengers / flight_count",
+ "description": "Average passengers per flight",
+ "metadata": {"owner": "analytics-team", "unit": "count"}
+ }
+ ],
+ "joins": [
+ {
+ "name": "carriers",
+ "cardinality": "one",
+ "left": "flights",
+ "right": "carriers",
+ "keys": ["carrier"],
+ "summary": "flights.carrier → carriers.carrier (one)",
+ "extra_dimensions": [],
+ "extra_measures": []
+ }
+ ],
+ "okf_markdown": "# flights\n\n**Flight facts:** per-flight distance and passenger counts\n\n**Source table:** `flights_csv`\n\n**Version:** 1\n\n## Dimensions (3)\n\n| name | type | description | is_entity |\n|---|---|---|---|\n| carrier | categorical | Airline carrier code (IATA two-letter) | true |\n…"
 }
 ```
 
 **Library call (v2):**
-- `models(model).description` and `models(model).sourceTable` (set by `YamlLoader`, see PR #6)
+- `models(model).description` and `models(model).sourceTable` (set by `YamlLoader`)
 - `models(model).version` — `Int`, `0` = unversioned
+- `models(model).status` — `ModelStatus` (`Draft` / `Published` / `Deprecated`); surfaced as the lowercase wire string
 - `models(model).filters` → walk `SemanticFilter.name` / `description` / `expr` / `metadata`
 - `models(model).dimensions` → walk `Dimension.name`, `Dimension.expr.toString` (synthetic — `expr` is a `SemanticScope => Column`), `Dimension.isEntity`, `Dimension.isTimeDimension`, `Dimension.smallestTimeGrain`, `Dimension.description`, `Dimension.metadata`
-- `models(model).measures` → same walk on `Measure`; **`kind` is read off `models(model).measureKind(name)` which returns `MeasureKind.Base | .Calc`** (PR #6, no need to re-implement the classifier in the adapter)
-- `models(model).joins` → `Seq[JoinInfo]`, walked for `name`, `cardinality`, `leftName`, `rightName`, `keys`, `extraDimensions`, `extraMeasures` (PR #6, `JoinKeyProbe` captures join keys at construction time so the adapter doesn't need to compile)
+- `models(model).measures` → same walk on `Measure`; **`kind` is read off `models(model).measureKind(name)` which returns `MeasureKind.Base | .Calc`** (the classifier is reusable across adapters)
+- `models(model).joins` → `Seq[JoinInfo]`, walked for `name`, `cardinality`, `leftName`, `rightName`, `keys`, `extraDimensions`, `extraMeasures` (`JoinKeyProbe` captures join keys at construction time so the adapter doesn't need to compile)
 - `models(model).joins.map(buildJoinSummary)` for the one-liner — see [Join one-liner rule](#join-one-liner-rule) for the format
 - For `okf_markdown`: read from a server-local cache populated at startup by `OkfGen.generate(<models-dir>, <bundle-dir>)`
 
-> **Note on `expr`:** since PR `#58` (`Dimension`/`Measure` carry
+> **Note on `expr`:** since (`Dimension`/`Measure` carry
 > `exprString`) the MCP layer surfaces the original expression string
 > verbatim for YAML-loaded models:
 > `expr = d.exprString.getOrElse(d.expr.toString)`. Programmatic
@@ -392,20 +394,20 @@ that omit the (potentially large) `okf_markdown` field.
 **Request:**
 ```json
 {
-  "model": "flights",
-  "dimensions": ["carrier"],
-  "measures": ["total_passengers", "flight_count", "avg_passengers"],
-  "where": [
-    {"type": "ge", "field": "distance", "value": 500},
-    {"type": "in", "field": "origin", "values": ["JFK", "LAX"]}
-  ],
-  "having": [
-    {"type": "gt", "field": "flight_count", "value": 10}
-  ],
-  "order_by": [{"field": "total_passengers", "direction": "desc"}],
-  "limit": 20,
-  "time_grain": "month",
-  "time_range": ["2024-01-01", "2024-12-31"]
+ "model": "flights",
+ "dimensions": ["carrier"],
+ "measures": ["total_passengers", "flight_count", "avg_passengers"],
+ "where": [
+ {"type": "ge", "field": "distance", "value": 500},
+ {"type": "in", "field": "origin", "values": ["JFK", "LAX"]}
+ ],
+ "having": [
+ {"type": "gt", "field": "flight_count", "value": 10}
+ ],
+ "order_by": [{"field": "total_passengers", "direction": "desc"}],
+ "limit": 20,
+ "time_grain": "month",
+ "time_range": ["2024-01-01", "2024-12-31"]
 }
 ```
 
@@ -439,7 +441,7 @@ that omit the (potentially large) `okf_markdown` field.
 
 // Compound
 {"type": "and", "predicates": [/* predicates... */]}
-{"type": "or",  "predicates": [/* ... */]}
+{"type": "or", "predicates": [/* ... */]}
 {"type": "not", "predicate": { /* a predicate */ }}
 ```
 
@@ -455,14 +457,14 @@ for `having`. The agent never writes `And` wrappers manually.
 val preds: List[Predicate] = req.where.map(_.map(jsonToPredicate))
 val where: Option[Predicate] = if (preds.isEmpty) None else Some(Predicate.And(preds: _*))
 val st = models(req.model).query(
-  measures = req.measures,
-  dimensions = req.dimensions,
-  where = where,
-  having = /* same */,
-  orderBy = req.order_by.map(o => if (o.direction == "desc") SortKey.desc(o.field) else SortKey.asc(o.field)),
-  limit = req.limit,
-  timeGrain = req.time_grain,
-  timeRange = req.time_range.map((s, e) => (s, e)),
+ measures = req.measures,
+ dimensions = req.dimensions,
+ where = where,
+ having = /* same */,
+ orderBy = req.order_by.map(o => if (o.direction == "desc") SortKey.desc(o.field) else SortKey.asc(o.field)),
+ limit = req.limit,
+ timeGrain = req.time_grain,
+ timeRange = req.time_range.map((s, e) => (s, e)),
 )
 val df = st.toDataFrame(spark)
 ```
@@ -470,17 +472,17 @@ val df = st.toDataFrame(spark)
 **Response `data`:**
 ```json
 {
-  "columns": [
-    {"name": "carrier", "type": "string"},
-    {"name": "total_passengers", "type": "long"},
-    {"name": "flight_count",      "type": "long"},
-    {"name": "avg_passengers",    "type": "double"}
-  ],
-  "rows": [
-    ["AA", 12000, 60, 200.0],
-    ["UA",  9000, 45, 200.0]
-  ],
-  "row_count": 2
+ "columns": [
+ {"name": "carrier", "type": "string"},
+ {"name": "total_passengers", "type": "long"},
+ {"name": "flight_count", "type": "long"},
+ {"name": "avg_passengers", "type": "double"}
+ ],
+ "rows": [
+ ["AA", 12000, 60, 200.0],
+ ["UA", 9000, 45, 200.0]
+ ],
+ "row_count": 2
 }
 ```
 
@@ -504,8 +506,8 @@ debug wrong numbers without paying the full `toDataFrame` cost on wrong queries.
 **Response `data`:**
 ```json
 {
-  "explain": "{\n  \"op_tree\": [...],\n  \"joins\": [...],\n  \"filters\": {\"pre\": [...], \"post\": [...]},\n  \"predicates\": [...],\n  \"warnings\": [...]\n}",
-  "warnings": ["calc avg_passengers depends on flight_count — order is enforced"]
+ "explain": "{\n \"op_tree\": [...],\n \"joins\": [...],\n \"filters\": {\"pre\": [...], \"post\": [...]},\n \"predicates\": [...],\n \"warnings\": [...]\n}",
+ "warnings": ["calc avg_passengers depends on flight_count — order is enforced"]
 }
 ```
 
@@ -525,11 +527,11 @@ Lets the agent discover tables → models → queries in one session.
 **Request:**
 ```json
 {
-  "table": "raw_warehouse_orders",
-  "format": "parquet",
-  "path": "/data/warehouse/orders",
-  "model_name": "orders",
-  "read_options": {"mergeSchema": "true"}
+ "table": "raw_warehouse_orders",
+ "format": "parquet",
+ "path": "/data/warehouse/orders",
+ "model_name": "orders",
+ "read_options": {"mergeSchema": "true"}
 }
 ```
 
@@ -543,17 +545,17 @@ Lets the agent discover tables → models → queries in one session.
 **Response `data`:**
 ```json
 {
-  "yaml": "<the YAML source>",
-  "field_inventory": {"dimensions": 8, "measures": 5, "skipped": 2},
-  "warnings": ["field 'raw_payload' (stringType) was skipped — no obvious dimension/measure classification"]
+ "yaml": "<the YAML source>",
+ "field_inventory": {"dimensions": 8, "measures": 5, "skipped": 2},
+ "warnings": ["field 'raw_payload' (stringType) was skipped — no obvious dimension/measure classification"]
 }
 ```
 
 **Library call:**
 ```scala
 val yaml = Introspector(spark = spark).fromFile(
-  spark, path = req.path, format = req.format,
-  modelName = req.model_name, readOptions = req.read_options)
+ spark, path = req.path, format = req.format,
+ modelName = req.model_name, readOptions = req.read_options)
 ```
 
 `field_inventory` is parsed from the YAML header comments; `warnings` is the
@@ -564,20 +566,20 @@ list of strings the Introspector emits when it can't classify a field.
 ## Invariants the server MUST preserve
 
 1. **Library is the only source of truth for query semantics.** The MCP server
-   never re-parses SQL, never re-walks the op tree, never invents a measure.
-   Every tool's adapter is a *shallow* translation: JSON → library call →
-   result → JSON.
+ never re-parses SQL, never re-walks the op tree, never invents a measure.
+ Every tool's adapter is a *shallow* translation: JSON → library call →
+ result → JSON.
 2. **No new exceptions.** Library exceptions are surfaced verbatim with the
-   same message; the server only re-classifies them into MCP error codes via
-   the closed table above. No exception invented in the adapter.
+ same message; the server only re-classifies them into MCP error codes via
+ the closed table above. No exception invented in the adapter.
 3. **No mutating endpoints in v1.** All tools are read-only.
 4. **Single SparkSession**, shared across calls. Never create one per request.
 5. **Logs to stderr only.** stdout = JSON-RPC. (MCP hard requirement.)
 6. **`closestMatch` for typos.** Server reuses `io.semanticdf.closestMatch` for
-   typo suggestions. No hand-rolled Levenshtein in the adapter layer.
+ typo suggestions. No hand-rolled Levenshtein in the adapter layer.
 7. **`RESULT_TOO_LARGE` is a fast rejection.** Check the projected limit
-   *before* `collect()` when feasible; worst case, `collect().length` is the
-   ground truth.
+ *before* `collect()` when feasible; worst case, `collect().length` is the
+ ground truth.
 
 ---
 
@@ -599,17 +601,17 @@ list of strings the Introspector emits when it can't classify a field.
 All three v1 open questions are now answered by library accessors that shipped
 between v1 and v2:
 
-1. **`measure.kind` — RESOLVED.** PR #6 added `SemanticTable.measureKind(name): MeasureKind`
-   returning `Base` / `Calc`. The MCP adapter reads this directly;
-   no need to re-implement a classifier. Shape unchanged from v1.
-2. **`joins` access — RESOLVED.** PR #6 added `SemanticTable.joins: Seq[JoinInfo]`
-   (with eager `JoinKeyProbe` capture so join keys are available at construction
-   time without compiling). `JoinInfo` carries `cardinality`, `leftName`,
-   `rightName`, `keys`, `extraDimensions`, `extraMeasures`. The adapter maps
-   directly; `summary` is derived in the adapter per the [one-liner rule](#join-one-liner-rule).
-3. **Source-table lookup — RESOLVED.** PR #6 added `SemanticTable.sourceTable: Option[String]`,
-   propagated by `YamlLoader` (it passes `sourceTable = Some(<table-name>)` to
-   `toSemanticTable`). The MCP adapter maps it directly to `source_table`.
+1. **`measure.kind` — RESOLVED.** added `SemanticTable.measureKind(name): MeasureKind`
+ returning `Base` / `Calc`. The MCP adapter reads this directly;
+ no need to re-implement a classifier. Shape unchanged from v1.
+2. **`joins` access — RESOLVED.** added `SemanticTable.joins: Seq[JoinInfo]`
+ (with eager `JoinKeyProbe` capture so join keys are available at construction
+ time without compiling). `JoinInfo` carries `cardinality`, `leftName`,
+ `rightName`, `keys`, `extraDimensions`, `extraMeasures`. The adapter maps
+ directly; `summary` is derived in the adapter per the [one-liner rule](#join-one-liner-rule).
+3. **Source-table lookup — RESOLVED.** added `SemanticTable.sourceTable: Option[String]`,
+ propagated by `YamlLoader` (it passes `sourceTable = Some(<table-name>)` to
+ `toSemanticTable`). The MCP adapter maps it directly to `source_table`.
 
 ---
 
@@ -632,8 +634,8 @@ What that means for each tool:
 A streaming-rooted model has `SemanticStreamingTableOp` at the root of its op tree; the library exposes this via the model surface. Two ways for the adapter (or a future MCP field) to surface it:
 
 ```scala
-model.root.isInstanceOf[SemanticStreamingTableOp]   // true for streaming-rooted
-model.root.isInstanceOf[SemanticTableOp]           // true for batch-rooted
+model.root.isInstanceOf[SemanticStreamingTableOp] // true for streaming-rooted
+model.root.isInstanceOf[SemanticTableOp] // true for batch-rooted
 ```
 
 The MCP server does not currently expose a `kind: "streaming" | "batch"` field on the model envelope; it's identifiable by the source-table shape alone today. If the agent needs to distinguish, filter on `source_table` against the YAML's `table:` field — streaming models name their `readStream` (e.g., `events_stream`), batch models name their static source.
@@ -644,37 +646,37 @@ A minimal streaming model (`examples/streaming-events/models/events.yml`):
 
 ```yaml
 events:
-  table: events_stream
-  description: "Real-time events arriving on the events topic."
-  dimensions:
-    event_type:       { expr: type, description: "Type of event" }
-    timestamp_bucket: { expr: timestamp, is_time_dimension: true, smallest_time_grain: second }
-  measures:
-    event_count: { expr: "count(1)", description: "Number of events in the window" }
-    total_value: { expr: "sum(value)", description: "Sum of value for events in the window" }
+ table: events_stream
+ description: "Real-time events arriving on the events topic."
+ dimensions:
+ event_type: { expr: type, description: "Type of event" }
+ timestamp_bucket: { expr: timestamp, is_time_dimension: true, smallest_time_grain: second }
+ measures:
+ event_count: { expr: "count(1)", description: "Number of events in the window" }
+ total_value: { expr: "sum(value)", description: "Sum of value for events in the window" }
 ```
 
 The MCP server (or `sdf describe events`) returns:
 
 ```
-Model:        events
-Version:      0
-Source table: events_stream          ← streaming read name
+Model: events
+Version: 0
+Source table: events_stream ← streaming read name
 
 Dimensions:
-NAME             EXPR
----------------  ----------------
-event_type       type
+NAME EXPR
+--------------- ----------------
+event_type type
 timestamp_bucket timestamp
 
 Measures:
-NAME         KIND  EXPR
------------  ----  --------
-event_count  base  count(1)
-total_value  base  sum(value)
+NAME KIND EXPR
+----------- ---- --------
+event_count base count(1)
+total_value base sum(value)
 
 Filters: (none)
-Joins:   (none)
+Joins: (none)
 ```
 
 Compare to a batch model's output: same shape, same fields. The streaming nature is implicit in `source_table = "events_stream"` (operator wired that streaming `readStream` into the `tables` map).
@@ -712,14 +714,14 @@ None blocking. Two minor follow-ups tracked separately:
 ## How this doc changes
 
 - **Before code lands:** pin this contract. Read it twice. Disagree with
-  anything? Change it here, not in the code.
+ anything? Change it here, not in the code.
 - **After code lands:** any change to a tool is a breaking change for every
-  agent already pointing at it. Document breaking changes in
-  [`RELEASE.md`](../../RELEASE.md) and bump the contract version.
+ agent already pointing at it. Document breaking changes in
+ [`RELEASE.md`](../../RELEASE.md) and bump the contract version.
 - **Schema versioning:** when the JSON shape changes incompatibly, copy to
-  `mcp-contract-v3.md` (etc.) and start version negotiation server-side. The
-  same library jar must remain source-compatible with both versions during the
-  deprecation window.
+ `mcp-contract-v3.md` (etc.) and start version negotiation server-side. The
+ same library jar must remain source-compatible with both versions during the
+ deprecation window.
 
 ---
 
@@ -730,27 +732,27 @@ before reviewing the rest of the doc.
 
 **Added:**
 - **Per-model `okf_markdown` field** on `describe_model`'s response. Source =
-  `OkfGen` output, generated at server startup and cached in memory. New
-  `include_okf` request field (default `true`) for compact-mode clients.
+ `OkfGen` output, generated at server startup and cached in memory. New
+ `include_okf` request field (default `true`) for compact-mode clients.
 - **Per-join `summary` field** rendered by the [one-liner rule](#join-one-liner-rule).
-  Agents can read the join graph in sentences without recomposing the
-  structured fields.
+ Agents can read the join graph in sentences without recomposing the
+ structured fields.
 - **Two new decision rows** in §"Decisions baked in" for OKF inclusion and
-  join one-liner format.
+ join one-liner format.
 - **`Resolved questions` section** replacing `Open questions` — all three
-  v1 questions now have library accessors (PR #6 in all three cases).
+ v1 questions now have library accessors ( in all three cases).
 
 **Changed:**
 - **`describe_model.joins` shape.** v1 had `name/model/type/left_on/right_on`
-  (a single-key join). v2 has `name/cardinality/left/right/keys[]/summary/
-  extra_dimensions[]/extra_measures[]` — `keys` is a list (handles composite
-  joins), `summary` is the one-liner, `extra_*` are names added post-join.
+ (a single-key join). v2 has `name/cardinality/left/right/keys[]/summary/
+ extra_dimensions[]/extra_measures[]` — `keys` is a list (handles composite
+ joins), `summary` is the one-liner, `extra_*` are names added post-join.
 - **`describe_model` request accepts `include_okf`** (optional, default true).
 - **`describe_model` measure.kind** comes from `SemanticTable.measureKind(name)`
-  (returns `Base`/`Calc`), not a hand-rolled classifier in the
-  adapter. Same shape as v1 — no change in resolution, just a stable
-  library accessor instead of a self-rolled classifier.
+ (returns `Base`/`Calc`), not a hand-rolled classifier in the
+ adapter. Same shape as v1 — no change in resolution, just a stable
+ library accessor instead of a self-rolled classifier.
 
 **Removed:**
 - The `model/explain()` `(spark)` fabrication note for joins — no longer
-  needed now that the library exposes `.joins` directly.
+ needed now that the library exposes `.joins` directly.
