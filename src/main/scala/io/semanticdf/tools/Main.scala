@@ -2,6 +2,8 @@ package io.semanticdf.tools
 
 import org.apache.spark.sql.SparkSession
 
+import io.semanticdf.{ManifestParsingException, SemanticManifest, YamlLoader}
+
 
 /** CLI entry point for semanticdf tooling.
   *
@@ -23,6 +25,10 @@ object Main {
         runOkfGen(args.tail)
       case Some("introspect") =>
         runIntrospect(args.tail)
+      case Some("manifest") =>
+        runManifest(args.tail)
+      case Some("validate-manifest") =>
+        runValidateManifest(args.tail)
       case Some(cmd) =>
         System.err.println(s"Unknown subcommand: $cmd")
         printUsage()
@@ -99,6 +105,68 @@ object Main {
     } finally spark.stop()
   }
 
+  /** manifest — emit a JSON manifest artifact for a YAML model. Needs
+    * Spark (used to compile the source DataFrame shape). */
+  private def runManifest(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .master("local[*]")
+      .appName("semanticdf-manifest")
+      .config("spark.ui.enabled", "false")
+      .config("spark.sql.shuffle.partitions", "2")
+      .getOrCreate()
+    try {
+      val parser = new CliParser(args)
+      val yamlPath = parser.require("--yaml", "Usage: manifest --yaml <file> [--out FILE]")
+      val outFile  = parser.option("--out", "")
+
+      val models = YamlLoader.load(yamlPath, spark)
+      val pretty = new StringBuilder
+      models.values.foreach { m =>
+        pretty.append(SemanticManifest.toJson(m, prettyPrint = true))
+        pretty.append('\n')
+      }
+
+      val payload = pretty.toString
+      if (outFile.nonEmpty) {
+        val pw = new java.io.PrintWriter(new java.io.File(outFile))
+        try pw.write(payload) finally pw.close()
+        println(s"Wrote ${models.values.size} manifest(s) to $outFile")
+      } else {
+        println(payload)
+      }
+    } finally spark.stop()
+  }
+
+  /** validate-manifest — read a JSON manifest, surface identity + digest.
+    * Source-free (uses parseMeta). No Spark needed. */
+  private def runValidateManifest(args: Array[String]): Unit = {
+    val parser = new CliParser(args)
+    val file   = parser.require("--file", "Usage: validate-manifest --file <manifest.json>")
+    val src    = scala.io.Source.fromFile(file)
+    val text   = try src.getLines.mkString("\n") finally src.close()
+
+    try {
+      val meta = SemanticManifest.parseMeta(text)
+      println(s"OK manifest")
+      println(s"  schemaVersion : ${meta.schemaVersion}")
+      println(s"  kind          : ${meta.kind}")
+      println(s"  modelName     : ${meta.modelName.getOrElse("(none)")}")
+      println(s"  version       : ${meta.version}")
+      println(s"  description   : ${meta.description.getOrElse("(none)")}")
+      println(s"  sourceTable   : ${meta.sourceTable.getOrElse("(none)")}")
+      println(s"  dimensions    : ${meta.dimensions}")
+      println(s"  measures      : ${meta.measures}  (calc: ${meta.calcMeasures})")
+      println(s"  joins         : ${meta.joins}")
+      println(s"  filters       : ${meta.filters}")
+      println(s"  isStreaming   : ${meta.isStreaming}")
+      println(s"  usesTAll      : ${meta.usesTAll}")
+    } catch {
+      case e: ManifestParsingException =>
+        System.err.println(s"Invalid manifest: ${e.getMessage}")
+        sys.exit(1)
+    }
+  }
+
   private def printUsage(): Unit = {
     println(
       """semanticdf-tools — CLI utilities for the semanticdf semantic layer
@@ -117,6 +185,16 @@ object Main {
         |  introspect --path <path> [--format parquet|csv|json] [--model NAME]
         |            [--max-measures N] [--sample-size N] [--out FILE]
         |            Read a data file and infer a starter YAML model.
+        |
+        |  manifest --yaml <file> [--out FILE]
+        |            Read a YAML model and emit a JSON manifest artifact (one
+        |            per model, separated by blank lines). The manifest is
+        |            portable metadata only — it does NOT carry computed
+        |            results. Operator owns data lifecycle.
+        |
+        |  validate-manifest --file <manifest.json>
+        |            Read a JSON manifest and print its identity + digest
+        |            header. Source-free (no Spark session required).
         |
         |Examples:
         |  mvn exec:java -Dexec.args="docsgen --path models/ --out docs/index.html"
