@@ -1217,4 +1217,51 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
     StreamingValidator.validate(m, options)
   }
 
+  // -------------------------------------------------------------------------
+  // derived_dimensions: year/month/day materialization (v0.2)
+  // -------------------------------------------------------------------------
+  //
+  // Time dimensions can declare `derived_dimensions: [year, month, day]` and
+  // the loader materializes them as sibling dims in the model's dimensions
+  // map. The sibling dims reuse the time-dim's source column reference;
+  // model.dimensions("year") aggregates via Spark's year() on the same column.
+
+  test("YamlLoader: time dim with `derived_dimensions: [year, month, day]` materializes 3 sibling dims") {
+    val path = writeYaml(
+      """
+        |events:
+        |  table: flights_ts_tbl
+        |  dimensions:
+        |    ts:
+        |      expr: ts
+        |      is_time_dimension: true
+        |      smallest_time_grain: day
+        |      derived_dimensions: [year, month, day]
+        |""".stripMargin)
+    val events = YamlLoader.load(path, flightsTimeTables)("events")
+
+    events.dimensions.keySet should contain theSameElementsAs Set("ts", "year", "month", "day")
+    // All siblings are dimensions (not time dims themselves).
+    Seq("year", "month", "day").foreach { name =>
+      events.dimensions(name).isTimeDimension shouldBe false
+    }
+  }
+
+  test("YamlLoader: derived_dimensions rejects unsupported parts at load time (v0.2: year/month/day only)") {
+    val path = writeYaml(
+      """
+        |events:
+        |  table: flights_ts_tbl
+        |  dimensions:
+        |    ts:
+        |      expr: ts
+        |      is_time_dimension: true
+        |      derived_dimensions: [year, hour]
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTimeTables)
+    }
+    ex.getMessage should include("hour")
+    ex.getMessage should include("year, month, day")
+  }
 }

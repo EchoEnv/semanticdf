@@ -521,10 +521,18 @@ object YamlLoader {
     val isTimeDim = extra.getOrElse("is_time_dimension", false).asInstanceOf[Boolean]
     val isEntity = extra.getOrElse("is_entity", false).asInstanceOf[Boolean]
     val smallestGrain = extra.get("smallest_time_grain").map(_.toString)
+    // Derived-time-part names ("year" / "month" / "day") the loader should
+    // materialize as sibling dims alongside this time-dim. Validated up-front
+    // (per-element: must be one of the supported parts; per-call: only legal
+    // on is_time_dimension: true dims — enforced in `withDimensions`).
+    val derivedParts: Seq[String] = parseDerivedDimNames(
+      extra.get("derived_dimensions"), modelName, name,
+    )
 
     if (isTimeDim)
       Dimension.time(name, dimensionExpr(exprStr), smallestTimeGrain = smallestGrain,
-        description = description, metadata = metadata).copy(exprString = Some(exprStr))
+        description = description, metadata = metadata,
+        derived = derivedParts).copy(exprString = Some(exprStr))
     else if (isEntity)
       Dimension.entity(name, dimensionExpr(exprStr), description, metadata).copy(exprString = Some(exprStr))
     else
@@ -763,6 +771,39 @@ object YamlLoader {
     case _ =>
       throw new IllegalArgumentException(
         s"$context: expected a mapping, got ${v.getClass.getSimpleName}.")
+  }
+
+  /** Parse the optional `derived_dimensions: [year, month, day]` field on
+    * a time dimension. Returns an empty list when absent. Validates each
+    * element to one of the supported parts (v0.2 supports exactly
+    * `year` / `month` / `day` — adding `hour` / `week` etc. is deferred).
+    *
+    * Errors are loud at model-load time, not at first query, so a typo
+    * in the YAML is caught immediately. */
+  private def parseDerivedDimNames(
+      raw: Option[Any],
+      modelName: String,
+      dimName: String,
+  ): Seq[String] = raw match {
+    case None => Seq.empty
+    case Some(list: Seq[_]) =>
+      val parts = list.toSeq.collect { case s: String => s }
+      if (parts.length != list.length)
+        throw new IllegalArgumentException(
+          s"Model '$modelName' dimension '$dimName' `derived_dimensions:` must be a list of strings, " +
+          s"got: ${list.map(_.getClass.getSimpleName).mkString(", ")}")
+      val allowed = Set("year", "month", "day")
+      val bad = parts.filterNot(allowed.contains)
+      if (bad.nonEmpty)
+        throw new IllegalArgumentException(
+          s"Model '$modelName' dimension '$dimName' declares unsupported derived parts: " +
+          s"${bad.mkString(", ")}. v0.2 supports: ${allowed.mkString(", ")}. " +
+          s"(Adding hour/week/quarter etc. is deferred; declare those dims explicitly.)")
+      parts
+    case Some(other) =>
+      throw new IllegalArgumentException(
+        s"Model '$modelName' dimension '$dimName' `derived_dimensions:` must be a list, " +
+        s"got ${other.getClass.getSimpleName}.")
   }
 
   /** Coerce a YAML value to `Map[String, Map[String, Any]]` with a context label for errors. */
