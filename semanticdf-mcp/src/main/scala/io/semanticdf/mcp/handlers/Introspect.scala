@@ -74,7 +74,7 @@ final class Introspect(spark: SparkSession) {
       .fromFile(spark, resolvedPath, resolvedFormat, resolvedModelName, readOptions)
 
     val inventory = parseInventory(yaml)
-    val warnings  = parseWarnings(yaml)   // currently empty — see scaladoc
+    val warnings  = parseWarnings(yaml)   // extracts `# WARN:` lines Introspector emits for skipped fields
 
     val data = Data(
       yaml           = stubTableField(yaml, resolvedTable),
