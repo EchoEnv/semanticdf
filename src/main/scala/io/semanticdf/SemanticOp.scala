@@ -185,7 +185,7 @@ final case class SemanticTableOp(
   override def compile(spark: SparkSession): DataFrame = table
 }
 
-/** A streaming source for the streaming terminal (ADR 0002).
+/** A streaming source for the streaming terminal.
   *
   * Wraps a Spark streaming `DataFrame` (from `spark.readStream`).
   * The compile method returns the streaming DataFrame unchanged —

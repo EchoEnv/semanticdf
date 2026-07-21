@@ -3,7 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 
-/** Streaming-terminal support (ADR 0002, PR 1 of the streaming build).
+/** Streaming-terminal support.
   *
   * Provides:
   *  - [[StreamingQueryOptions]] — user-facing options for the streaming
@@ -15,13 +15,12 @@ import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
   *  - [[StreamingValidator]] — walks the op tree and accumulates the
   *    list of features that the streaming terminal rejects.
   *
-  * Scope of this PR (terminal + validator + minimum viable streaming):
-  *  Supported: `where` filters on streaming sources, dimensions, base measures.
-  *  Deferred (per ADR 0002's "Revive trigger" order): windowed aggregation,
-  *  stream-static joins, windowed totals, checkpoint defaults.
+  * Supported in streaming: `where` filters, dimensions, base measures,
+  * windowed aggregation, static-stream joins, windowed totals via `t.all(...)`,
+  * default watermark + checkpoint location.
   *
-  * The validator fails LOUDLY for the deferred features — the user gets a
-  * clear "this needs ADR 0002 stage 2/3/4" error, not a silent wrong result.
+  * The validator fails LOUDLY for unsupported features — the user gets a
+  * clear error naming the offending pattern, not a silent wrong result.
   */
 object StreamingSupport {
 
@@ -48,16 +47,16 @@ object StreamingSupport {
     * @param checkpointLocation optional checkpoint path for fault tolerance.
     * @param foreachBatch callback for each micro-batch result. Default no-op.
     */
-  /** Time window spec for windowed aggregation in the streaming terminal
-    * (ADR 0002 stage 2). `column` is the time column to window on; `duration`
-    * is a Spark duration string (e.g., "5 minutes", "1 hour"). The terminal
-    * applies this as `groupBy(window(col(column), duration))` on the streaming
+  /** Time window spec for windowed aggregation in the streaming terminal.
+    * `column` is the time column to window on; `duration` is a Spark
+    * duration string (e.g., "5 minutes", "1 hour"). The terminal applies
+    * this as `groupBy(window(col(column), duration))` on the streaming
     * source. */
   final case class WindowSpec(column: String, duration: String)
 
-  /** Watermark spec for event-time processing in the streaming terminal
-    * (ADR 0002 stage 2). `column` is the event-time column; `delay` is the
-    * allowed lateness (Spark duration string, e.g., "10 minutes"). */
+  /** Watermark spec for event-time processing in the streaming terminal.
+    * `column` is the event-time column; `delay` is the allowed lateness
+    * (Spark duration string, e.g., "10 minutes"). */
   final case class WatermarkSpec(column: String, delay: String)
 
   final case class StreamingQueryOptions(
@@ -74,8 +73,8 @@ object StreamingSupport {
   )
 
   /** Thrown when a model uses features the streaming terminal doesn't support
-    * (yet). The message names the offending feature and the relevant
-    * ADR 0002 stage that would enable it. */
+    * (yet). The message names the offending feature so the user can
+    * adjust the model without consulting an internal spec. */
   class StreamingUnsupportedError(msg: String)
     extends RuntimeException(s"Streaming terminal: $msg")
 
@@ -114,19 +113,19 @@ object StreamingSupport {
       val totalUsers = findTotalUsers(measures.toSeq)
       if (totalUsers.nonEmpty) {
         // t.all(...) is allowed in streaming IF a window is specified —
-        // the framework computes per-window totals (ADR 0002 stage 4).
+        // the framework computes per-window totals in that case.
         if (options.window.isEmpty) {
           violations += s"t.all(...) used in measures: ${totalUsers.mkString(", ")} " +
-            "(requires windowed-totals — set StreamingQueryOptions.window, " +
-            "ADR 0002 stage 4)"
+            "(requires windowed-totals — set StreamingQueryOptions.window)"
         }
       }
       if (violations.nonEmpty) {
         throw new StreamingUnsupportedError(
           violations.mkString("; ") +
-          " (see ADR 0002 — only where filters on streaming sources are " +
-          "currently supported; groupBy/aggregate/joints/limits/orderBy/t.all " +
-          "need their respective ADR stages)")
+          " — only `where` filters on streaming sources are supported without " +
+          "a WindowSpec; `groupBy`/`aggregate` require a WindowSpec, " +
+          "`orderBy`/`limit` are not supported in streaming, " +
+          "stream-stream joins are not supported yet")
       }
     }
 
@@ -142,31 +141,30 @@ object StreamingSupport {
       case h: SemanticHintOp          => walk(h.source, v, options)  // hint: ok
       case tr: SemanticTransformsOp   => walk(tr.source, v, options) // transforms: ok
       case a: SemanticAggregateOp =>
-        // Windowed aggregation is OK if a WindowSpec is provided (ADR 0002 stage 2).
+        // Windowed aggregation is OK if a WindowSpec is provided.
         if (options.window.isEmpty) {
-          v += "groupBy(...).aggregate(...) requires window spec (ADR 0002 stage 2)"
+          v += "groupBy(...).aggregate(...) requires a window spec in StreamingQueryOptions (set StreamingQueryOptions.window)"
         }
         // If a window IS specified, we accept the aggregate — the terminal will
         // translate the groupBy+aggregate into a streaming groupBy(window(...)).agg(...).
         // We still walk children so any nested ops get checked.
         walk(a.source, v, options)
       case o: SemanticOrderByOp =>
-        v += "orderBy not supported in streaming (ADR 0002 stage 2)"
+        v += "orderBy is not supported in streaming"
       case l: SemanticLimitOp =>
-        v += "limit not supported in streaming (ADR 0002 stage 2)"
+        v += "limit is not supported in streaming"
       case j: SemanticJoinOp =>
-        // Static-stream join (ADR 0002 stage 3) is supported: one side is a
-        // batch source (SemanticTableOp), the other is a streaming source
+        // Static-stream join is supported: one side is a batch source
+        // (SemanticTableOp), the other is a streaming source
         // (SemanticStreamingTableOp). Stream-stream joins are still rejected.
         val leftIsStream  = hasStreamingSource(j.left)
         val rightIsStream = hasStreamingSource(j.right)
         if (!leftIsStream && !rightIsStream) {
-          v += "stream-static join: neither side is a streaming source — " +
-            "the model is fully batch (ADR 0002 stage 3 is for streaming joins)"
+          v += "join: neither side is a streaming source — the model is fully batch"
         } else if (leftIsStream && rightIsStream) {
-          v += "stream-stream joins not yet supported in streaming " +
-            "(ADR 0002 stage 3 supports static-stream only; " +
-            "stream-stream requires time bounds + watermarks — future enhancement)"
+          v += "stream-stream joins are not supported in streaming " +
+            "(only static-stream joins work today — stream-stream needs " +
+            "time bounds + watermarks on both sides)"
         }
         // Static-stream: OK, the terminal will handle it.
         // Still walk children for any nested issues.

@@ -164,7 +164,7 @@ object Dimension {
     *                          `"hour"`, `"minute"`. `None` means no restriction.
     * @param isEventTimestamp `true` if this column is the table's event-time
     *                          column. Reserved for the future streaming terminal
-    *                          (ADR 0002); no effect in batch today.
+    *                          Reserved for the future streaming terminal; no effect in batch today.
     */
   def time(
       name: String,

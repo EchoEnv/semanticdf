@@ -8,12 +8,13 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import io.semanticdf.StreamingSupport._
 
-/** Tests for the streaming terminal (ADR 0002, PR 1).
+/** Tests for the streaming terminal.
   *
   * Verifies:
   *  1. The `StreamingValidator` rejects unsupported op-tree patterns
-  *     (`t.all(...)`, `limit`, `orderBy`, `groupBy + aggregate`, joins)
-  *     with clear, ADR-referencing errors.
+  *     (`t.all(...)` without a window, `limit`, `orderBy`, `groupBy +
+  *     aggregate` without a window, stream-stream joins) with clear,
+  *     pattern-naming errors.
   *  2. The `StreamingValidator` accepts a simple `where`-only op tree.
   *  3. `toStreamingSemanticTable` requires a streaming `DataFrame`
   *     (rejects batch inputs).
@@ -243,7 +244,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     val ex = intercept[StreamingUnsupportedError] {
       StreamingValidator.validate(joined)
     }
-    assert(ex.getMessage.contains("stream-stream") || ex.getMessage.contains("stage 3"),
+    assert(ex.getMessage.contains("stream-stream"),
       s"Expected stream-stream error, got: ${ex.getMessage}")
   }
 
@@ -264,7 +265,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     // Should not throw.
     StreamingValidator.validate(joined)
 }
-  test("ADR 0002 stage 4: validator accepts t.all(...) in streaming when window is specified") {
+  test("validator accepts t.all(...) in streaming when window is specified") {
     implicit val s: SparkSession = spark
     val stream = s.readStream.format("rate").load()
     val model = toStreamingSemanticTable(stream, name = Some("rate"))
@@ -298,11 +299,11 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
       s"Expected t.all error, got: ${ex.getMessage}")
   }
 
-  // ADR 0002 stage 5: defaults for checkpoint location and watermark when
+  // Defaults for checkpoint location and watermark when
   // a window spec is set. The user no longer has to specify these for a
   // working windowed aggregation.
 
-  test("ADR 0002 stage 5: toStreamingQuery defaults checkpoint location to a temp dir") {
+  test("toStreamingQuery defaults checkpoint location to a temp dir") {
     implicit val s: SparkSession = spark
     val stream = s.readStream.format("rate").load()
     val model = toStreamingSemanticTable(stream, name = Some("rate_chkpt"))
@@ -321,7 +322,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     }
   }
 
-  test("ADR 0002 stage 5: toStreamingQuery defaults watermark to window column when windowed") {
+  test("toStreamingQuery defaults watermark to window column when windowed") {
     implicit val s: SparkSession = spark
     val stream = s.readStream.format("rate").load()
     val model = toStreamingSemanticTable(stream, name = Some("rate_wm"))
@@ -346,7 +347,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     }
   }
 
-  test("ADR 0002 stage 5: explicit watermark + checkpoint win over defaults") {
+  test("explicit watermark + checkpoint win over defaults") {
     implicit val s: SparkSession = spark
     val stream = s.readStream.format("rate").load()
     val model = toStreamingSemanticTable(stream, name = Some("rate_explicit"))
