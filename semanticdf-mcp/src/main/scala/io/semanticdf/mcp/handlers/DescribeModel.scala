@@ -31,6 +31,7 @@ final class DescribeModel {
       version: Int,
       description: String,
       source_table: Option[String],
+      status: String,
       filters: List[FilterEntry],
       dimensions: List[DimensionEntry],
       measures: List[MeasureEntry],
@@ -98,6 +99,7 @@ final class DescribeModel {
       version      = t.version,
       description  = t.description.getOrElse(""),
       source_table = t.sourceTable,
+      status       = t.status.asString,
       filters      = t.filters.toList.map { f => FilterEntry(f.name, f.description.getOrElse(""), f.expr, f.metadata) },
       dimensions   = t.dimensions.toList.sortBy(_._1).map { case (_, d) =>
         DimensionEntry(

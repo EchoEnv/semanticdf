@@ -110,6 +110,22 @@ final class SemanticTable private[semanticdf] (
       * consumers (LLM agents, BI tools, lineage trackers).
       */
     val sourceTable: Option[String] = None,
+    /** Lifecycle status of this model. Surfaced by MCP `describe_model`,
+      * the manifest artifact (`SemanticManifest.toJson`), and OKF generation
+      * so consumers (LLM agents, BI tools, downstream pipelines) can decide
+      * whether to query, warn, or refuse.
+      *
+      * Defaults to [[ModelStatus.Published]] for backwards compatibility —
+      * models built in v0.1.x implicitly were published; carrying that
+      * semantics forward keeps existing programs working without change.
+      * New models can declare `status: draft` / `published` / `deprecated`
+      * in YAML or via the fluent setter [[status(s:ModelStatus)* status]].
+      *
+      * Lifecycle is purely informational at the library level — the query
+      * terminals (`toDataFrame`, `toStreamingQuery`, `execute`) do not
+      * consult status. Consumers enforce policy.
+      */
+    val status: ModelStatus = ModelStatus.Published,
 ) {
 
   /** Batch terminal (DESIGN §4.5).
@@ -342,7 +358,7 @@ final class SemanticTable private[semanticdf] (
               description = sourceTable.flatMap(_ => None),
             )
             val batchModel = new SemanticTable(
-              batchRoot, postAggPredicates, this.version, sourceTable)
+              batchRoot, postAggPredicates, this.version, sourceTable, status)
             val result = batchModel.toDataFrame(spark)
             foreachBatchFn(result)
         }
@@ -686,6 +702,7 @@ final class SemanticTable private[semanticdf] (
       postAggPredicates,
       version,
       sourceTable,
+      status,
     )
 
   /** Set the per-model schema version. Returns a NEW SemanticTable (immutability preserved).
@@ -700,7 +717,21 @@ final class SemanticTable private[semanticdf] (
     */
   def version(v: Int): SemanticTable = {
     require(v >= 0, s"SemanticTable.version must be non-negative, got: $v")
-    new SemanticTable(root, postAggPredicates, version = v, sourceTable)
+    new SemanticTable(root, postAggPredicates, version = v, sourceTable, status)
+  }
+
+  /** Set the model's lifecycle status. Returns a NEW SemanticTable (immutability
+    * preserved). Same pattern as [[version(v:Int)* version]] — the field name and
+    * setter name are the same; Scala disambiguates by argument count.
+    *
+    * Typical uses:
+    *   - `model.status(ModelStatus.Draft)` while authoring
+    *   - `model.status(ModelStatus.Deprecated)` before a planned removal
+    *
+    * See [[ModelStatus]] for the lifecycle contract. */
+  def status(s: ModelStatus): SemanticTable = {
+    require(s != null, "SemanticTable.status: ModelStatus must be non-null")
+    new SemanticTable(root, postAggPredicates, version, sourceTable, s)
   }
 
   /** Same as [[explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:io.semanticdf.SemanticTable#Scope)]]
@@ -866,11 +897,11 @@ final class SemanticTable private[semanticdf] (
     val extra = materialized.map(d => d.name -> d).toMap
     root match {
       case t: SemanticTableOp =>
-        new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable)
+        new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable, status)
 
       // Streaming source: dims attach to the streaming model.
       case s: SemanticStreamingTableOp =>
-        new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable)
+        new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable, status)
 
       case j: SemanticJoinOp =>
         // Pass extra dimensions so mergedModel includes them.
@@ -884,33 +915,33 @@ final class SemanticTable private[semanticdf] (
           extraDimensions = j.extraDimensions ++ extra,
           extraMeasures   = j.extraMeasures,
         )
-        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable)
+        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       // Lets a user (or query()) chain withDimensions after where()/orderBy()/limit().
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status)
 
       // Transforms are applied at compile time; dims should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
         val inner = new SemanticTable(src).withDimensions(dims: _*)
-        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status)
 
       case _ =>
         throw new IllegalStateException(
@@ -964,11 +995,11 @@ final class SemanticTable private[semanticdf] (
     val extra = measures.map(m => m.name -> m).toMap
     root match {
       case t: SemanticTableOp =>
-        new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable)
+        new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable, status)
 
       // Streaming source: measures attach to the streaming model.
       case s: SemanticStreamingTableOp =>
-        new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable)
+        new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable, status)
 
       case j: SemanticJoinOp =>
         val updatedJoin = SemanticJoinOp(
@@ -981,32 +1012,32 @@ final class SemanticTable private[semanticdf] (
           extraDimensions = j.extraDimensions,
           extraMeasures   = j.extraMeasures ++ extra,
         )
-        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable)
+        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status)
 
       // Transforms are applied at compile time; measures should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
         val inner = new SemanticTable(src).withMeasures(measures: _*)
-        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status)
 
       case _ =>
         throw new IllegalStateException(
@@ -1091,7 +1122,7 @@ final class SemanticTable private[semanticdf] (
         // pattern used for joins below.
         new SemanticTable(
           SemanticTransformsOp(t, transforms),
-          postAggPredicates, version, sourceTable)
+          postAggPredicates, version, sourceTable, status)
 
       case j: SemanticJoinOp =>
         // Joined models: wrap in a SemanticTransformsOp. CRUCIALLY, we do NOT
@@ -1101,24 +1132,24 @@ final class SemanticTable private[semanticdf] (
         // time, and the transforms are applied then too.
         new SemanticTable(
           SemanticTransformsOp(j, transforms),
-          postAggPredicates, version, sourceTable)
+          postAggPredicates, version, sourceTable, status)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status)
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src).withTransforms(transforms: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status)
 
       // Chained transforms: append the new transforms to the existing layer.
       // Do NOT recurse — recursion would re-enter the case below and create a
@@ -1130,7 +1161,7 @@ final class SemanticTable private[semanticdf] (
       case SemanticTransformsOp(src, existing) =>
         new SemanticTable(
           SemanticTransformsOp(src, existing ++ transforms),
-          postAggPredicates, version, sourceTable)
+          postAggPredicates, version, sourceTable, status)
 
       case _ =>
         throw new IllegalStateException(
@@ -1327,7 +1358,7 @@ final class SemanticTable private[semanticdf] (
     val newRoot = pre.foldLeft(root) { (r, p) =>
       SemanticFilterOp(r, p)
     }
-    new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable)
+    new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status)
   }
 
   /** Apply a filter predicate explicitly as post-aggregation (HAVING).
@@ -1335,7 +1366,7 @@ final class SemanticTable private[semanticdf] (
     * Use when you want a dimension filter to apply after aggregation (rare, but
     * sometimes needed when the dimension is derived from a measure). */
   def having(pred: Predicate): SemanticTable =
-    new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable)
+    new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status)
 
   // -------------------------------------------------------------------------
   // Phase 5 completion: order_by / limit / query
@@ -1350,11 +1381,11 @@ final class SemanticTable private[semanticdf] (
     *
     * Typically chained after `aggregate()`. Composes with [[limit]]. */
   def orderBy(keys: SortKey*): SemanticTable =
-    new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable)
+    new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status)
 
   /** Limit the result to the first `n` rows. Composes with [[orderBy]]. */
   def limit(n: Int): SemanticTable =
-    new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable)
+    new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status)
 
   /** Add a Spark planner hint to this SemanticTable.
     *
@@ -1383,7 +1414,7 @@ final class SemanticTable private[semanticdf] (
     * @param params   optional parameters for the hint (e.g. an Int for `repartition_n`)
     * @return a new SemanticTable that emits a hinted DataFrame */
   def withHint(strategy: String, params: Any*): SemanticTable =
-    new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable)
+    new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable, status)
 
   /** One-shot bundled query (Phase 5 completion).
     *
@@ -1449,7 +1480,7 @@ final class SemanticTable private[semanticdf] (
   /** Begin a group-by + aggregate. Returns a builder whose `aggregate(...)` produces
     * the aggregated [[SemanticTable]]. */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable)
+    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status)
 
   // -------------------------------------------------------------------------
   // Typed field references (SemanticField typeclass)
@@ -2044,6 +2075,12 @@ final class SemanticGroupBy private[semanticdf] (
       * same reason as `version` — MCP and catalog consumers expect the resulting
       * query table to still report the source DataFrame name. */
     sourceTable: Option[String] = None,
+    /** Lifecycle status, carried from the originating [[SemanticTable]] for
+      * the same reason as `version` / `sourceTable` — the aggregated result
+      * must still report the model's lifecycle so consumers (MCP, agents,
+      * dashboards) can warn on deprecated models even after aggregation.
+      * Defaults to Published; preserved through `groupBy().aggregate(...)`. */
+    status: ModelStatus = ModelStatus.Published,
 ) {
   /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
   def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
@@ -2083,7 +2120,7 @@ final class SemanticGroupBy private[semanticdf] (
     var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
     // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
     postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-    new SemanticTable(op, version = version, sourceTable = sourceTable)
+    new SemanticTable(op, version = version, sourceTable = sourceTable, status = status)
   }
 }
 

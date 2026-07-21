@@ -941,6 +941,130 @@ class YamlLoaderSpec extends AnyFunSuite with SparkSessionFixture with FlightsFi
   }
 
   // -------------------------------------------------------------------------
+  // Per-model status: lifecycle field declared at the top of the model block
+  // (draft | published | deprecated). Defaults to Published for back-compat
+  // with v0.1.x models that didn't declare it.
+  // -------------------------------------------------------------------------
+
+  test("YAML 'status: published' is exposed via SemanticTable.status") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  status: published
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    assert(flights.status == ModelStatus.Published,
+      s"Expected Published, got ${flights.status}")
+  }
+
+  test("YAML 'status: draft' is exposed via SemanticTable.status") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  status: draft
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    assert(flights.status == ModelStatus.Draft,
+      s"Expected Draft, got ${flights.status}")
+  }
+
+  test("YAML 'status: deprecated' is exposed via SemanticTable.status") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  status: deprecated
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    assert(flights.status == ModelStatus.Deprecated,
+      s"Expected Deprecated, got ${flights.status}")
+  }
+
+  test("YAML without 'status:' defaults to Published (back-compat)") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |  measures:
+        |    flight_count: "count(1)"
+        |""".stripMargin)
+    val flights = YamlLoader.load(path, flightsTables)("flights")
+    assert(flights.status == ModelStatus.Published,
+      s"Expected Published default, got ${flights.status}")
+  }
+
+  test("YAML 'status: retired' is rejected (must be one of the three values)") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  status: retired
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.contains("status"),
+      s"Expected status-related error, got: ${ex.getMessage}")
+    assert(ex.getMessage.contains("retired"),
+      s"Expected unknown-value mention, got: ${ex.getMessage}")
+  }
+
+  test("YAML 'status: 42' is rejected (must be a string)") {
+    val path = writeYaml(
+      """
+        |flights:
+        |  status: 42
+        |  table: flights_tbl
+        |  dimensions:
+        |    carrier: carrier
+        |""".stripMargin)
+    val ex = intercept[IllegalArgumentException] {
+      YamlLoader.load(path, flightsTables)
+    }
+    assert(ex.getMessage.toLowerCase.contains("string"),
+      s"Expected string-typed error, got: ${ex.getMessage}")
+  }
+
+  test("Scala DSL: .status(s) attaches lifecycle status to a freshly loaded model") {
+    val flights = YamlLoader.load(
+      writeYaml(
+        """
+          |flights:
+          |  table: flights_tbl
+          |  dimensions:
+          |    carrier: carrier
+          |  measures:
+          |    flight_count: "count(1)"
+          |""".stripMargin),
+      flightsTables)("flights")
+    assert(flights.status == ModelStatus.Published, "Sanity: unmodified loader -> Published")
+    val deprecated = flights.status(ModelStatus.Deprecated)
+    assert(deprecated.status == ModelStatus.Deprecated,
+      s"Expected Deprecated after .status(), got ${deprecated.status}")
+    // Original is untouched (immutable)
+    assert(flights.status == ModelStatus.Published,
+      "Original SemanticTable.status must remain Published after .status()")
+  }
+
+  // -------------------------------------------------------------------------
   // Pre-join filters: YAML `filters:` block
   // -------------------------------------------------------------------------
 

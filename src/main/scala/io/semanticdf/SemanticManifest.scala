@@ -41,6 +41,7 @@ object SemanticManifest {
       version:       Int,
       description:   Option[String],
       sourceTable:   Option[String],
+      status:        String,    // "draft" | "published" | "deprecated" — wire format
       dimensions:    Int,
       measures:      Int,
       calcMeasures:  Int,
@@ -108,6 +109,7 @@ object SemanticManifest {
       version       = optIntField(mod, "version").getOrElse(0),
       description   = optStringField(mod, "description"),
       sourceTable   = optStringField(mod, "sourceTable"),
+      status        = optStringField(mod, "status").getOrElse("published"),
       dimensions    = optIntField(dig, "dimensions").getOrElse(0),
       measures      = optIntField(dig, "measures").getOrElse(0),
       calcMeasures  = optIntField(dig, "calcMeasures").getOrElse(0),
@@ -133,7 +135,7 @@ object SemanticManifest {
     val modelObj = root.putObject("model")
     putOptString(modelObj, "name",        model.name)
     modelObj.put("version",     model.version)
-    modelObj.put("status",      "published")  // Model.status lands in a separate PR
+    modelObj.put("status",      model.status.asString)
     putOptString(modelObj, "description", model.description)
     putOptString(modelObj, "sourceTable", model.sourceTable)
 

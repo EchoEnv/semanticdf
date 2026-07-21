@@ -98,6 +98,30 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
   }
 
   // ===========================================================================
+  // (3b) Lifecycle status — describe_model surfaces ModelStatus as wire string
+  // ===========================================================================
+
+  test("handler surfaces status: 'published' by default") {
+    val stub = stubModel(key = "flights", name = "flights")
+    new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+      .data.status shouldBe "published"
+  }
+
+  test("handler surfaces status: 'draft' when set on the model") {
+    val stub = stubModel(key = "flights", name = "flights",
+      status = io.semanticdf.ModelStatus.Draft)
+    new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+      .data.status shouldBe "draft"
+  }
+
+  test("handler surfaces status: 'deprecated' when set on the model") {
+    val stub = stubModel(key = "flights", name = "flights",
+      status = io.semanticdf.ModelStatus.Deprecated)
+    new DescribeModel().handle(stub, stubOkf(), "flights", includeOkf = false)
+      .data.status shouldBe "deprecated"
+  }
+
+  // ===========================================================================
   // (4) Join one-liner format — single key, composite key, cross
   // ===========================================================================
 
@@ -158,6 +182,7 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
       measures: Seq[Measure] = Seq.empty,
       joins: Seq[JoinInfo] = Seq.empty,
       filters: Seq[SemanticFilter] = Seq.empty,
+      status: io.semanticdf.ModelStatus = io.semanticdf.ModelStatus.Published,
   ): Models = {
     // Build the SemanticTable directly via toSemanticTable (the public entry
     // point). We don't actually need the DataFrame for describe_model — only
@@ -188,7 +213,7 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
         description = f.description,
         metadata = f.metadata),
     )
-    val registry: Map[String, SemanticTable] = Map(key -> finalTable.version(1))
+    val registry: Map[String, SemanticTable] = Map(key -> finalTable.version(1).status(status))
     new Models(registry, io.semanticdf.mcp.DataConfig(entries = Map.empty))
   }
 

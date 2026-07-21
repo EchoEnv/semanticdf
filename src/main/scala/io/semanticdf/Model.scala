@@ -380,3 +380,65 @@ object MeasureExtra {
   /** Shortcut for `tag(m, "unit" -> u)`. Common values: `"USD"`, `"count"`, `"ms"`. */
   def unit(m: Measure, u: String): Measure = tag(m, "unit" -> u)
 }
+
+/** Lifecycle status of a [[SemanticTable]]. Carried on the model and surfaced
+  * by MCP `describe_model`, the manifest artifact, and OKF generation so
+  * consumers (LLM agents, BI tools, downstream pipelines) can decide whether
+  * to query, warn, or refuse.
+  *
+  * Lifecycle is purely informational at the library level — the query
+  * terminals (`toDataFrame`, `toStreamingQuery`, `execute`) do not consult
+  * status. Consumers enforce policy. The MCP server surfaces `deprecated`
+  * status as a warning in the result envelope; future work will add
+  * explicit refusal (out of scope for this PR).
+  *
+  * The default is [[Published]] — models built before this field existed
+  * (all v0.1.x releases) implicitly were published; keeping that semantic
+  * for backwards compatibility. New models declared `draft:` in YAML are
+  * explicitly opt-in for "not ready to query" semantics.
+  *
+  * Values are wire-stable strings (`draft` / `published` / `deprecated`).
+  * Renaming a case is a breaking change to MCP `describe_model`,
+  * `SemanticManifest`, and the YAML `status:` field.
+  */
+sealed trait ModelStatus extends Product with Serializable {
+  /** Wire-stable lowercase string. */
+  def asString: String = this match {
+    case ModelStatus.Draft       => "draft"
+    case ModelStatus.Published   => "published"
+    case ModelStatus.Deprecated  => "deprecated"
+  }
+}
+
+object ModelStatus {
+
+  /** Authoring state. The model may be incomplete, may change shape without
+    * notice, and may not yet produce correct results. Use for in-progress
+    * work shared among collaborators before public exposure. */
+  case object Draft extends ModelStatus
+
+  /** Default state. The model is intended for query and is the model's
+    * declared authoritative definition. Carries no SLA guarantees; the
+    * consumer (MCP / agent / dashboard) decides how to interpret it. */
+  case object Published extends ModelStatus
+
+  /** End-of-life. The model still compiles and queries succeed, but the
+    * author has committed to removing or replacing it. Consumers SHOULD
+    * warn before serving results; future MCP work will refuse by default
+    * for deprecated models (out of scope here). */
+  case object Deprecated extends ModelStatus
+
+  /** Parse the wire format. Case-insensitive on input. Returns `None` for
+    * unknown values — callers should reject unknown status in strict
+    * contexts (e.g. `YamlLoader`) and accept-anything in tolerant ones. */
+  def fromString(s: String): Option[ModelStatus] = s.toLowerCase match {
+    case "draft"      => Some(Draft)
+    case "published"  => Some(Published)
+    case "deprecated" => Some(Deprecated)
+    case _            => None
+  }
+
+  /** All known statuses, in display order. Useful for tests and for
+    * enumerating accepted YAML values in error messages. */
+  def all: Seq[ModelStatus] = Seq(Draft, Published, Deprecated)
+}
