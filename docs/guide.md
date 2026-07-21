@@ -647,19 +647,52 @@ More in `DESIGN.md` §6.3.
 
 ---
 
-## The terminal — batch now, streaming-shaped for later
+## The terminal — batch and streaming share the op tree
 
 The same `SemanticTable` compiles against different terminals:
 
-- **Batch** (current) — `.toDataFrame(spark)` / `.execute(spark)` /
+- **Batch** — `.toDataFrame(spark)` / `.execute(spark)` /
   `.collectAs[T](spark)`. Returns a Spark `DataFrame` (batch
   flavor) or `Seq[T]` (typed flavor). `.queryAs[T](...)` bundles
   `query(...)` parameters and returns `Dataset[T]` (Spark's typed
   collection) — the one-shot pick when you want a typed result
   in one line.
 - **Streaming** — `.toStreamingQuery(spark, opts)`. Same op tree,
-  different terminal. Not yet built; the interface is shaped so
-  adding it is a terminal, not a new API.
+  different terminal. The model is built the same way; the
+  factory is `toStreamingSemanticTable(streamingDf, ...)` instead
+  of `toSemanticTable(batchDf, ...)`, and the terminal is
+  `.toStreamingQuery(spark, StreamingQueryOptions(...))` instead
+  of `.toDataFrame(spark)`. Everything in between (`.where`,
+  `.groupBy`, `.join_one`, `.withMeasures`, ...) is identical.
+
+### A streaming terminal in 15 lines
+
+```scala
+import io.semanticdf.{toStreamingSemanticTable, StreamingQueryOptions, WindowSpec, WatermarkSpec}
+
+// 1. Same model DSL; only the factory differs.
+val stream = spark.readStream.format("rate").load()
+val model = toStreamingSemanticTable(stream, name = Some("rate_windowed"))
+  .withDimensions(Dimension("timestamp", t => t("timestamp")))
+  .withMeasures(Measure("count", t => count(lit(1))))
+  .groupBy("timestamp")
+  .aggregate("count")
+
+// 2. Streaming options — window + watermark + foreachBatch callback.
+val query = model.toStreamingQuery(spark, StreamingQueryOptions(
+  window = Some(WindowSpec("timestamp", "5 minutes")),
+  watermark = Some(WatermarkSpec("timestamp", "10 minutes")),
+  foreachBatch = (df: DataFrame) => df.write.mode("append").parquet("/out/path"),
+))
+query.awaitTermination()
+```
+
+The framework defaults `checkpointLocation` to a per-query temp dir
+if you don't set one — fine for prototyping; pass a durable path
+for production. See [`docs/known-limitations.md`](known-limitations.md)
+for what's not yet supported in streaming (stream-stream joins,
+`orderBy`/`limit`, calc measures requiring transitive deps at
+the streaming stage).
 
 ### `queryAs[T]` — typed one-shot bundle
 

@@ -18,7 +18,7 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 
 | Area | Status today | Roadmap |
 |---|---|---|
-| **Execution model** | Batch `DataFrame` terminal | Streaming terminal — same op tree, new terminal |
+| **Execution model** | Batch `DataFrame` + streaming terminals (same op tree) | Stream-stream joins (only static-stream supported today) |
 | **Security model** | Per Spark session (no in-library row-level security) | Pluggable authn/authz adapter (gated on consumer demand) |
 | **Schema evolution** | Caller's responsibility | Drift detection on the wishlist |
 | **Join chains** | `join_one` / `join_many` / `join_cross`, tested up to 2 tables | Multi-hop join testing + collision policy |
@@ -29,18 +29,35 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 
 ---
 
-## Scope of v0.1.7
+## Scope
 
-### Batch-only (streaming is shaped but not yet wired)
+### Streaming terminal — what's supported and what isn't
 
-`toSemanticTable` accepts a batch `DataFrame` today. Structured
-Streaming sources won't work yet. The design is to have the
-**same model file** compile against a streaming terminal once it
-ships; the missing piece is the terminal, not your model definition.
+The streaming terminal (`model.toStreamingQuery(spark, opts)`) accepts
+the same model DSL as the batch terminal. Supported patterns:
 
-**Workaround today:** Use batch DataFrames.
-**Roadmap:** Streaming terminal — same op tree, new terminal.
-The construction API is already identical for batch and streaming.
+- `where` filters on the streaming source
+- `groupBy(...) + aggregate(...)` when a `WindowSpec` is provided
+- Static-stream `join_one` (one batch side, one streaming side)
+- `t.all(...)` windowed-totals when a `WindowSpec` is provided
+- Default watermark + checkpoint location when not specified
+
+Not yet supported in streaming:
+
+- **Stream-stream joins** — both sides would have to be streaming;
+  only static-stream `join_one` works today.
+- **`orderBy` + `limit`** in the streaming pipeline (use the batch
+  pipeline for those, or filter after the fact in `foreachBatch`).
+- **Calc measures referencing measure names not in the source** — the
+  streaming aggregation translates base measures against the
+  watermarked source; a calc measure that references a non-base
+  measure (like `pct = numerator / denominator`) works *within a
+  window* via the windowed-totals cross-join, but only when a
+  window spec is set.
+
+**Workaround:** Drop back to the batch terminal (`.toDataFrame(spark)`)
+for unsupported patterns, or run the streaming query per-batch in
+`foreachBatch` against a batch-compiled slice.
 
 ### Per-session security model
 
