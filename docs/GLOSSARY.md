@@ -225,13 +225,15 @@ list as new concepts land.
   parquet / csv) with optional `WindowSpec`, `WatermarkSpec`,
   `outputMode`, and `checkpointLocation`. Operators translate a
   `StreamingConfig` into `StreamingQueryOptions` and pass it to
-  `model.toStreamingQuery(spark, config)`. The YAML `streaming:`
-  block parses one-for-one.
+  `model.toStreamingQuery(spark, config)`. **The YAML `streaming:`
+  block is intentionally not supported** — operational config lives
+  in the operator's program, not in the model file.
 - **`OutputSink`** — sealed trait for the streaming result sink.
   Variants: `Noop` (discard), `Console(limit)` (log sample),
   `Parquet(path)`, `Csv(path)`, `Custom(label, write)` (raw
-  `DataFrame => Unit`; not expressible in YAML). Operators pick one
-  per model; the framework turns the variant into the matching
+  `DataFrame => Unit`; operator's program only — the YAML surface
+  has no `streaming:` block to express any of these). Operators pick
+  one per model; the framework turns the variant into the matching
   `foreachBatch` callback.
 
 ## MCP / REST surfaces
