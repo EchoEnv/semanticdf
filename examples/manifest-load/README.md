@@ -136,7 +136,7 @@ inspection-only, without encoding the operator's data-lifecycle decisions.
 - **No `SemanticJoinOp` support.** The recipe documents this as the
   manifest's primary anti-scope. Joined models throw at `toJson` time.
 - **No streaming.** The manifest is for batch models. Streaming
-  lifecycle is operator-side (per PR #124).
+  lifecycle is operator-side (the streaming terminal's operator-side boundary).
 - **No manifest validation.** The manifest is inspected, not
   validated. Use `tools.Main validate-manifest` for the
   closed-error-list validation pass.

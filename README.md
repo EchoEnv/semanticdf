@@ -613,7 +613,7 @@ mvn scala:run -DmainClass=com.example.windowanalytics.Main
 
 ## Cross-version compatibility
 
-Verified green on both Spark lines (353 library tests + 72 MCP tests = 425 total,
+Verified green on both Spark lines (442 library + 90 MCP + 18 CLI = 550 total,
 on each):
 
 | Spark | Scala | Status |

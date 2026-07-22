@@ -14,7 +14,7 @@ import org.apache.spark.sql.DataFrame
   * The "manifest" carries the model's *static definition* (identity,
   * dimensions, measures, joins, filters, plus a digest header). It does
   * NOT carry the model's *computed output* — the operator program owns
-  * data lifecycle (PR #124 boundary).
+  * data lifecycle (the streaming terminal's operator-side boundary).
   *
   * Schema: `v0.1.9-manifest`. See `docs/design/manifest-artifact.md` for
   * the full spec. The recipe (§1) said "no new external deps"; we

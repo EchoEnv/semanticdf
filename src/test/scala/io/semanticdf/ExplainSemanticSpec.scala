@@ -281,11 +281,11 @@ class ExplainSemanticSpec
     // Each SemanticJoinOp instance gets its own DynamicVariable, so two distinct
     // join ops don't share state. Compiling one must NOT leak into the other.
     //
-    // Since the catalog-introspection PR (PR #6): keys are ALSO captured eagerly
-    // at construction via JoinKeyProbe (see SemanticOp._staticGrainCols) so MCP
-    // consumers don't need a SparkSession to see join keys. The two captures
-    // are independent — one is per-instance (static), one is per-thread (dynamic)
-    // — so cross-talk is still impossible. Each instance shows its OWN keys,
+    // Keys are ALSO captured eagerly at construction via JoinKeyProbe
+    // (see SemanticOp._staticGrainCols) so MCP consumers don't need a
+    // SparkSession to see join keys. The two captures are independent —
+    // one is per-instance (static), one is per-thread (dynamic) — so
+    // cross-talk is still impossible. Each instance shows its OWN keys,
     // captured independently.
     val customers = toSemanticTable(customersDf, name = Some("customers"))
       .withDimensions(Dimension("customer_id", t => t("customer_id")))

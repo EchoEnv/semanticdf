@@ -1,6 +1,6 @@
 # Current scope & guardrails
 
-This document explains what SemanticDF **does today** (v0.1.7) and the
+This document explains what SemanticDF **does today** (v0.1.10) and the
 guardrails worth knowing before you adopt it. Each item pairs the
 *current behavior* with a *workaround* and a *roadmap hint* — so you
 can plan around what's here now and what's coming.
@@ -22,7 +22,7 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 | **Security model** | Per Spark session (no in-library row-level security) | Pluggable authn/authz adapter (gated on consumer demand) |
 | **Schema evolution** | Caller's responsibility | Drift detection on the wishlist |
 | **Join chains** | `join_one` / `join_many` / `join_cross`, tested up to 2 tables | Multi-hop join testing + collision policy |
-| **Time dimensions** | `atTimeGrain()` truncation | Auto-derived year/month/day parts |
+| **Time dimensions** | `atTimeGrain()` truncation, or `derive = Seq("year", "month", "day")` for sibling dims | — (correct as-is) |
 | **NULL semantics** | SQL-correct (null-propagating); `safeDivide` for dashboard zeros | — (correct as-is) |
 | **YAML joins** | Symmetric keys (same name both sides) | Asymmetric-key support |
 | **YAML calc measures** | Arithmetic + `all()` | Function calls (`abs`, `round`, …) |
@@ -286,4 +286,4 @@ For the architectural decisions behind these deferrals, see
 
 ---
 
-*This document is updated each release. Last updated: v0.1.8.*
+*This document is updated each release. Last updated: v0.1.10.*

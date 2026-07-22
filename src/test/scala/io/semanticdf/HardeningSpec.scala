@@ -291,7 +291,8 @@ class HardeningSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
   }
 }
 
-/** Regression test for the implicit-spark pattern introduced in PR #81.
+/** Regression test for the implicit-spark pattern (tests the `implicit spark: SparkSession` pattern
+  * on `execute`/`toDataFrame` so call sites can write `.execute` without passing spark positionally).
   *
   * `SemanticTable.toDataFrame`, `execute`, `explain`, `schema`, `compiledSchema`,
   * and the rest of the implicit-spark methods take `implicit spark: SparkSession`.

@@ -27,15 +27,16 @@ page first.** The most common failure modes are listed there.
 From the repo root:
 
 ```bash
-mvn test                    # runs 353 library tests on Spark 3.5.8
-mvn -Pspark4 test           # runs 353 library tests on Spark 4.1.1
-cd semanticdf-mcp && mvn test  # adds 72 MCP tests on top
+mvn test                    # runs 442 library tests on Spark 3.5.8
+mvn -Pspark4 test           # runs 442 library tests on Spark 4.1.1
+cd semanticdf-mcp && mvn test  # adds 90 MCP tests on top
+cd ../examples/cli-consumer && mvn test  # adds 18 CLI integration tests
 mvn install -DskipTests     # builds the jar so examples/pipeline/ can use it
 ```
 
 Both Spark profiles run the **same test suite** — the only difference is which
 Spark release is on the classpath. You should see `Tests: succeeded 353` in the
-library and `Tests: succeeded 72` in the MCP server (425 in total) either way.
+library, `Tests: succeeded 90` in the MCP server, and `Tests: succeeded 18` in the CLI consumer (550 in total) either way.
 
 ### Cross-version sanity check
 
