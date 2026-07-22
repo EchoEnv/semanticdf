@@ -14,7 +14,7 @@ reconstruct a `SemanticTable` whose root is a
 - Inspecting the loaded model via `ManifestMeta` (the `isStreaming`
   flag tells the operator which terminal to use)
 - Building a `StreamingConfig` and calling `toStreamingQuery` — the
-  operator-side `StreamingConfig` is NOT in the manifest (PR #124
+  operator-side `StreamingConfig` is NOT in the manifest (the streaming terminal's operator-side boundary)
   boundary; the manifest carries the model, the operator carries
   the runtime config)
 - Windowed aggregation with watermark + update mode
@@ -59,7 +59,7 @@ manifest carries:
 
 The manifest does **not** carry the streaming source itself, the
 checkpoint location, the trigger interval, or the output mode. Those
-are operator-side, by design (PR #124 boundary).
+are operator-side, by design (the streaming terminal's operator-side boundary).
 
 ## Run it
 
@@ -149,7 +149,7 @@ loading paths, both end-to-end working.
   `docs/design/joined-models-manifest.md`.)
 - **No streaming-source metadata in the manifest.** The source
   itself (Kafka topic, Parquet stream, rate source, etc.) is
-  operator-side, by design (PR #124). The manifest captures the
+  operator-side, by design (the streaming terminal's operator-side boundary). The manifest captures the
   MODEL, not the source.
 - **No `transforms:` block.** The YAML's per-row `transforms:` is
   not carried by the manifest. (Separate recipe in

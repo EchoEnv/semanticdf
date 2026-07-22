@@ -1,6 +1,6 @@
 # OKF Mapping for semanticdf
 
-**Status:** v0.1.8 (current) — this spec is the per-field reference for the OKF bundle shipped by `okfgen` (see [`docs/agents/maintenance.md`](maintenance.md) for the regeneration workflow). The post-v0.1.3 library fixes (PRs `#61`, `#62`) do not change OKF output.
+**Status:** v0.1.10 (current) — this spec is the per-field reference for the OKF bundle shipped by `okfgen` (see [`docs/agents/maintenance.md`](maintenance.md) for the regeneration workflow). The v0.1.10 manifest artifact now carries `status` for each model; OKF renders this as a lifecycle marker.
 **Audience:** anyone editing YAML model fields and wanting to know exactly how each one is rendered into OKF Markdown.
 
 This document is the **per-field spec** for how semanticdf YAML model files become

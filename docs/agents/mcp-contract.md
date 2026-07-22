@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule.
+**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule. Lifecycle warnings on `Deprecated`/`Draft` models were added in v0.1.10 (`warnings` field on every successful envelope).
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -626,7 +626,7 @@ The string format is **wire-stable**. Renaming is a breaking change.
 | MCP prompts / resources | Easy server-side, but bloat the contract; add once we know what agents actually need |
 | Arrow result format | JSON is fine under 10k rows; promote to Arrow if benchmarks demand |
 | Multi-tenant / row-level security | Hard; defer until a second real user shows up |
-| Streaming queries (`SemanticStreamingTableOp`, `toStreamingQuery`) | Shipped in v0.1.9. The agent surface stays the same (model-only); lifecycle is intentionally the operator's program (not an MCP tool). |
+| Streaming queries (`SemanticStreamingTableOp`, `toStreamingQuery`) | Shipped in v0.1.9; manifest streaming read path in v0.1.10. The agent surface stays the same (model-only); lifecycle is intentionally the operator's program (not an MCP tool). |
 | Row mutation / writes | All v1 tools are read-only. Writes belong in a separate "admin" MCP namespace |
 
 ---

@@ -222,10 +222,10 @@ class RowFilterWalkSpec extends AnyFunSuite with SparkSessionFixture with Flight
   }
 
   // ---------------------------------------------------------------------------
-  // Walk correctness (no double-walk). After the visitor-pattern migration
-  // (PRs #91, #92), the visitor`'s visit() already auto-recurses into all
-  // wrapper ops. Migrated walks had explicit visit(src) calls inside their
-  // enter methods — a subtle bug that walked each sub-tree twice. Symptom:
+  // Walk correctness (no double-walk). After the visitor-pattern migration,
+  // the visitor`'s visit() already auto-recurses into all wrapper ops.
+  // Migrated walks had explicit visit(src) calls inside their enter
+  // methods — a subtle bug that walked each sub-tree twice. Symptom:
   // walks that appended to a ListBuffer accumulated duplicates; walks that
   // updated a Map silently re-did work.
   //

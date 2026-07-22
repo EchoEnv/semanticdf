@@ -449,8 +449,8 @@ final class SemanticTable private[semanticdf] (
     * Builds the op tree, runs it, decodes every row into a `T` via the
     * implicit [[ResultDecoder[T]]], and returns a Spark `Dataset[T]`.
     * `T` is usually a case class; `ResultDecoder.derive[T]` derives
-    * the decoder automatically for case classes with primitive fields
-    * (PR #64). All `query(...)` parameters (where, having, orderBy,
+    * the decoder automatically for case classes with primitive fields.
+    * All `query(...)` parameters (where, having, orderBy,
     * limit, timeGrain, timeGrains, timeRange) work the same way they
     * do in the string-based `query`.
     *
