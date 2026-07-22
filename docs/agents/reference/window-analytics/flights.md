@@ -4,7 +4,7 @@ title: Flights
 description: "Flight facts: per-flight distance and passenger counts over 3 months"
 status: published
 resource: file://examples/window-analytics/models/flights.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

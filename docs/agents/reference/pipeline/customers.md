@@ -4,7 +4,7 @@ title: Customers
 description: Cleaned customer reference data
 status: published
 resource: file://examples/pipeline/models/customers.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [identifier, pii, semantic-table]
 ---
 

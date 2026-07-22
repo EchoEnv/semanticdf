@@ -6,7 +6,7 @@
 
     <groupId>io.semanticdf</groupId>
     <artifactId>semanticdf-mcp_2.13</artifactId>
-    <version>0.1.9</version>
+    <version>0.1.10</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-mcp</name>

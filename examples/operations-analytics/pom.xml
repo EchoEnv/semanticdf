@@ -19,7 +19,7 @@
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semanticdf.version>0.1.9</semanticdf.version>
+        <semanticdf.version>0.1.10</semanticdf.version>
 
         <!-- JVM flags for the forked Scala app JVM (mirrors main pom's spark.test.argLine).
              Without these, Spark on JDK 17 fails with sun.nio.ch.DirectBuffer access. -->

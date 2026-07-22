@@ -4,7 +4,7 @@ title: Customers
 description: Customer master data with signup dates and city
 status: published
 resource: file://examples/customer-analytics/models/customers.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

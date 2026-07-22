@@ -4,7 +4,7 @@ title: Usage
 description: "Per-customer usage events (calls, data, SMS) with plan + promotion context"
 status: published
 resource: file://examples/telco-analytics/models/usage.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

@@ -4,7 +4,7 @@ title: Orders
 description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
 status: published
 resource: file://examples/pipeline/models/orders.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [identifier, semantic-table]
 ---
 
