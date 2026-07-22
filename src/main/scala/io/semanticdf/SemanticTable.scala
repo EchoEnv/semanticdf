@@ -914,6 +914,8 @@ final class SemanticTable private[semanticdf] (
           rightRoot = j.rightRoot,
           extraDimensions = j.extraDimensions ++ extra,
           extraMeasures   = j.extraMeasures,
+          leftSide  = j.leftSide,
+          rightSide = j.rightSide,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
@@ -1011,6 +1013,8 @@ final class SemanticTable private[semanticdf] (
           rightRoot = j.rightRoot,
           extraDimensions = j.extraDimensions,
           extraMeasures   = j.extraMeasures ++ extra,
+          leftSide  = j.leftSide,
+          rightSide = j.rightSide,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
@@ -1259,6 +1263,8 @@ final class SemanticTable private[semanticdf] (
       cardinality = JoinCardinality.One,
       leftRoot  = leftRoot,
       rightRoot = rightRoot,
+      leftSide  = Some(this),
+      rightSide = Some(other),
     )
     new SemanticTable(join)
   }
@@ -1307,6 +1313,8 @@ final class SemanticTable private[semanticdf] (
       cardinality = JoinCardinality.Many,
       leftRoot  = leftRoot,
       rightRoot = rightRoot,
+      leftSide  = Some(this),
+      rightSide = Some(other),
     )
     new SemanticTable(join)
   }
@@ -1326,6 +1334,8 @@ final class SemanticTable private[semanticdf] (
       cardinality = JoinCardinality.Cross,
       leftRoot  = leftRoot,
       rightRoot = rightRoot,
+      leftSide  = Some(this),
+      rightSide = Some(other),
     )
     new SemanticTable(join)
   }
