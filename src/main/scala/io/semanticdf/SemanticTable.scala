@@ -904,7 +904,9 @@ final class SemanticTable private[semanticdf] (
         new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable, status)
 
       case j: SemanticJoinOp =>
-        // Pass extra dimensions so mergedModel includes them.
+        // Pass extra dimensions so mergedModel includes them. Preserve
+        // the key arrays + SQL fallback from PR #153 so the joined
+        // manifest round-trip stays correct after adding extra dims.
         val updatedJoin = SemanticJoinOp(
           left   = j.left,
           right  = j.right,
@@ -916,6 +918,9 @@ final class SemanticTable private[semanticdf] (
           extraMeasures   = j.extraMeasures,
           leftSide  = j.leftSide,
           rightSide = j.rightSide,
+          leftKeys = j.leftKeys,
+          rightKeys = j.rightKeys,
+          onExprString = j.onExprString,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
@@ -1015,6 +1020,9 @@ final class SemanticTable private[semanticdf] (
           extraMeasures   = j.extraMeasures ++ extra,
           leftSide  = j.leftSide,
           rightSide = j.rightSide,
+          leftKeys = j.leftKeys,
+          rightKeys = j.rightKeys,
+          onExprString = j.onExprString,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
@@ -1204,6 +1212,50 @@ final class SemanticTable private[semanticdf] (
   def join_one(
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
+  ): SemanticTable = join_oneWithKeys(other, on, Nil, Nil, None)
+
+  /** Typed equi-join entry point: explicit single-column key names.
+    * The "core-correct" path — emits the keys directly in the manifest
+    * wire shape (PR #154) without needing probe decomposition.
+    *
+    * @example
+    * {{{
+    *   orders.join_on(customers, "customer_id" -> "customer_id")
+    * }}}
+    */
+  def join_on(
+      other: SemanticTable,
+      keys: (String, String),
+  ): SemanticTable = {
+    val (lk, rk) = keys
+    val synthesized = (l: JoinSide, r: JoinSide) => l(lk) === r(rk)
+    join_oneWithKeys(other, synthesized, leftKeysIn = Seq(lk), rightKeysIn = Seq(rk), onExprStringIn = None)
+  }
+
+  /** Multi-key typed entry point. Keys pair positionally across the two
+    * arrays; both must have the same length. The recommended path for
+    * 2+ column equi-joins. */
+  def join_on(
+      other: SemanticTable,
+      leftKeys: Seq[String],
+      rightKeys: Seq[String],
+  ): SemanticTable = {
+    require(leftKeys.length == rightKeys.length,
+      s"join_on: leftKeys.length (${leftKeys.length}) must equal rightKeys.length (${rightKeys.length}).")
+    val synthesized = (l: JoinSide, r: JoinSide) =>
+      leftKeys.zip(rightKeys).map { case (lk, rk) => l(lk) === r(rk) }.reduce(_ && _)
+    join_oneWithKeys(other, synthesized, leftKeysIn = leftKeys, rightKeysIn = rightKeys, onExprStringIn = None)
+  }
+
+  /** Internal: shared body of `join_one` overloads. Calls the probe-based
+    * `extractJoinKeys` (PR #153 helper) when the caller used the lambda
+    * form; the typed entry points pre-populate the keys directly. */
+  private[semanticdf] def join_oneWithKeys(
+      other: SemanticTable,
+      on: (JoinSide, JoinSide) => Column,
+      leftKeysIn: Seq[String],
+      rightKeysIn: Seq[String],
+      onExprStringIn: Option[String],
   ): SemanticTable = {
     // We pass `this.root` and `other.root` (the actual op trees) as the
     // `left`/`right` of the SemanticJoinOp — NOT just the roots. The roots
@@ -1265,7 +1317,32 @@ final class SemanticTable private[semanticdf] (
       rightRoot = rightRoot,
       leftSide  = Some(this),
       rightSide = Some(other),
+      // When the caller used a typed key entry point, the keys are
+      // pre-populated. When the caller used the lambda form, run the
+      // probe to extract them at construction time. Either way, the
+      // SQL form is also captured so multi-column / non-equi joins
+      // still round-trip via the SQL fallback.
+      leftKeys = leftKeysIn,
+      rightKeys = rightKeysIn,
+      onExprString = onExprStringIn,
     )
+
+    // Back-compat: when the lambda path is used and no keys were
+    // pre-populated, attempt to decompose the AST. The probe here is
+    // cheap (one lambda invocation against recording JoinSide stubs)
+    // and idempotent — if it fails we leave the SQL fallback in place.
+    if (leftKeysIn.isEmpty && rightKeysIn.isEmpty && onExprStringIn.isEmpty) {
+      val (lk, rk, sql) = join.extractJoinKeys()
+      if (lk.nonEmpty || rk.nonEmpty || sql.isDefined) {
+        return new SemanticTable(
+          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql),
+          postAggPredicates = Nil,
+          version = 0,
+          sourceTable = None,
+          status = ModelStatus.Published,
+        )
+      }
+    }
     new SemanticTable(join)
   }
 
@@ -1303,6 +1380,44 @@ final class SemanticTable private[semanticdf] (
   def join_many(
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
+  ): SemanticTable = join_manyWithKeys(other, on, Nil, Nil, None)
+
+  /** Typed one-to-many join with explicit single-column keys. See
+    * [[join_on]] for the Single-key variant of the one-to-one join.
+    *
+    * Same construction-time decomposition applies: the typed entry
+    * populates `SemanticJoinOp.leftKeys` / `rightKeys` directly without
+    * needing the lambda-decomposition probe. */
+  def join_many_on(
+      other: SemanticTable,
+      keys: (String, String),
+  ): SemanticTable = {
+    val (lk, rk) = keys
+    val synthesized = (l: JoinSide, r: JoinSide) => l(lk) === r(rk)
+    join_manyWithKeys(other, synthesized, leftKeysIn = Seq(lk), rightKeysIn = Seq(rk), onExprStringIn = None)
+  }
+
+  /** Multi-key typed entry point for many-side joins. */
+  def join_many_on(
+      other: SemanticTable,
+      leftKeys: Seq[String],
+      rightKeys: Seq[String],
+  ): SemanticTable = {
+    require(leftKeys.length == rightKeys.length,
+      s"join_many_on: leftKeys.length (${leftKeys.length}) must equal rightKeys.length (${rightKeys.length}).")
+    val synthesized = (l: JoinSide, r: JoinSide) =>
+      leftKeys.zip(rightKeys).map { case (lk, rk) => l(lk) === r(rk) }.reduce(_ && _)
+    join_manyWithKeys(other, synthesized, leftKeysIn = leftKeys, rightKeysIn = rightKeys, onExprStringIn = None)
+  }
+
+  /** Internal shared body of `join_many` overloads. See [[join_oneWithKeys]]
+    * for the same logic on `join_one`. */
+  private[semanticdf] def join_manyWithKeys(
+      other: SemanticTable,
+      on: (JoinSide, JoinSide) => Column,
+      leftKeysIn: Seq[String],
+      rightKeysIn: Seq[String],
+      onExprStringIn: Option[String],
   ): SemanticTable = {
     val leftRoot  = requireRoot("join_many (left)")
     val rightRoot = other.requireRoot("join_many (right)")
@@ -1315,7 +1430,23 @@ final class SemanticTable private[semanticdf] (
       rightRoot = rightRoot,
       leftSide  = Some(this),
       rightSide = Some(other),
+      leftKeys = leftKeysIn,
+      rightKeys = rightKeysIn,
+      onExprString = onExprStringIn,
     )
+    // Lambda-path decomposition: same trade-offs as in [[join_oneWithKeys]].
+    if (leftKeysIn.isEmpty && rightKeysIn.isEmpty && onExprStringIn.isEmpty) {
+      val (lk, rk, sql) = join.extractJoinKeys()
+      if (lk.nonEmpty || rk.nonEmpty || sql.isDefined) {
+        return new SemanticTable(
+          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql),
+          postAggPredicates = Nil,
+          version = 0,
+          sourceTable = None,
+          status = ModelStatus.Published,
+        )
+      }
+    }
     new SemanticTable(join)
   }
 
