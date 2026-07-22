@@ -5,7 +5,7 @@ version: 1
 description: "Airline carrier reference data (lookup)"
 status: published
 resource: file://examples/joined-manifest/models/carriers.yml
-timestamp: 2026-07-22T15:15:55.075Z
+timestamp: 2026-07-22T15:36:45Z
 tags: [semantic-table]
 ---
 

@@ -5,7 +5,7 @@ version: 1
 description: "Flight facts: per-flight distance and passenger counts"
 status: published
 resource: file://examples/joined-manifest/models/flights.yml
-timestamp: 2026-07-22T15:15:55.075Z
+timestamp: 2026-07-22T15:36:45Z
 tags: [airline, airport, identifier, semantic-table]
 ---
 

@@ -165,9 +165,10 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       assert(meta.rightMeasures == 0)
       assert(meta.mergedMeasures == 0)
       assert(meta.isStreaming == false)
-      // leftKeys / rightKeys are BLOCKed \u2014 emitted empty, parsed empty.
-      assert(meta.leftKeys.isEmpty)
-      assert(meta.rightKeys.isEmpty)
+      // PR #154: keys are now populated end-to-end. Verify both arrays.
+      assert(meta.leftKeys  == Seq("id"))
+      assert(meta.rightKeys == Seq("id"))
+      assert(meta.multiColumn == false)
     } finally spark.stop()
   }
 
@@ -236,15 +237,20 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
       val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
 
-      // Evaluating the `on` predicate directly should throw with the
-      // BLOCK-referencing message.
+      // PR #154: the join now round-trips end-to-end. The reconstructed
+      // `on` lambda (built from `leftKeys`/`rightKeys`) is FUNCTIONAL.
+      // Verify by feeding real JoinSides through `j.on(l, r)` and
+      // checking the resulting column evaluates to expected values.
       val j = restored.root.asInstanceOf[SemanticJoinOp]
-      val ex = intercept[IllegalStateException] {
-        val (l, r) = (null: JoinSide, null: JoinSide)
-        val _ = j.on(l, r)
-      }
-      assert(ex.getMessage.contains("reconstructed"),
-        s"expected BLOCK-ref message, got: ${ex.getMessage}")
+      val probeL = JoinSide.recording("L", scala.collection.mutable.LinkedHashMap.empty[String, Boolean])
+      val probeR = JoinSide.recording("R", scala.collection.mutable.LinkedHashMap.empty[String, Boolean])
+      val restoredCol = j.on(probeL, probeR)
+      assert(restoredCol != null, "the restored `on` should produce a non-null Column")
+      // The probe stubs return `col(tagged)`, so the resulting Column's
+      // AST should reference the tagged names — proving the synthetic
+      // lambda forwarded correctly through `l("id") === r("id")`.
+      assert(probeL.captured.contains("__L__id"))
+      assert(probeR.captured.contains("__R__id"))
     } finally spark.stop()
   }
 
