@@ -5,6 +5,22 @@ returned 🔴 **BLOCK** on all three. The recipes need significant rework,
 not just nits. This file documents the feedback so the recipes can be
 re-designed or de-prioritised.
 
+## Resolution status (added 2026-07-22, end of v0.1.11 cycle)
+
+The BLOCK verdicts in §§1–3 below were resolved (or worked around) by
+the v0.1.11 implementation cycle, summarised below. The per-finding
+status is also annotated inline under each finding (✅ resolved, ❌
+still BLOCK, ⚠️ partial).
+
+| Recipe | Original BLOCK | Resolved in | Status |
+|---|---|---|---|
+| `manifest-transforms.md` | "Transform lacks `exprString`" | PR #149 | ✅ Shipped |
+| `joined-models-manifest.md` | 5 fatal issues | PRs #150 + #151 | ⚠️ Partially shipped (BLOCK #1 `on` reconstruction deferred) |
+| `streaming-manifest.md` | 3 tactical issues | PR #143 | ✅ Shipped (working draft resolved tactically) |
+
+See the implementation notes in each recipe's status block for details.
+
+
 ## 1. `joined-models-manifest.md` — BLOCK
 
 **Fatal issues:**

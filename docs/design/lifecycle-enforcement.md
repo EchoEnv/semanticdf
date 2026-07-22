@@ -1,7 +1,7 @@
 # Design Recipe: Lifecycle Enforcement on `Deprecated` / `Draft` Models
 
-**Status:** ACCEPTED (recipe is implementation-ready — all open questions resolved by senior-engineer review)
-**Library version that would emit this shape:** `0.1.10`
+**Status:** SHIPPED (recipe was ACCEPTED; implementation landed in PR #136 for v0.1.10, with CLI surfacing in PR #137)
+**Library version that emits this shape:** `0.1.10`
 **Scope:** Single, additive feature (3 MCP handler edits + 1 schema field + 3 spec edits + 1 doc edit). No library API changes. No new error codes.
 
 ## 1. What this is (and what it isn't)

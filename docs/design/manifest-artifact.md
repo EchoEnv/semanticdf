@@ -1,7 +1,7 @@
 # Design Recipe: Manifest Artifact (`SemanticManifest.toJson` / `fromJson`)
 
-**Status:** ACCEPTED (recipe is implementation-ready — open questions resolved by review)
-**Library version that would emit this shape:** `0.1.9-manifest`
+**Status:** SHIPPED (recipe was ACCEPTED; implementation landed in PR #132 for v0.1.9 — extended in PR #140 for calc measures and PR #132's example in PR #139)
+**Library version that emits this shape:** `0.1.9-manifest` (extended in `v0.1.11-manifest`)
 **Scope:** Single, additive feature (`SemanticManifest` object + `tools.Main manifest` route + tests). No op-tree changes. No new framework dependencies.
 
 > **Implementation note (carried from PR #132):** The recipe originally
