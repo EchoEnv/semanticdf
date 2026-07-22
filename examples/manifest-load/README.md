@@ -10,13 +10,13 @@ at runtime, ready to query.
 - Inspecting the manifest's identity + digest header via `ManifestMeta`
   (no Spark needed — fast pre-flight check)
 - Reconstructing a `SemanticTable` from the manifest + a source `DataFrame`
-- Running a base-measure query against the reconstructed model
+- Running base-measure queries (Q1) and dim + measure queries (Q3)
+- Running a **calc-measure query** (Q2) — `revenue_per_event =
+  total_revenue / event_count` round-trips through the manifest because
+  the loader uses `CalcExpr` to substitute measure references through
+  the post-aggregation `MeasureScope`
 - Lifecycle surfacing: the manifest's `status` field is exposed so
   consumers can route on `Draft` / `Published` / `Deprecated`
-
-  The example uses base measures (`order_count`, `order_amount`).
-  Calc measures (`avg_ship_days`, `on_time_rate`) are loaded as
-  metadata but throw on query — see "What it does NOT do" below.
 
 ## The workflow this exemplifies
 
@@ -24,10 +24,10 @@ at runtime, ready to query.
   Build (CI / deploy step)              Load (runtime / app)
   ──────────────────────────            ─────────────────────
   tools.Main manifest                    SemanticManifest.fromJson(
-    --yaml orders.yml                       manifests/orders.json,
-    --out manifests/                        sourceDataFrame)
+    --yaml usage.yml                        manifests/usage.json,
+    --out manifests/                         sourceDataFrame)
                                           → SemanticTable
-  → manifests/orders.json
+  → manifests/usage.json
 ```
 
 The two halves are designed to run in different processes: CI builds
@@ -38,13 +38,17 @@ source-of-truth.
 
 ## What the artifact contains
 
-The checked-in `manifests/orders.json` is a `v0.1.9-manifest` artifact
-representing the `orders` model from `examples/operations-analytics`.
-The manifest carries:
+The checked-in `manifests/usage.json` is a `v0.1.9-manifest` artifact
+representing the `usage` model from `examples/telco-analytics`. The
+manifest carries:
 
 - Identity: `name`, `version`, `status`, `description`, `sourceTable`
-- 4 dimensions (`order_id`, `customer_id`, `order_date` (time), `status`)
-- 6 measures (4 base, 2 calc — `on_time_rate` and `avg_ship_days`)
+- 8 dimensions (`usage_id`, `promo_code`, `plan_name`, `is_roaming`,
+  `plan_id`, `event_type`, `customer_id`, `customer_name` + 1 time
+  dim `event_date`)
+- 5 measures: 4 base (`event_count`, `total_revenue`,
+  `total_roaming_revenue`, `avg_event_amount`) + 1 calc
+  (`revenue_per_event`)
 - 0 joins, 0 filters (single-table model — the manifest's anti-scope
   is joined models, per the recipe §10)
 
@@ -68,23 +72,30 @@ Expected output (abridged):
 
 ```text
 Manifest schema: v0.1.9-manifest, kind: semanticdf-model-manifest
-Model: orders  v0  status=published
-Digest: 4 dims, 6 measures (2 calc), 0 filters, joins=0
+Model: usage  v0  status=published
+Digest: 9 dims, 5 measures (1 calc), 0 filters, joins=0
 
-Q1 — order count + total amount by status:
-| status  |order_count|order_amount        |
-| shipped |35         |3057.3199999999983  |
+Q1 — event_count + total_revenue (base measures):
++-----------+-------------+
+|event_count|total_revenue|
++-----------+-------------+
+|40         |143.35       |
++-----------+-------------+
 
-Q2 — dim-only projection by order_date (top 5):
-+----------+-----------+
-|order_date|order_count|
-+----------+-----------+
-|2024-01-05|1          |
-|2024-01-06|1          |
-|2024-01-07|1          |
-|2024-01-08|1          |
-|2024-01-10|1          |
-+----------+-----------+
+Q2 — revenue_per_event (calc measure = total_revenue / event_count):
++-------------+-----------+------------------+
+|total_revenue|event_count|revenue_per_event |
++-------------+-----------+------------------+
+|143.35       |40         |3.5837499999999998|
++-------------+-----------+------------------+
+
+Q3 — total_revenue by event_type (dim + measure):
++----------+-------------+
+|event_type|total_revenue|
++----------+-------------+
+|call      |85.0         |
+|data      |58.0         |
++----------+-------------+
 ```
 
 ## Regenerate the manifest from the YAML source
@@ -129,14 +140,11 @@ inspection-only, without encoding the operator's data-lifecycle decisions.
 - **No manifest validation.** The manifest is inspected, not
   validated. Use `tools.Main validate-manifest` for the
   closed-error-list validation pass.
-- **No calc-measure execution.** The manifest round-trips calc-measure
-  *metadata* (name, expr, dependsOn) for inspection but does not
-  reconstruct the lambda body. Calc measures (`avg_ship_days`,
-  `on_time_rate`) work when loaded from YAML but throw a loud error
-  when invoked on a manifest-loaded model. Consumers needing calc
-  behavior must re-load from YAML. This is documented in the recipe §5
-  ("metadata is in-process-only data consumed by the library's
-  classifier / OKF / inspection tools").
+- **No `transforms:` block.** The YAML's per-row `transforms:` block
+  (e.g. `ship_days = datediff(shipped_at, order_date)`) is not carried
+  by the manifest. Models that depend on transform-produced columns
+  throw `UNRESOLVED_COLUMN` at query time on the raw source DF.
+  Consumers needing transforms must re-load from YAML.
 
 ## Files
 

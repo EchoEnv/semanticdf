@@ -145,6 +145,46 @@ class SemanticManifestSpec
       q1.getAs[Double]("order_amount") shouldBe 150.0     // 10+20+30+40+50
     }
 
+    it("calc measures round-trip: the expr evaluates against post-aggregated scope, not the source") {
+      // Regression for the calc-measure anti-scope. Before the fix, calc
+      // measures' bodies were `_ => F.expr(e)` — Spark's expr parser saw
+      // measure references (e.g. `total_ship_days`) as columns of the
+      // source DataFrame and threw UNRESOLVED_COLUMN. The fix: dispatch
+      // on the manifest's `kind` field; calc measures use CalcExpr which
+      // walks the DSL and substitutes `scope(name)` for each ident, so
+      // the post-aggregation MeasureScope resolves them correctly.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(
+          Row(1, 100.0), Row(2, 200.0), Row(3, 300.0), Row(4, 400.0),
+        )),
+        StructType(Seq(
+          StructField("id",     IntegerType),
+          StructField("amount", org.apache.spark.sql.types.DoubleType),
+        ))
+      )
+      val model = toSemanticTable(df, name = Some("orders"))
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withMeasures(
+          Measure("order_count", _ => df("id"),        exprString = Some("count(1)")),
+          Measure("order_amount", _ => df("amount"),    exprString = Some("sum(amount)")),
+          // Calc measure: revenue per order. The lambda calls scope(name)
+          // for sibling refs, which is exactly what CalcExpr.replay does.
+          // The exprString hint ensures the manifest serializes a real
+          // expression string (not the "<lambda>" sentinel).
+          Measure("revenue_per_order",
+            scope => scope("order_amount") / scope("order_count"),
+            exprString = Some("order_amount / order_count")),
+        )
+        .groupBy()
+        .aggregate("revenue_per_order")
+      val json = SemanticManifest.toJson(model, prettyPrint = false)
+      val round = SemanticManifest.fromJson(json, df)
+      val q = round.groupBy().aggregate("revenue_per_order").execute(spark)
+        .collect().head
+      // 4 rows × 100.0+200.0+300.0+400.0 = 1000.0; 4 orders → 250.0
+      q.getAs[Double]("revenue_per_order") shouldBe 250.0
+    }
+
     it("lambda-only measures (no exprString) throw a loud error on first query") {
       // Anti-scope contract: a measure built from a bare lambda with
       // no exprString hint is stored as LambdaSentinel in the manifest.

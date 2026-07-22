@@ -303,6 +303,34 @@ object SemanticManifest {
       // this lossiness; consumers needing the original lambda behavior
       // must re-load from YAML.
       val exprString = if (isSentinel) None else Some(e)
+      // The `kind` field disambiguates base vs calc measures. Both
+      // round-trip via the persisted `expr` string, but the body shape
+      // differs:
+      //   - **Base measures** reference SOURCE columns (`sum(amount)`,
+      //     `count(1)`). Their expr is a normal Spark SQL expression
+      //     and can be evaluated via `F.expr` directly.
+      //   - **Calc measures** reference OTHER MEASURES
+      //     (`total_ship_days / order_count`). The aggregation framework
+      //     computes base measures first, then evaluates calc measures
+      //     against the post-aggregated DataFrame. To participate in
+      //     that, the calc lambda must resolve measure names through
+      //     the `SemanticScope` — `CalcExpr.apply(scope, e)` does exactly
+      //     that, walking the calc DSL and substituting `scope(name)`
+      //     for each ident.
+      //
+      // Both paths populate `ClassificationScope.referencedMeasures`
+      // correctly so the transitive-closure walker pulls in the
+      // dependencies, and the post-aggregation `MeasureScope.apply`
+      // resolves the column references in the post-agg DataFrame.
+      //
+      // When the original lambda was a bare Scala closure with no hint
+      // (exprString was None at write time), the manifest stores
+      // LambdaSentinel = "<lambda>" — we cannot reconstruct the
+      // behavior, so the measure body is a placeholder and a loud
+      // runtime error fires on first query. The recipe documents this
+      // lossiness; consumers needing the original lambda behavior must
+      // re-load from YAML.
+      val kind = optStringField(node, "kind").getOrElse("base")
       val measureBody: SemanticScope => org.apache.spark.sql.Column =
         if (isSentinel) {
           scope => throw new IllegalStateException(
@@ -310,16 +338,16 @@ object SemanticManifest {
             s"the original behavior is not recoverable from the manifest. " +
             s"Re-load from YAML to recover. " +
             s"See docs/design/manifest-artifact.md §5.")
+        } else if (kind == "calc") {
+          // Calc measures reference sibling measures. Use CalcExpr to
+          // walk the expr through the scope — every ident becomes
+          // `scope(name)`, which the aggregation framework's post-agg
+          // MeasureScope resolves to a column.
+          scope => CalcExpr(scope, e)
         } else {
-          // We need a measure body that evaluates the expression against
-          // the source DataFrame. `F.expr` parses the string into a
-          // Column, then we just resolve any unresolved references at
-          // compile time. Simple base-measure expressions like
-          // `sum(amount)` and `count(1)` round-trip cleanly. Calc-measure
-          // expressions that reference other measures (e.g. `total /
-          // count`) require measure-substitution at compile time, which
-          // we do via the existing transitive-dep walker in the
-          // SemanticTable's aggregate compilation.
+          // Base measures reference source columns. Spark's expr parser
+          // handles function calls like `sum(amount)` and `count(1)`;
+          // the lambda body never needs the scope for these.
           scope => org.apache.spark.sql.functions.expr(e)
         }
       (n, Measure(name = n, expr = measureBody, exprString = exprString))
