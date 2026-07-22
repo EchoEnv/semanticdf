@@ -18,23 +18,29 @@ import io.semanticdf.{ManifestParsingException, SemanticManifest, YamlLoader}
 object Main {
 
   def main(args: Array[String]): Unit = {
-    args.headOption match {
-      case Some("docsgen") =>
-        runDocsGen(args.tail)
-      case Some("okfgen") =>
-        runOkfGen(args.tail)
-      case Some("introspect") =>
-        runIntrospect(args.tail)
-      case Some("manifest") =>
-        runManifest(args.tail)
-      case Some("validate-manifest") =>
-        runValidateManifest(args.tail)
-      case Some(cmd) =>
-        System.err.println(s"Unknown subcommand: $cmd")
-        printUsage()
-        sys.exit(1)
-      case None =>
-        printUsage()
+    try {
+      args.headOption match {
+        case Some("docsgen") =>
+          runDocsGen(args.tail)
+        case Some("okfgen") =>
+          runOkfGen(args.tail)
+        case Some("introspect") =>
+          runIntrospect(args.tail)
+        case Some("manifest") =>
+          runManifest(args.tail)
+        case Some("validate-manifest") =>
+          runValidateManifest(args.tail)
+        case Some(cmd) =>
+          System.err.println(s"Unknown subcommand: $cmd")
+          printUsage()
+          sys.exit(1)
+        case None =>
+          printUsage()
+          sys.exit(1)
+      }
+    } catch {
+      case e: IllegalArgumentException =>
+        System.err.println(e.getMessage)
         sys.exit(1)
     }
   }
@@ -106,7 +112,12 @@ object Main {
   }
 
   /** manifest — emit a JSON manifest artifact for a YAML model. Needs
-    * Spark (used to compile the source DataFrame shape). */
+    * Spark (used to compile the source DataFrame shape).
+    *
+    * Required: `--yaml <file>` and `--id <FQN>` (the manifest's reverse-DNS
+    * FQN identity). Optional: `--namespace <ns>` (default: `default`),
+    * `--metadata-author k=v --metadata-license k=v ...` (repeated inline
+    * flags; no separate file convention). */
   private def runManifest(args: Array[String]): Unit = {
     val spark = SparkSession.builder()
       .master("local[*]")
@@ -116,13 +127,22 @@ object Main {
       .getOrCreate()
     try {
       val parser = new CliParser(args)
-      val yamlPath = parser.require("--yaml", "Usage: manifest --yaml <file> [--out FILE]")
-      val outFile  = parser.option("--out", "")
+      val yamlPath  = parser.require("--yaml", "Usage: manifest --yaml <file> --id <FQN> [--out FILE] [--namespace NS] [--metadata-K V ...]")
+      val outFile   = parser.option("--out", "")
+      val idArg     = parser.require("--id", "manifest --yaml <file> --id <FQN> is required (recipe identity-bump §11 Q1)")
+      val namespace = parser.option("--namespace", "default")
+      val metadata  = parser.collectOptions("--metadata")   // repeated key=value flags
 
       val models = YamlLoader.load(yamlPath, spark)
+      val identity = SemanticManifest.Identity(
+        id              = idArg,
+        manifestVersion = SemanticManifest.InitialManifestVersion,
+        namespace       = namespace,
+        metadata        = metadata,
+      )
       val pretty = new StringBuilder
       models.values.foreach { m =>
-        pretty.append(SemanticManifest.toJson(m, prettyPrint = true))
+        pretty.append(SemanticManifest.toJson(m, identity, prettyPrint = true))
         pretty.append('\n')
       }
 
@@ -204,7 +224,7 @@ object Main {
   }
 
   /** Tiny CLI argument parser — avoids pulling in a dependency. */
-  private class CliParser(args: Array[String]) {
+  private[tools] class CliParser(args: Array[String]) {
     private val map        = scala.collection.mutable.LinkedHashMap[String, String]()
     private val optionArgs = scala.collection.mutable.Map[String, String]()
 
@@ -235,11 +255,28 @@ object Main {
 
     def option(name: String, default: String): String = map.getOrElse(name, default)
     def require(name: String, usageHint: String): String =
-      map.getOrElse(name, {
-        System.err.println(s"Missing required --$name")
-        System.err.println(usageHint)
-        sys.exit(1)
-      })
-    def collectOptions(prefix: String): Map[String, String] = optionArgs.toMap
+      map.getOrElse(name, throw new IllegalArgumentException(
+        s"Missing required --$name\n$usageHint"
+      ))
+    /** Return all parsed flags whose name starts with `prefix`, with the
+      * prefix and a leading separator (`-`) stripped. Supports repeated
+      * `<prefix>-KEY VALUE` pairs as a uniform inline convention (used
+      * for `--metadata-author X --metadata-license Y` etc.). */
+    def collectOptions(prefix: String): Map[String, String] =
+      map.toMap.iterator.flatMap { case (k, v) =>
+        if (k == prefix)              None      // bare --metadata, ignored
+        else if (k.startsWith(prefix)) {
+          val key = k.stripPrefix(prefix).stripPrefix("-")
+          if (key.isEmpty) None else Some(key -> v)
+        } else None
+      }.toMap
   }
+
+  /** Test-only helper exposed for `ManifestWriteSpec`. Wraps the `CliParser`
+    * instance method `collectOptions` so tests can construct a metadata
+    * map from repeated `--metadata-K V` flags without spinning up a
+    * full CLI invocation. Placed AFTER the `CliParser` class (it depends
+    * on it); it's still inside `object Main`. */
+  private[tools] def collectOptionsForTest(args: Array[String]): Map[String, String] =
+    new CliParser(args).collectOptions("--metadata")
 }

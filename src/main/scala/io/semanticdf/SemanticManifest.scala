@@ -26,7 +26,22 @@ object SemanticManifest {
 
   /** Manifest schema version. Bumped only on breaking changes to the
     * JSON shape. */
-  val CurrentSchemaVersion: String = "v0.1.9-manifest"
+  val CurrentSchemaVersion: String = "v0.1.11-manifest"
+
+  /** Version-gate accepted by `parseMeta` (prefix match, not strict
+    * equality). v0.1.9 / v0.1.10 / v0.1.11 manifests all parse cleanly. */
+  private val SupportedSchemaPrefix: String = "v0.1."
+
+  /** The `$schema` URL the manifest points to for tooling validation.
+    * Validators fetch this URL to retrieve the JSON Schema document.
+    * Tools ignore the value if unreachable; consumers that don't
+    * validate don't see the field. */
+  val SchemaUrl: String =
+    "https://raw.githubusercontent.com/EchoEnv/semanticdf/main/schemas/manifest.schema.json"
+
+  /** Initial `manifestVersion` for v1.0 of the spec. Pre-1.0 to flag
+    * the spec as evolving; bumps to 1.0.0 when stable. */
+  val InitialManifestVersion: String = "0.1.0"
 
   /** Sentinel recorded for a dimension/measure whose `exprString` was
     * `None` at serialization time. Original lambda is NOT recoverable. */
@@ -35,20 +50,27 @@ object SemanticManifest {
   /** Manifest identity-only header. Source-free; usable by tooling that
     * needs to inspect a manifest without loading Spark. */
   final case class ManifestMeta(
-      schemaVersion: String,
-      kind:          String,
-      modelName:     Option[String],
-      version:       Int,
-      description:   Option[String],
-      sourceTable:   Option[String],
-      status:        String,    // "draft" | "published" | "deprecated" — wire format
-      dimensions:    Int,
-      measures:      Int,
-      calcMeasures:  Int,
-      joins:         Int,
-      filters:       Int,
-      isStreaming:   Boolean,
-      usesTAll:      Boolean,
+      schemaVersion:    String,
+      kind:             String,
+      // Identity + governance fields (added in v0.1.11, recipe: docs/design/manifest-identity-bump.md).
+      // All optional at the schema level; missing → None / empty.
+      manifestVersion:  Option[String] = None,    // semver of the spec (e.g. "0.1.0")
+      id:               Option[String] = None,    // reverse-DNS FQN (cross-referencing handle)
+      namespace:        Option[String] = None,    // multi-env scoping (e.g. "dev", "prod")
+      metadata:         Map[String, String] = Map.empty,  // free-form audit object
+      // Existing fields:
+      modelName:        Option[String],
+      version:          Int,
+      description:      Option[String],
+      sourceTable:      Option[String],
+      status:           String,    // "draft" | "published" | "deprecated" — wire format
+      dimensions:       Int,
+      measures:         Int,
+      calcMeasures:     Int,
+      joins:            Int,
+      filters:          Int,
+      isStreaming:      Boolean,
+      usesTAll:         Boolean,
   )
 
   private val mapper: ObjectMapper = new ObjectMapper()
@@ -56,20 +78,52 @@ object SemanticManifest {
     .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
     .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
 
+  /** Identity + governance fields for the manifest. The CLI (or any writer)
+    * constructs one of these and passes it to `toJson`. The single-arg
+    * `toJson(model)` uses `Identity.empty` (omits the new fields) for
+    * back-compat with existing tests and callers.
+    *
+    * `id` is required at the CLI level (recipe §11 Q1); the empty default
+    * is for the no-Identity back-compat path only. */
+  final case class Identity(
+      id:              String,                  // reverse-DNS FQN
+      manifestVersion: String = InitialManifestVersion,
+      namespace:       String = "default",
+      metadata:        Map[String, String] = Map.empty,
+  )
+  object Identity {
+    /** Back-compat default: empty id, no metadata. Existing single-arg
+      * `toJson` calls emit a manifest without the new fields. CLI passes
+      * an explicit Identity. */
+    val empty: Identity = Identity(id = "")
+  }
+
   // ---------------------------------------------------------------------------
   // Public API
   // ---------------------------------------------------------------------------
 
-  /** Serialize a [[SemanticTable]] to a JSON manifest string. */
-  def toJson(model: SemanticTable, prettyPrint: Boolean = true): String = {
+  /** Serialize a [[SemanticTable]] to a JSON manifest string. Pass an
+    * explicit `identity` to populate the new identity + governance
+    * fields (`id`, `manifestVersion`, `$schema`, `namespace`,
+    * `metadata`). Omit for the back-compat single-arg call path —
+    * uses `Identity.empty` (no new fields emitted).
+    *
+    * `identity` and `prettyPrint` both have defaults so callers can use
+    * any subset. The CLI uses an explicit `Identity`; existing tests
+    * use the single-arg path. */
+  def toJson(
+      model: SemanticTable,
+      identity: Identity = Identity.empty,
+      prettyPrint: Boolean = true,
+  ): String = {
     if (joinedRoot(model).isDefined)
       throw new IllegalStateException(
         "SemanticManifest.toJson: joined models (SemanticJoinOp root) are not supported. " +
         "See docs/design/manifest-artifact.md §10.")
 
-    val root = buildJsonTree(model)
+    val root = buildJsonTree(model, identity)
     val out  = mapper.writeValueAsString(root)
-    if (prettyPrint) out else out  // Jackson's default for ObjectNode maps keeps insertion order; compact is similar
+    if (prettyPrint) out else out
   }
 
   /** Parse a manifest JSON string back into a [[SemanticTable]]. The caller
@@ -92,9 +146,14 @@ object SemanticManifest {
     val fields = obj.fieldNames.asScala.toList
     val schemaVersion = optStringField(obj, "schemaVersion")
       .getOrElse(throw ManifestParsingException("missing `schemaVersion`"))
-    if (schemaVersion != CurrentSchemaVersion)
+    // Prefix match: v0.1.9 / v0.1.10 / v0.1.11 all parse cleanly. A strict
+    // equality check would break every existing v0.1.9 / v0.1.10 manifest
+    // when the schemaVersion string bumps. Adding optional fields is
+    // non-breaking; the schemaVersion string is bumped but old values
+    // still parse.
+    if (!schemaVersion.startsWith(SupportedSchemaPrefix))
       throw ManifestParsingException(
-        s"manifest schemaVersion is '$schemaVersion', expected '$CurrentSchemaVersion'.")
+        s"manifest schemaVersion is '$schemaVersion', expected prefix '$SupportedSchemaPrefix*'.")
     val kind = optStringField(obj, "kind")
       .getOrElse(throw ManifestParsingException("missing `kind`"))
     if (kind != "semanticdf-model-manifest")
@@ -102,34 +161,106 @@ object SemanticManifest {
 
     val dig = obj.path("digest")
     val mod = obj.path("model")
+    // Identity + governance fields (added in v0.1.11). All optional at
+    // the schema level; missing → None / empty.
+    val metadataObj = obj.path("metadata")
+    val metadataMap: Map[String, String] =
+      if (metadataObj.isObject) metadataObj.fieldNames.asScala.toList.map { k =>
+        k -> (if (metadataObj.get(k).isTextual) metadataObj.get(k).asText("") else metadataObj.get(k).toString)
+      }.toMap
+      else Map.empty
     ManifestMeta(
-      schemaVersion = schemaVersion,
-      kind          = kind,
-      modelName     = optStringField(mod, "name"),
-      version       = optIntField(mod, "version").getOrElse(0),
-      description   = optStringField(mod, "description"),
-      sourceTable   = optStringField(mod, "sourceTable"),
-      status        = optStringField(mod, "status").getOrElse("published"),
-      dimensions    = optIntField(dig, "dimensions").getOrElse(0),
-      measures      = optIntField(dig, "measures").getOrElse(0),
-      calcMeasures  = optIntField(dig, "calcMeasures").getOrElse(0),
-      joins         = optIntField(dig, "joins").getOrElse(0),
-      filters       = optIntField(dig, "filters").getOrElse(0),
-      isStreaming   = optBoolField(dig, "isStreaming"),
-      usesTAll      = optBoolField(dig, "usesTAll"),
+      schemaVersion   = schemaVersion,
+      kind            = kind,
+      manifestVersion = optStringField(obj, "manifestVersion").orElse(Some(InitialManifestVersion)),
+      id              = optStringField(obj, "id"),
+      namespace       = optStringField(obj, "namespace").orElse(Some("default")),
+      metadata        = metadataMap,
+      modelName       = optStringField(mod, "name"),
+      version         = optIntField(mod, "version").getOrElse(0),
+      description     = optStringField(mod, "description"),
+      sourceTable     = optStringField(mod, "sourceTable"),
+      status          = optStringField(mod, "status").getOrElse("published"),
+      dimensions      = optIntField(dig, "dimensions").getOrElse(0),
+      measures        = optIntField(dig, "measures").getOrElse(0),
+      calcMeasures    = optIntField(dig, "calcMeasures").getOrElse(0),
+      joins           = optIntField(dig, "joins").getOrElse(0),
+      filters         = optIntField(dig, "filters").getOrElse(0),
+      isStreaming     = optBoolField(dig, "isStreaming"),
+      usesTAll        = optBoolField(dig, "usesTAll"),
     )
   }
+
+  /** Derive a per-side `Identity` for the left or right side of a
+    * joined model. The joined model's FQN becomes the parent; the
+    * side's name is appended with a `.` separator (e.g.
+    * `io.acme.warehouse.orders` -> `io.acme.warehouse.orders.customers`).
+    *
+    * Why this exists: the writer (`toJson`) rejects joined roots
+    * (recipe §10 anti-scope), and the `joined-models-manifest` recipe
+    * is BLOCKed on `SemanticJoinOp` not carrying enough side metadata.
+    * Until a joined-manifest wire shape exists, operators who need a
+    * portable record of a joined model emit one single-table manifest
+    * per side and hand-compose the joined envelope. This helper does
+    * the FQN derivation so callers don't repeat the naming rule.
+    *
+    * Side `name` is the YAML model's top-level key. For the common
+    * "YAML = `<root>` + `joins:[<sideA>]`" pattern, the root YAML key
+    * and the joined side's name may collide (e.g. both `orders`); in
+    * that case use the explicit `name` parameter to disambiguate.
+    *
+    * Usage:
+    * {{{
+    *   val parent = Identity(id = "io.acme.warehouse.orders", namespace = "prod")
+    *   val custId = SemanticManifest.sideIdentity(parent, "left",  "customers")
+    *   val ordId  = SemanticManifest.sideIdentity(parent, "right", "orders")
+    *   val (l, r) = (SemanticManifest.toJson(leftSide,  custId),
+    *                 SemanticManifest.toJson(rightSide, ordId))
+    * }}}
+    *
+    * The result keeps the parent's `manifestVersion`, `namespace`, and
+    * `metadata` so per-side manifests are aligned with the parent's
+    * governance. Drop the result through `Identity.copy(...)` if a
+    * caller wants to override per side (e.g. different `namespace`). */
+  def sideIdentity(
+      parent:   Identity,
+      sideLabel: String,
+      name:     String,
+  ): Identity = parent.copy(
+    id       = s"${parent.id}.$name",
+    metadata = parent.metadata + ("side" -> sideLabel),
+  )
 
   // ---------------------------------------------------------------------------
   // Tree construction (the part we own — Jackson handles the actual JSON bytes)
   // ---------------------------------------------------------------------------
 
-  private def buildJsonTree(model: SemanticTable): com.fasterxml.jackson.databind.JsonNode = {
+  private def buildJsonTree(
+      model: SemanticTable,
+      identity: Identity,
+  ): com.fasterxml.jackson.databind.JsonNode = {
     val root = mapper.createObjectNode()
 
     root.put("schemaVersion", CurrentSchemaVersion)
     root.put("kind",          "semanticdf-model-manifest")
     root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+
+    // Identity + governance fields (recipe: docs/design/manifest-identity-bump.md).
+    // Only emitted when the writer passed a non-empty Identity — the single-arg
+    // `toJson` path (back-compat for existing tests) passes `Identity.empty`
+    // and produces a manifest with no new top-level fields.
+    if (identity.id.nonEmpty || identity.metadata.nonEmpty || identity.manifestVersion != InitialManifestVersion || identity.namespace != "default") {
+      root.put("manifestVersion", identity.manifestVersion)
+      if (identity.id.nonEmpty) root.put("id", identity.id)
+      if (identity.namespace.nonEmpty) root.put("namespace", identity.namespace)
+      if (identity.metadata.nonEmpty) {
+        val metaObj = root.putObject("metadata")
+        identity.metadata.foreach { case (k, v) => metaObj.put(k, v) }
+      }
+      // Always emit $schema last so consumers can validate the shape
+      // against a JSON Schema document. The URL is fixed (per the recipe).
+      root.put("$schema", SchemaUrl)
+    }
 
     // model
     val modelObj = root.putObject("model")
@@ -207,9 +338,11 @@ object SemanticManifest {
     // Validation — early-fail loud.
     val schemaVersion = optStringField(obj, "schemaVersion").getOrElse(
       throw ManifestParsingException("missing `schemaVersion`"))
-    if (schemaVersion != CurrentSchemaVersion)
+    // Prefix match: v0.1.9 / v0.1.10 / v0.1.11 all parse cleanly. See
+    // `parseMeta` for the rationale.
+    if (!schemaVersion.startsWith(SupportedSchemaPrefix))
       throw ManifestParsingException(
-        s"manifest schemaVersion is '$schemaVersion', expected '$CurrentSchemaVersion'.")
+        s"manifest schemaVersion is '$schemaVersion', expected prefix '$SupportedSchemaPrefix*'.")
     val kind = optStringField(obj, "kind").getOrElse(
       throw ManifestParsingException("missing `kind`"))
     if (kind != "semanticdf-model-manifest")
