@@ -3,6 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{broadcast, col, lit, sum}
 
+import scala.jdk.CollectionConverters._
 import scala.util.DynamicVariable
 
 /** Root of the immutable semantic op tree (DESIGN §4.1).
@@ -121,14 +122,161 @@ private[semanticdf] object JoinSide {
   /** Recording-only stub: captures names but never resolves against a DF.
     * Used at [[SemanticJoinOp]] construction to discover join keys without
     * compiling the model. The returned [[Column]] is discarded; only the
-    * captured-name side effect matters. */
-  def recording(sideName: String, captured: scala.collection.mutable.Map[String, Boolean]): JoinSide =
+    * captured-name side effect matters.
+    *
+    * Implementation note: we return a `col(name)` (qualified with the
+    * join-side name as a tag prefix) rather than `lit(null)` so that
+    * the resulting `Column`'s `expr.sql` is a real, distinguishable
+    * reference like `__L__id` / `__R__id`. The capture map stores the
+    * tagged form so the decomposition probe (PR #153) can match the
+    * AST leaf back to its side. */
+  def recording(sideName: String, captured: scala.collection.mutable.Map[String, Boolean]): JoinSide = {
+    // Bind the outer's `sideName` so the inner anonymous-class method's
+    // scope doesn't shadow-inherit it from `JoinSide` (Scala 3 will flag
+    // this; Scala 2.13 silently picks the outer, but the compile-time
+    // ambiguity check still warns and the JVM bytecode is fragile).
+    val tagPrefix = sideName
     new JoinSide(sideName, NullDf, Map.empty, captured) {
       override def apply(name: String): Column = {
-        captured.put(name, true)
-        import org.apache.spark.sql.functions.lit
-        lit(null.asInstanceOf[Any])
+        val tagged = s"__${tagPrefix}__$name"
+        captured.put(tagged, true)
+        org.apache.spark.sql.functions.col(tagged)
       }
+    }
+  }
+}
+
+/** Cross-version Spark helper: extract the SQL string from a `Column`.
+  *
+  * Spark 3.x: `column.expr.sql` returns the SQL string directly.
+  * Spark 4.x: `column.expr` is removed; SQL is on `column.node.sql()`.
+  *
+  * We use reflection so the same source compiles against both Spark
+  * versions. The probe in [[extractJoinKeys]] (PR #153) only needs the
+  * SQL form for round-trip fallback; correctness is verified by the
+  * tagged-name decomposition, which works on both versions. */
+/** Module-level helpers for the join-key decomposition probe
+  * ([[SemanticJoinOp.extractJoinKeys]]). Kept at the file's top level
+  * (not inside the case class companion) so the type inference of
+  * nested recursive walkers is unambiguous under Scala 2.13. */
+private[semanticdf] object ProbeHelpers {
+  /** Cross-version walker for the column AST produced by the keyed probe.
+    *
+    * Returns the (leftKeys, rightKeys) pairs recovered from a
+    * (JoinSide, JoinSide) => Column predicate. The walker handles:
+    *   - Spark 3.5.x: EqualTo / And / EqualNullSafe `Expression`s.
+    *   - Spark 4.1.x: UnresolvedFunction("="), UnresolvedFunction("and"),
+    *     UnresolvedAttribute (leaf column refs).
+    *
+    * The probe tags captured column names with `__left__` / `__right__`
+    * prefixes (see [[JoinSide.recording]]) so the walker can match AST
+    * leaves back to their side. Tags are stripped before the result is
+    * returned. */
+  def walkJoinKeyAst(
+      node: Any,
+      leftCapture: scala.collection.mutable.Map[String, Boolean],
+      rightCapture: scala.collection.mutable.Map[String, Boolean],
+  ): scala.collection.mutable.ListBuffer[(String, String)] = {
+    val pairs = scala.collection.mutable.ListBuffer.empty[(String, String)]
+    def isLeaf(n: Any): Boolean =
+      n != null && {
+        val k = n.getClass.getName
+        k.endsWith("UnresolvedAttribute") || k.endsWith("AttributeReference") ||
+        k.endsWith("UnresolvedAlias")
+      }
+    def sqlOf(n: Any): String =
+      if (n == null) ""
+      else
+        try n.getClass.getMethod("sql").invoke(n).asInstanceOf[String]
+        catch { case _: NoSuchMethodException => "" }
+    def fnNameOf(n: Any): String =
+      if (n == null) ""
+      else
+        try n.getClass.getMethod("functionName").invoke(n).asInstanceOf[String]
+        catch { case _: NoSuchMethodException => "" }
+    def childrenOf(n: Any): Seq[Any] =
+      if (n == null) Seq.empty
+      else {
+        try {
+          val m = n.getClass.getMethod("children")
+          // Return type is platform-dependent: Spark 3 Expression.children
+          // returns `Seq[Expression]`, Spark 4 ColumnNode.children
+          // returns `Seq[ColumnNode]` — both serialise to a Scala
+          // `Seq[Any]` for our purposes. Cast via either type route.
+          m.invoke(n) match {
+            case s: Seq[_] => s.asInstanceOf[Seq[Any]]
+            case l: java.util.List[_] =>
+              val out = scala.collection.mutable.ListBuffer.empty[Any]
+              l.forEach(out += _)
+              out.toSeq
+            case _ => Seq.empty
+          }
+        } catch { case _: NoSuchMethodException => Seq.empty }
+      }
+
+    def walker(n: Any): Unit = {
+      if (n == null || isLeaf(n)) return
+      val klass = n.getClass.getName
+      val fname = fnNameOf(n)
+      if (fname == "=" || fname == "<=>" ||
+          klass.endsWith("EqualTo") || klass.endsWith("EqualNullSafe")) {
+        val kids = childrenOf(n).toList
+        if (kids.length == 2) {
+          val lSql = sqlOf(kids(0))
+          val rSql = sqlOf(kids(1))
+          val lHit = leftCapture.find({ case (k, _) => lSql.contains(k) }).map(_._1)
+          val rHit = rightCapture.find({ case (k, _) => rSql.contains(k) }).map(_._1)
+          if (lHit.nonEmpty && rHit.nonEmpty) {
+            pairs += ((lHit.get, rHit.get))
+          }
+        }
+      } else if (fname == "and" || fname == "&&" || klass.endsWith("And")) {
+        childrenOf(n).foreach((c: Any) => walker(c))
+      }
+    }
+
+    walker(node)
+    pairs
+  }
+}
+
+private[semanticdf] object ColumnSql {
+  def of(column: org.apache.spark.sql.Column): String =
+    try {
+      // Spark 3.x: column.expr.sql
+      val expr = column.getClass.getMethod("expr").invoke(column)
+      expr.getClass.getMethod("sql").invoke(expr).asInstanceOf[String]
+    } catch {
+      case _: NoSuchMethodException =>
+        // Spark 4.x: column.node.sql()
+        val node = column.getClass.getMethod("node").invoke(column)
+        node.getClass.getMethod("sql").invoke(node).asInstanceOf[String]
+      case e: Throwable =>
+        throw e
+    }
+
+  /** Cross-version `column.expr`-as-`Expression` accessor. Returns the
+    * underlying Catalyst `Expression` for AST walks. Falls back to `null`
+    * if the runtime version exposes neither `column.expr` nor a `node`
+    * of type `ExpressionColumnNode`. */
+  def expressionOf(column: org.apache.spark.sql.Column): org.apache.spark.sql.catalyst.expressions.Expression =
+    try {
+      // Spark 3.x: column.expr is the Expression directly
+      val expr = column.getClass.getMethod("expr").invoke(column)
+      expr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Expression]
+    } catch {
+      case _: NoSuchMethodException =>
+        // Spark 4.x: column.node -> ColumnNode; for nodes that wrap
+        // an Expression (ExpressionColumnNode), call `.expression()`.
+        // For others (e.g. unresolved), return null and let the caller
+        // fall back to SQL.
+        val node = column.getClass.getMethod("node").invoke(column)
+        try {
+          node.getClass.getMethod("expression").invoke(node)
+            .asInstanceOf[org.apache.spark.sql.catalyst.expressions.Expression]
+        } catch {
+          case _: NoSuchMethodException => null
+        }
     }
 }
 
@@ -150,7 +298,14 @@ private[semanticdf] object JoinSide {
   * (correctness is still enforced at compile time). */
 private[semanticdf] object JoinKeyProbe {
   /** Run an `on` lambda against recording stubs and return the (sorted) capture
-    * keys. Discards the predicate's resulting [[Column]]. */
+    * keys. Discards the predicate's resulting [[Column]].
+    *
+    * The recording stubs ([[JoinSide.recording]]) tag each captured name
+    * with `__left__` / `__right__` so the AST decomposition can
+    * distinguish sides. This helper strips the tags and intersects the
+    * two capture sets to find the equi-join keys — names that appear
+    * on BOTH sides. Names that appear only on one side are dropped
+    * (asymmetric references aren't equi-join keys). */
   def captureKeys(on: (JoinSide, JoinSide) => Column): Seq[String] = {
     val lCaptured = scala.collection.mutable.Map.empty[String, Boolean]
     val rCaptured = scala.collection.mutable.Map.empty[String, Boolean]
@@ -158,11 +313,15 @@ private[semanticdf] object JoinKeyProbe {
     val rProbe = JoinSide.recording("right", rCaptured)
     try on(lProbe, rProbe)
     catch { case _: Throwable => Seq.empty /* leave keys empty on bad predicate */ }
-    val lKeys = lCaptured.keys.toSet
-    val rKeys = rCaptured.keys.toSet
-    val equi = lKeys intersect rKeys
+    val untag = (s: String) =>
+      if      (s.startsWith("__left__"))  s.stripPrefix("__left__")
+      else if (s.startsWith("__right__")) s.stripPrefix("__right__")
+      else s
+    val lKeys = lCaptured.keys.toSet.map(untag)
+    val rKeys = rCaptured.keys.toSet.map(untag)
+    val equi  = lKeys intersect rKeys
     if (equi.nonEmpty) equi.toSeq.sorted
-    else lKeys.toSeq.sorted  // best-effort fallback for asymmetric predicates
+    else Seq.empty  // asymmetric references don't qualify as equi keys
   }
 }
 
@@ -257,7 +416,155 @@ final case class SemanticJoinOp(
     leftSide: Option[SemanticTable] = None,
     /** Right-side counterpart of [[leftSide]]. */
     rightSide: Option[SemanticTable] = None,
+    /** Names of the columns on the LEFT side that participate in the equi-join
+      * predicate. Populated by:
+      *   (a) the typed entry points on `SemanticTable.join_*` when called
+      *       with explicit keys (the new "core-correct" path),
+      *   (b) the lambda-decomposition probe at construction when the
+      *       existing `(JoinSide, JoinSide) => Column` overload is used
+      *       and the lambda has the canonical `l("X") === r("Y")` shape.
+      *
+      * Empty for cross joins (no key), for hand-constructed
+      * `SemanticJoinOp` (legacy callers), and for lambdas whose AST can't
+      * be cleanly decomposed (multi-column-AND with mixed expressions,
+      * non-equi joins, etc.). In those cases [[onExprString]] carries the
+      * round-trip fallback.
+      *
+      * Ordering: parallel to [[rightKeys]] for `length`-paired equality,
+      * or a single element for the common single-key case.
+      *
+      * Foundation PR #153. The wire-shape counterpart is filled in by the
+      * implementation PR #154 (`SemanticManifest.toJoinedJson`).
+      */
+    leftKeys: Seq[String] = Seq.empty,
+    /** Right-side counterpart of [[leftKeys]]. */
+    rightKeys: Seq[String] = Seq.empty,
+    /** SQL-form capture of the join predicate for round-trip fallback.
+      * Populated at construction by the lambda-decomposition probe
+      * ([[extractJoinKeys]]), regardless of whether the AST could be
+      * cleanly factored into [[leftKeys]] / [[rightKeys]]. At round-trip
+      * time, the reader uses this to rebuild the predicate when
+      * `leftKeys` alone isn't enough (multi-column with mixed
+      * expressions, OR predicates, etc.).
+      *
+      * `None` when the user provided explicit keys via the typed
+      * entry point (in which case [[leftKeys]] / [[rightKeys]] are
+      * already the source of truth), or when the predicate is unparsable.
+      *
+      * Stored as the result of `column.expr.sql`, which is round-trippable
+      * via `functions.expr(sql)` — the same mechanism
+      * `Transform.exprString` (PR #149) uses for transforms. */
+    onExprString: Option[String] = None,
 ) extends SemanticOp {
+
+  /** Extract keys + a SQL-form fallback from a `(JoinSide, JoinSide) => Column`
+    * predicate. Best-effort; populates `leftKeys` / `rightKeys` only when
+    * the lambda's AST has the canonical equi-join shape. Always captures
+    * the SQL form via `column.expr.sql` for round-trip fallback.
+    *
+    * The probe wires fresh `JoinSide` recording stubs via
+    * [[JoinSide.recording]] so the user's lambda calls land in two
+    * separate capture maps. After the lambda returns, the maps are
+    * read and walked against the resulting `Column` AST.
+    *
+    * Decomposition rules (limitations — these shape the design):
+    *   - Single equi: `l("X") === r("Y")` (or `<=>`) → 1 pair.
+    *   - Multi equi:  `(l("A") === r("A")) AND (l("B") === r("B"))` → N pairs,
+    *     in left-AST visit order; the right side is paired positionally.
+    *   - Anything else (OR, non-equi, mixed expressions) → empty arrays;
+    *     round-trip falls back to the SQL form.
+    *
+    * Errors during the probe (`on` throws because the lambda references
+    * a non-existent column) are caught and produce empty arrays. The
+    * typed entry point on `SemanticTable` is the recommended path; this
+    * helper exists only as a back-compat bridge for the lambda overload. */
+  private[semanticdf] def extractJoinKeys(): (Seq[String], Seq[String], Option[String]) = {
+    import scala.collection.mutable
+    val leftCapture  = mutable.LinkedHashMap.empty[String, Boolean]
+    val rightCapture = mutable.LinkedHashMap.empty[String, Boolean]
+    val probeL = JoinSide.recording("left",  leftCapture)
+    val probeR = JoinSide.recording("right", rightCapture)
+    val predicateColumn: org.apache.spark.sql.Column =
+      try on(probeL, probeR)
+      catch { case e: Throwable =>
+        return (Seq.empty, Seq.empty, None)
+      }
+    // Always capture SQL form for round-trip fallback. Use the
+    // cross-version helper so this works on Spark 3.5.x and 4.1.x.
+    val sql: Option[String] =
+      try Some(ColumnSql.of(predicateColumn))
+      catch { case e: Throwable => None }
+
+    // Walk the AST and try to recover (leftKeys, rightKeys) pairs in
+    // the canonical equi-join shape. The AST structure differs between
+    // Spark versions:
+    //
+    //   Spark 3.5.x: `column.expr` is the Catalyst `Expression` tree
+    //     (EqualTo, And, EqualNullSafe). Walk that directly.
+    //
+    //   Spark 4.1.x: `column.expr` is removed. The tree is a `ColumnNode`
+    //     (UnresolvedAttribute for leaf column refs, UnresolvedFunction
+    //     for the `=` call). Walk that.
+    //
+    // We use the [[JoinKeyAst]] adapter below for a single recursive
+    // walker that operates on either shape via reflection.
+
+    // First, build children() and sql() bridges for the AST node type.
+    // We probe for these via reflection so the source compiles against
+    // both Spark versions without direct dependencies on the internal
+    // ColumnNode / Expression types.
+    //
+    // The walker operates on `Any` nodes uniformly. It looks for a
+    // `children()` method (Spark 4 ColumnNode and Spark 3 Expression
+    // both expose one), a `functionName()` method (Spark 4
+    // UnresolvedFunction), and a `sql()` method (universal). The leaf
+    // detection uses the class name as a fingerprint.
+
+    val pairs: mutable.ListBuffer[(String, String)] = {
+      // Pick the root: prefer Spark 3's `Expression` (Column.expr), fall
+      // back to Spark 4's `ColumnNode` (Column.node) for any node kind.
+      // Both probes go through reflection so this compiles on both.
+      val root: Any = {
+        val r = try ColumnSql.expressionOf(predicateColumn)
+                catch { case _: Throwable => null }
+        if (r != null) r
+        else {
+          // Cross-version: try column.node (Spark 4), fall back to
+          // column.expr (Spark 3) already taken above.
+          try {
+            val m = predicateColumn.getClass.getMethod("node")
+            m.invoke(predicateColumn)
+          } catch {
+            case _: NoSuchMethodException => null
+          }
+        }
+      }
+      if (root == null) {
+        return (Seq.empty, Seq.empty, sql)
+      }
+
+      // Delegate the cross-version walk to the module-level helper.
+      // The probe tags captured names with `__left__` / `__right__`
+      // prefixes (see [[JoinSide.recording]]); the helper matches them
+      // against the AST and returns a buffer of (leftKey, rightKey)
+      // pairs. Module-level extraction sidesteps a known Scala 2.13
+      // local-def type inference edge case where nested recursive
+      // walkers can lose their `: Unit` annotation under `foreach`.
+      ProbeHelpers.walkJoinKeyAst(root, leftCapture, rightCapture)
+    }
+
+    val recovered = pairs.toSeq
+    // The capture map's keys (and the AST leaf SQL) carry tags
+    // ("__left__" / "__right__") that distinguish sides during the
+    // probe. Strip them before publishing the user-facing key names.
+    val untag = (s: String) =>
+      if (s.startsWith("__left__"))  s.stripPrefix("__left__")
+      else if (s.startsWith("__right__")) s.stripPrefix("__right__")
+      else s
+    val leftKeys  = recovered.map(_._1).map(untag).toSeq
+    val rightKeys = recovered.map(_._2).map(untag).toSeq
+    (leftKeys, rightKeys, sql)
+  }
 
   /** The merged model combining dimensions and measures from both sides,
     * plus any dimensions/measures added via `withDimensions`/`withMeasures`.
