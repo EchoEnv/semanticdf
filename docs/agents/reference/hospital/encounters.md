@@ -4,7 +4,7 @@ title: Encounters
 description: "Patient hospital encounters (admissions)"
 status: published
 resource: file://examples/hospital/models/encounters.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

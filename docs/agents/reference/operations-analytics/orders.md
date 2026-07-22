@@ -4,7 +4,7 @@ title: Orders
 description: Per-order data with fulfillment timestamps and amount
 status: published
 resource: file://examples/operations-analytics/models/orders.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

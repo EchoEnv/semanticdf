@@ -4,7 +4,7 @@ title: Promotions
 description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
 status: published
 resource: file://examples/telco-analytics/models/promotions.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 

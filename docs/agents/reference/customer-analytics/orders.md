@@ -4,7 +4,7 @@ title: Orders
 description: Per-order line items with amount and order date
 status: published
 resource: file://examples/customer-analytics/models/orders.yml
-timestamp: 2026-07-21T18:59:26Z
+timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
 
