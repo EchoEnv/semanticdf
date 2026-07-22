@@ -346,6 +346,18 @@ final case class Transform(
     name: String,
     expr: SemanticScope => Column,
     description: Option[String] = None,
+    /** The original source expression as a string (e.g. `datediff(shipped_at, order_date)`).
+      * Populated by `YamlLoader` when the transform comes from YAML, and by
+      * `SemanticManifest.readManifest` when it comes from a manifest. Defaults
+      * to `None` for transforms built in Scala code via the constructor — at
+      * which point the `SemanticManifest.toJson` writer records the
+      * `<lambda>` sentinel (mirroring `Dimension` / `Measure`).
+      *
+      * Why this exists: the manifest artifact is a portable wire-shape. A
+      * lambda `t => datediff(t("shipped_at"), t("order_date"))` cannot be
+      * serialized; only the source string can. The `exprString` field is the
+      * carrier. */
+    exprString: Option[String] = None,
 )
 
 /** Convenience helpers for attaching description and metadata to a [[Measure]]

@@ -281,6 +281,7 @@ object SemanticManifest {
     digObj.put("calcMeasures",          measures.count(m => model.measureKind(m.name) == MeasureKind.Calc))
     digObj.put("joins",                 0)  // single-table only (§10)
     digObj.put("filters",               model.filters.size)
+    digObj.put("transforms",             transformCount(model))
     digObj.put("isStreaming",           findStreamOp(model.root).isDefined)
     digObj.put("usesTAll",              StreamingSupport.StreamingValidator.findTotalUsers(model.measures.toSeq).nonEmpty)
 
@@ -327,6 +328,21 @@ object SemanticManifest {
       obj.put("appliedAt", "pre_aggregate")
     }
 
+    // transforms[] — applied in declaration order; column outputs feed
+    // subsequent transforms / dimensions / measures. Each transform's
+    // `expr` is the source-string form (or `<lambda>` sentinel if it was
+    // built in Scala code without an `exprString`).
+    val transforms = collectTransforms(model)
+    if (transforms.nonEmpty) {
+      val transArr = root.putArray("transforms")
+      transforms.foreach { t =>
+        val obj = transArr.addObject()
+        obj.put("name", t.name)
+        obj.put("expr", t.exprString.getOrElse(LambdaSentinel))
+        putOptString(obj, "description", t.description)
+      }
+    }
+
     root
   }
 
@@ -358,6 +374,7 @@ object SemanticManifest {
     val dims     = readArr(obj, "dimensions").flatMap(readDimension).toMap
     val measures = readArr(obj, "measures").flatMap(readMeasure).toMap
     val filters  = readArr(obj, "filters").flatMap(readFilter)
+    val transforms = readArr(obj, "transforms").flatMap(readTransform)
 
     val base: SemanticOp = if (isStreaming) {
       SemanticStreamingTableOp(
@@ -382,9 +399,17 @@ object SemanticManifest {
     val withFiltersRoot = filters.foldRight(base) { (f, op) =>
       SemanticRowFilterOp(op, f.name, None, f.expr, Map.empty)
     }
+    // If the manifest carries transforms, wrap the root in a
+    // SemanticTransformsOp so they re-apply when the consumer calls
+    // `.execute()`. Mirrors how YamlLoader + withTransforms() build the
+    // in-memory tree.
+    val transformedRoot = if (transforms.nonEmpty)
+      SemanticTransformsOp(withFiltersRoot, transforms)
+    else
+      withFiltersRoot
 
     new SemanticTable(
-      root        = withFiltersRoot,
+      root        = transformedRoot,
       version     = version,
       sourceTable = sourceTable,
     )
@@ -493,6 +518,59 @@ object SemanticManifest {
       e <- optStringField(node, "expr")
     } yield SemanticFilter(n, None, e, Map.empty)
   }
+
+  /** Parse one transform node. Same pattern as `readMeasure`: the `expr`
+    * string is the source expression (e.g. `datediff(shipped_at,
+    * order_date)`) and `description` carries metadata. The lambda
+    * `_ => expr(exprString)` faithfully re-creates the YAML's behavior
+    * via `org.apache.spark.sql.functions.expr(...)`, so transforms
+    * round-trip through the wire artifact losslessly as long as the
+    * `expr` is a plain SQL expression.
+    *
+    * Sentinel handling: a `<lambda>` expr (meaning the original was built
+    * in Scala without an `exprString`) produces a placeholder column
+    * lookup via `org.apache.spark.sql.functions.col(name)`. This keeps
+    * the round-trip non-throwing for hand-built transforms — a consumer
+    * who needs the original lambda behavior must re-load from the
+    * original Scala source. */
+  private def readTransform(node: com.fasterxml.jackson.databind.JsonNode): Option[Transform] = {
+    val n = optStringField(node, "name")
+    val e = optStringField(node, "expr")
+    val d = optStringField(node, "description")
+    if (n.isEmpty || e.isEmpty) return None
+    val name        = n.get
+    val exprString  = e.get
+    val description = d
+    val exprFn: SemanticScope => org.apache.spark.sql.Column =
+      if (exprString == LambdaSentinel)
+        scope => org.apache.spark.sql.functions.col(name)
+      else
+        scope => org.apache.spark.sql.functions.expr(exprString)
+    Some(Transform(name, exprFn, description, exprString = Some(exprString)))
+  }
+
+  /** Walk the op-tree and collect all transforms, in declaration order. */
+  private def collectTransforms(model: SemanticTable): Seq[Transform] = {
+    val buf = scala.collection.mutable.ListBuffer.empty[Transform]
+    def walk(op: SemanticOp): Unit = op match {
+      case tr: SemanticTransformsOp   => tr.transforms.foreach(t => buf += t); walk(tr.source)
+      case a: SemanticAggregateOp      => walk(a.source)
+      case f: SemanticFilterOp         => walk(f.source)
+      case rf: SemanticRowFilterOp     => walk(rf.source)
+      case o: SemanticOrderByOp        => walk(o.source)
+      case l: SemanticLimitOp          => walk(l.source)
+      case h: SemanticHintOp           => walk(h.source)
+      case j: SemanticJoinOp           => walk(j.left); walk(j.right)
+      case _                          => ()
+    }
+    walk(model.root)
+    buf.result()
+  }
+
+  /** Count transforms in the model. Mirrors `transformCount` references in
+    * the digest block. */
+  private def transformCount(model: SemanticTable): Int =
+    collectTransforms(model).size
 
   // ---------------------------------------------------------------------------
   // Recognition helpers
