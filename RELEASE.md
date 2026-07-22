@@ -1,5 +1,133 @@
 # Release notes
 
+## v0.1.11 — manifest keys, joined-manifest wire shape, recipe denoise
+
+A **joined-manifest + manifest-keys + denoise** release. The library closes both BLOCKed recipes from the v0.1.11 review cycle (`manifest-transforms` and `joined-models-manifest`): `SemanticManifest` now round-trips joined models with embedded per-side single-table manifests, the join key is recovered from the wire shape (typed `join_on` entry / multi-key AND / SQL-form `onExprString` fallback), and `Model.status` carries five new identity fields (`id`, `manifestVersion`, `$schema`, `namespace`, `metadata`) through every surface. The `Transform.exprString` field round-trips through the manifest. Two new typed entry points (`join_on`, `join_many_on`) carry the join key as the source of truth at construction; the legacy lambda overload is preserved for back-compat via a probe that decomposes the AST. Cross-version: the AST probe walks `Column.expr` on Spark 3.5.x and `ColumnNode` on Spark 4.1.x via reflection.
+
+Library, MCP server, and CLI consumer are at
+
+```
+io.semanticdf:semanticdf_2.13:0.1.11
+io.semanticdf:semanticdf-mcp_2.13:0.1.11
+com.example:semanticdf-cli_2.13:0.1.11
+```
+
+Test count: 513 library + 90 MCP + 18 CLI (621 total), green on Spark 3.5.8 and 4.1.1.
+
+### Library — features
+
+- **Manifest identity + governance fields** — `SemanticManifest.Identity`
+  case class + `toJson(model, identity, prettyPrint)` overload. Five new
+  optional top-level fields on the single-table wire shape: `id` (reverse-DNS
+  FQN, **required at write time** via `--id` flag), `manifestVersion`
+  (semver, defaults to `0.1.0`), `$schema` (URL pointing at the
+  `schemas/manifest.schema.json` reference), `namespace` (defaults to
+  `default`), `metadata` (free-form `Map[String, String]`). `parseMeta` version
+  gate relaxed to a `v0.1.*` prefix match so old manifests continue to parse
+  after the schemaVersion string bumps.
+- **`tools.Main manifest` gains `--id` (required), `--namespace`,
+  `--metadata-K V`** — the CLI now writes the manifest with the new identity
+  fields populated. **The `joined-manifest` envelope is no longer BLOCKed**:
+  `toJoinedJson` (new) emits `kind: "semanticdf-joined-manifest"` with two
+  embedded per-side single-table manifests, a `join` block (cardinality +
+  keys), per-side dimension/measure counts, and a SQL-form `onExprString`
+  fallback for non-equi predicates. `fromJoinedJson` (new) reconstructs a
+  `SemanticTable` rooted at `SemanticJoinOp` with a **functional** `on`
+  lambda built from the wire keys (single-column: `l(k)=r(k)`; multi-column:
+  `AND over pairs`). `parseJoinedMeta` extracts the joined header without
+  loading Spark.
+- **Manifest `Transform[]` round-trip** — `Transform.exprString: Option[String]`
+  field carries the source SQL through the wire shape. `SemanticManifest`
+  emits a `transforms[]` block; `fromJson` reconstructs a
+  `SemanticTransformsOp`. The `<lambda>` sentinel path still throws a loud
+  runtime error on first query.
+- **Manifest `CalcMeasure` round-trip** — `readMeasure` dispatches on the
+  manifest's `kind` field: base measures use `F.expr` directly; calc measures
+  use `CalcExpr` to walk the calc DSL and substitute `scope(name)` for each
+  measure reference, so the post-aggregation `MeasureScope` resolves
+  sibling-measure columns correctly.
+- **Typed `join_on(other, keys)` entry** — the "core-correct and
+  best-practice" way to build a join. The key names are the source of
+  truth at construction; the `on` lambda is synthesised internally. Two
+  overloads: `join_on(other, (String, String))` for single-key and
+  `join_on(other, Seq[String], Seq[String])` for multi-key (positional
+  pairing). The corresponding `join_many_on(...)` is the fan-out variant.
+- **Legacy `(JoinSide, JoinSide) => Column` lambda still works** — a
+  construction-time probe decomposes the AST to recover keys. Capture maps
+  tag column names with side prefixes so the walker can distinguish sides
+  even after bytecode resolution. The `onExprString` field carries the SQL
+  form for predicates the probe can't factor (OR, non-equi, mixed).
+- **Cross-version Spark compatibility** — Spark 4.1.x removed `Column.expr`
+  in favor of `ColumnNode` (UnresolvedAttribute / UnresolvedFunction). A
+  small `ColumnSql` reflection helper abstracts both, and the AST walker
+  recognises both `Expression` (Spark 3) and `ColumnNode` (Spark 4) node
+  types via `children()` + `sql()` + `functionName()` — same source compiles
+  on both. The `JoinKeyProbe` capture-tag trick (`__left__id` /
+  `__right__id`) survives the version jump.
+- **Tolerant backward compat** — the version-gate in `parseMeta` is
+  relaxed to a `v0.1.*` prefix match so v0.1.9 and v0.1.10 manifests still
+  parse unchanged. The kind discriminator now accepts both
+  `semanticdf-model-manifest` and `semanticdf-joined-manifest`. A new
+  `CLI` subcommand `validate-joined-manifest` reads joined manifests
+  without loading Spark.
+
+### MCP server
+
+No functional change; the joined-manifest wire shape is library-only.
+
+### CLI
+
+- **`manifest` subcommand** — new flags: `--id` (required, reverse-DNS
+  FQN), `--namespace` (default `default`), `--metadata-K V` (repeated
+  inline, no separate config file). The `validate-joined-manifest`
+  subcommand prints the joined header (kind, cardinality, per-side counts,
+  identity, BLOCK warning).
+- **No break** for existing manifest subcommand flags.
+
+### Docs
+
+- **Recipe docs denoised** — `docs/design/joined-models-manifest.md` is
+  now `SHIPPED cleanly`; `manifest-transforms.md` and
+  `manifest-identity-bump.md` removed their "implementation landed in PR
+  #NNN" suffixes; `REVIEW-FEEDBACK.md` got a Resolution Status section
+  tying BLOCKs to ship-PRs.
+- **`docs/manifests-and-joins.md`** — full educational walkthrough of the
+  joined-manifest wire shape with the new `toJoinedJson` /
+  `fromJoinedJson` API path. The §5 "real path" section uses the canonical
+  library primitives; §5.5 (renamed from §5) covers the legacy
+  hand-rolled alternative for pre-0.1.11 consumers.
+
+### Examples
+
+- **`manifest-load/`** — refreshed to demonstrate the new
+  `SemanticManifest.fromJson` reading a v0.1.11-format manifest end-to-end.
+- **`manifest-transforms-load/`** — new worked example showing the
+  `transforms[]` round-trip and the `<lambda>` sentinel path.
+- **`joined-manifest/`** — new worked example showing the canonical
+  `toJoinedJson` / `fromJoinedJson` path. Uses starter's flights +
+  carriers models, runs a programmatic join via `join_on`, emits the
+  joined manifest, parses the header via `parseJoinedMeta`, and
+  round-trips via `fromJoinedJson`.
+- **`joined-manifest-split/`** — historical / reference example (the
+  legacy hand-rolled envelope path). Remains valid documentation for
+  consumers pinned to pre-0.1.11 versions; the README banner now
+  redirects to the canonical `joined-manifest/` example.
+- All 14 example pom.xml files bumped to 0.1.11. `joined-manifest` and
+  `joined-manifest-split` both compile and run end-to-end against
+  v0.1.11-SNAPSHOT (verified: `mvn scala:run` → "demo complete" on
+  both).
+
+### Anti-scope (preserved as honest caveats)
+
+- Alias-prefixed dim names from the joined runtime (e.g. `carriers.name`
+  in the YAML's `joins:` aliasing) don't flow through the joined wire
+  shape. The merged-model state has the un-prefixed names; consumers
+  needing the full alias surface re-load from YAML or call
+  `joined.explainSemantic` for the runtime-resolved names.
+- `leftPrefix` / `rightPrefix` on the `join` block (recipe §3) are not
+  implemented. `SemanticJoinOp` doesn't carry them today; the recipe
+  acknowledges this as a future revision item.
+
 ## v0.1.10 — manifest artifact, lifecycle, denoise
 
 A **manifest + lifecycle + docs** release. The library gains a portable JSON-manifest format for shipping a model's static definition independently of YAML, a first-class `Model.status` lifecycle field (Draft / Published / Deprecated), MCP and CLI surfaces that surface lifecycle warnings on every successful envelope, and a denoised docs surface that reflects the current state of every shipped feature. Lifecycle enforcement (warnings vs refusal) is consumer-side, by design.
