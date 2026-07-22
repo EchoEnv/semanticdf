@@ -1,6 +1,6 @@
 # Reviewer Feedback: Three Recipes (2026-07-22)
 
-Senior-engineer subagent reviews of the three recipes landed in PR #141
+Senior-engineer subagent reviews of three recipes landed in the v0.1.11 review cycle
 returned 🔴 **BLOCK** on all three. The recipes need significant rework,
 not just nits. This file documents the feedback so the recipes can be
 re-designed or de-prioritised.

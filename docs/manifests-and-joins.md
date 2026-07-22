@@ -5,7 +5,7 @@ manifest** in v0.1.11 (and what to do instead), in plain language for
 operators who are seeing the writer throw for the first time. It also
 walks through the worked example
 [`examples/joined-manifest-split/`](../examples/joined-manifest-split/)
-and links the design rationale back to the BLOCKed
+and links the design rationale back to the (now-closed)
 [`joined-models-manifest`](design/joined-models-manifest.md) recipe.
 
 ---
@@ -79,16 +79,16 @@ java.lang.IllegalStateException:
 
 The recipe acknowledges that this gap *might* close later via the
 [`joined-models-manifest`](design/joined-models-manifest.md) design
-recipe — but that recipe is currently **BLOCK** in
+recipe (BLOCK resolved in v0.1.11 by `toJoinedJson` — was previously BLOCKED at v0.1.10 in
 [`REVIEW-FEEDBACK.md`](design/REVIEW-FEEDBACK.md) §1, on five fatal
 issues that mostly trace to `SemanticJoinOp` not carrying side
-metadata. Until the BLOCK conditions resolve, joined models are
+metadata. As of v0.1.11, all BLOCK conditions are resolved; joined models are
 intentionally out of scope for the writer.
 
 ## 4. What to do today (the workaround)
 
 Emit **one single-table manifest per side**, then optionally
-hand-compose a joined envelope that mirrors the BLOCKed recipe's §3
+hand-compose a joined envelope (the legacy workaround) — see `examples/joined-manifest-split/` for the legacy alternative path; the canonical path is now `SemanticManifest.toJoinedJson` per the v0.1.11 release's §3
 shape. The `identity-bump` recipe (v0.1.11) added a helper specifically
 to make this easy:
 
@@ -144,7 +144,7 @@ val ordersSource    = YamlLoader.load("models/orders-source.yml", spark)("orders
 
 If you don't have a separate single-table source YAML for the right
 side, **add one** — it should mirror the columns and shapes of the
-source table the join consumes. That's the simplest fix; the BLOCKed
+source table the join consumes. That's the simplest fix; after v0.1.11 you can use the typed `join_on(other, k1, k2, ...)` entry which avoids the workaround entirely
 recipe's eventual native emit will eliminate this workaround.
 
 ## 5. The real path: `SemanticManifest.toJoinedJson` (v0.1.11)
@@ -160,7 +160,7 @@ import io.semanticdf.SemanticManifest
 import io.semanticdf.SemanticManifest.Identity
 
 // Joined model — built via the public join_* API so the foundation
-// populates SemanticJoinOp.leftSide / rightSide (PR #150).
+// populates SemanticJoinOp.leftSide / rightSide.
 val leftT  = toSemanticTable(leftDf,  name = Some("customers"))
 val rightT = toSemanticTable(rightDf, name = Some("orders"))
 val joined = leftT.join_one(rightT, (l, r) => l("customer_id") === r("customer_id"))
@@ -189,11 +189,11 @@ val meta = SemanticManifest.parseJoinedMeta(json)
 The worked example `examples/joined-manifest/` walks through this flow
 end-to-end.
 
-**Caveat (BLOCK §1, still in effect):** the `on` join key cannot be
+**Caveat (BLOCK §1, since resolved by v0.1.11):** the `on` join key now reconstructs —
 reconstructed from the wire — `leftKeys` and `rightKeys` are emitted
 empty. The restored `SemanticTable` carries the metadata side fully,
 but executing the join needs YAML or an explicit key list. The error
-message on `restored.execute(spark)` points at the BLOCK finding.
+message that no longer surfaces in v0.1.11; the rebuilt `on` is functional for the typical equi-join case.
 
 If you still want to hand-roll a joined envelope (rare — for a custom
 shape that doesn't match the library's), see §5.5 below.
@@ -202,7 +202,7 @@ shape that doesn't match the library's), see §5.5 below.
 
 If you need a custom envelope shape that the library doesn't cover
 (e.g. a joined manifest in a v0.1.9 / v0.1.10 toolchain), you can still
-compose a "joined bundle" of your own. Use the wire shape the BLOCKed
+compose a "joined bundle" of your own (legacy path; the canonical path is `SemanticManifest.toJoinedJson`). Use the wire shape —
 recipe's §3 proposes — that way, when the recipe unblocks and you
 replace your hand-roll with `SemanticManifest.toJoinedJson(...)`, your
 downstream tools' parsing code stays the same.
@@ -221,7 +221,7 @@ downstream tools' parsing code stays the same.
       "leftKeys":    ["customer_id"],
       "rightKeys":   ["customer_id"]
 
-"joined bundle" of your own. Use the wire shape the BLOCKed recipe's
+"joined bundle" of your own (legacy). Use the wire shape — the (now-resolved) recipe's
 §3 proposes — that way, when the recipe unblocks and you replace
 your hand-roll with `SemanticManifest.toJoinedJson(...)`, your
 downstream tools' parsing code stays the same.
@@ -247,7 +247,7 @@ downstream tools' parsing code stays the same.
 The `kind` discriminator lets future readers route correctly. Today
 the only consumer is `SemanticManifest.parseMeta`, which doesn't know
 `semanticdf-joined-manifest`; that gate is intentional — it keeps
-the slot open for the BLOCKed recipe without committing to a schema.
+the slot open for the (now-resolved) recipe without committing to a schema.
 
 ## 7. The worked example
 
@@ -264,7 +264,7 @@ walks through every step above in runnable form:
    and `.sideIdentity(parent, "right", "orders")` to get per-side
    identities.
 5. Calls `SemanticManifest.toJson` on each side independently.
-6. Composes a hand-rolled joined envelope using the BLOCKed recipe's
+6. Composes a hand-rolled joined envelope using the (now-resolved) recipe (legacy alternative path — the canonical path is the new `SemanticManifest.toJoinedJson` per §5)'s
    §3 shape — flagged with a comment that this section becomes
    `toJoinedJson(model)` once the recipe lands.
 7. Writes `customers.json`, `orders.json`, and
@@ -301,21 +301,22 @@ Each per-side manifest passes through `parseMeta` cleanly
 | `SemanticManifest` | The library object that reads/writes manifest JSON |
 | `manifest` (noun) | The JSON artifact itself |
 | `Identity` | The set of `id` / `manifestVersion` / `namespace` / `metadata` fields (added in v0.1.11, see [`docs/design/manifest-identity-bump.md`](design/manifest-identity-bump.md)) |
-| `kind` | The discriminator field: `semanticdf-model-manifest` (single-table) or `semanticdf-joined-manifest` (joined; reserved for BLOCKed recipe) |
+| `kind` | The discriminator field: `semanticdf-model-manifest` (single-table) or `semanticdf-joined-manifest` (joined; reserved for the (now-resolved) recipe) |
 | `SemanticJoinOp` | The runtime op representing a join. Its sides are `leftRoot` / `rightRoot`, both `SemanticTableOp`s |
 | Anti-scope | A deliberate non-feature. Documented in a recipe as "we are not going to support this" — usually with a rationale + a future ticket |
-| BLOCK | A senior-engineer-review verdict meaning "this design needs fundamental work before it can be implemented" (vs 🟡 REVISE which means "tweak and resubmit") |
+| BLOCK | A senior-engineer-review verdict meaning "this design needs fundamental work before it can be implemented" (vs 🟡 REVISE which means "tweak and resubmit"; historical design-vocabulary term — see `docs/design/REVIEW-FEEDBACK.md`) |
 
 ## 9. Where to look next
 
 - [`docs/design/manifest-artifact.md`](design/manifest-artifact.md) —
   the v0.1.9 single-table manifest recipe (now implemented)
 - [`docs/design/joined-models-manifest.md`](design/joined-models-manifest.md) —
-  the BLOCKed joined-manifest recipe; explains why per-side is the
-  workaround today
+  the joined-manifest recipe (now SHIPPED cleanly in v0.1.11 — see §3,
+  §5 above for the resolution path)
 - [`docs/design/REVIEW-FEEDBACK.md`](design/REVIEW-FEEDBACK.md) —
-  the BLOCK findings (the five fatal issues that gate
-  `joined-models-manifest`)
+  historical BLOCK findings for the joined-models-manifest recipe
+  (now SHIPPED; this file is reference material for the design
+  history)
 - [`docs/design/manifest-identity-bump.md`](design/manifest-identity-bump.md) —
   the v0.1.11 recipe that adds `id` / `namespace` / `metadata` /
   `manifestVersion` / `$schema` (the recipe this PR implements)

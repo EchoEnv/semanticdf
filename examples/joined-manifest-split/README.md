@@ -1,11 +1,17 @@
 # joined-manifest-split
 
+> ⚠️ **Historical example (pre-v0.1.11).** As of v0.1.11, the BLOCK on
+> `SemanticJoinOp.on` reconstruction was resolved by `SemanticManifest.toJoinedJson`
+> (see `examples/joined-manifest/`). This example remains valid documentation for the
+> per-side emit pattern and for consumers pinned to pre-0.1.11 versions.
+
+
 A runnable worked example showing **how to emit per-side single-table
 manifests from a joined YAML model** in semanticdf v0.1.11.
 
 ## What this is
 
-In v0.1.11 the `SemanticManifest.toJson` writer deliberately rejects
+Pre-v0.1.11 (and still useful as a reference), the `SemanticManifest.toJson` writer rejects
 joined-rooted models (anti-scope per
 [`docs/design/manifest-artifact.md`](../../docs/design/manifest-artifact.md)
 §10). The
@@ -25,7 +31,7 @@ This example walks through that pattern, end-to-end:
 4. Validates each per-side manifest with `SemanticManifest.parseMeta`.
 5. Hand-composes a `kind: "semanticdf-joined-manifest"` envelope
    matching the BLOCKed recipe's proposed wire shape — flagged
-   clearly as a workaround.
+   clearly as a hand-rolled legacy alternative.
 
 The conceptual walkthrough lives in
 [`docs/manifests-and-joins.md`](../../docs/manifests-and-joins.md).

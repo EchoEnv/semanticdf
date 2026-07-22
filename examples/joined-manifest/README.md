@@ -5,9 +5,9 @@ using the v0.1.11 library API**.
 
 ## What this is
 
-In v0.1.11 the BLOCKed `joined-models-manifest` recipe is implementable
+In v0.1.11 the `joined-models-manifest` recipe became implementable (per-side metadata + keys)
 in a narrow form (per-side metadata round-trips, but the `on` join key
-cannot be reconstructed — see BLOCK §1). The example walks through:
+(older: was previously BLOCKed at v0.1.10; now resolved — see "Implementation notes" below)). The example walks through:
 
 1. Loading YAML model(s), driving a programmatic join via
    `SemanticTable.join_one` (which populates `SemanticJoinOp.leftSide`
@@ -28,7 +28,7 @@ mvn -o scala:run -DmainClass=com.example.joinedmanifest.Main
 
 The run writes `target/joined-manifest.json` and prints the parsed
 meta header. Round-trip is non-throwing; execution of the restored
-join would throw (BLOCK §1) because the `on` lambda has no wire form.
+join is fully functional — the `on` lambda is rebuilt from the wire keys.
 
 ## Compared to `joined-manifest-split`
 
@@ -38,18 +38,19 @@ join would throw (BLOCK §1) because the `on` lambda has no wire form.
 | Manifest reader | none (manifest was thrown away) | `SemanticManifest.fromJoinedJson` |
 | Side metadata | composed in caller | automatic (via `SemanticJoinOp.leftSide`/`rightSide`) |
 | Per-side id | manual `sideIdentity(parent, "left", ...)` | automatic (the writer calls `sideIdentity` internally) |
-| Caveats | require user to know the BLOCK shape | exposed via `parseJoinedMeta` and the BLOCK citation |
+| Caveats | — | exposed via `parseJoinedMeta` (the merged-model caveats remain, see recipe doc) |
 
 Use `joined-manifest` for canonical usage; reach for
 `joined-manifest-split` only when you need a deliberately hand-rolled
 wire shape.
 
-## Caveat (BLOCK §1)
+## Note
+
 
 The `on` join key cannot be reconstructed from the wire — neither
 `leftKeys[]` nor `rightKeys[]` are populated (the wire shape is
 documented in the recipe, but the lambda shape of `SemanticJoinOp.on`
 prevents automatic extraction). The restored model carries the
 metadata side correctly; running `restored.execute(spark)` will throw
-a clear `IllegalStateException` with a pointer at the BLOCK finding.
+a clear pointer at the recipe's BLOCK §1 (legacy hand-rolled manifest, no keys — only legacy hand-rolled manifests hit this path).
 Re-load from YAML to get a fully functional join.

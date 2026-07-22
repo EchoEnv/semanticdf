@@ -1,12 +1,12 @@
 # Design Recipe: Lifecycle Enforcement on `Deprecated` / `Draft` Models
 
-**Status:** SHIPPED (recipe was ACCEPTED; implementation landed in PR #136 for v0.1.10, with CLI surfacing in PR #137)
+**Status:** SHIPPED (recipe was ACCEPTED)
 **Library version that emits this shape:** `0.1.10`
 **Scope:** Single, additive feature (3 MCP handler edits + 1 schema field + 3 spec edits + 1 doc edit). No library API changes. No new error codes.
 
 ## 1. What this is (and what it isn't)
 
-`SemanticTable.status` (PR #133) carries lifecycle state — `Draft` / `Published` / `Deprecated` — and surfaces in `describe_model.data.status` and the manifest artifact. The library terminals (`toDataFrame`, `toStreamingQuery`, `execute`) stay permissive: the lifecycle marker is informational at the library level; **consumers enforce policy**.
+`SemanticTable.status` carries lifecycle state — `Draft` / `Published` / `Deprecated` — and surfaces in `describe_model.data.status` and the manifest artifact. The library terminals (`toDataFrame`, `toStreamingQuery`, `execute`) stay permissive: the lifecycle marker is informational at the library level; **consumers enforce policy**.
 
 This recipe adds the **MCP-server-side enforcement** layer: when a model is `Deprecated` or `Draft`, the relevant MCP tool responses carry a warning in the existing `Envelope.warnings: List[String]` field. No new error code. No refusing queries. Agents see the warning and choose how to act.
 
@@ -135,10 +135,10 @@ The mcp-contract.md update includes both prose AND a refreshed `list_models` exa
 
 This recipe does NOT change:
 
-- `SemanticTable.status` semantics (PR #133)
-- `SemanticManifest` schema (PR #132)
-- `YamlLoader.parseStatus` (PR #133)
-- `OkfGen` frontmatter (PR #134)
+- `SemanticTable.status` semantics 
+- `SemanticManifest` schema
+- `YamlLoader.parseStatus` 
+- `OkfGen` frontmatter (v0.1.10+)
 - Library terminals (`toDataFrame` / `toStreamingQuery` / `execute`)
 - MCP error-code closed list (no new codes)
 - `tools.Main` CLI behavior
@@ -151,7 +151,7 @@ This recipe does NOT change:
 | Existing clients that don't read `ModelSummary.status` | Unaffected — wire-additive only |
 | Library users with their own MCP adapters | They'll need to adopt the same pattern; documented in the PR |
 | Existing OKF reference bundles | Regenerate via `make okfgen`; `okf_mapping.md` frontmatter unchanged |
-| Pre-status models (built before PR #133) | Default to `Published`; no warning emitted |
+| Pre-status models (built before v0.1.10+) | Default to `Published`; no warning emitted |
 
 ## 11. Resolved questions (from senior-engineer review)
 

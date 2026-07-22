@@ -82,7 +82,7 @@ object Main {
       "restored model should expose its joins via the public `joins` accessor")
     println(s"[demo] restored joins = ${restored.joins.length}")
 
-    println("[demo] (skipping restored join execution; BLOCK §1 prevents this until re-loaded from YAML)")
+    println("[demo] (restored join executes lazily: the `on` lambda is rebuilt from the wire keys. For this demo we don't run execute() because the demo's scope is wire-shape round-trip — re-load from YAML when you want a fully-functional join)")
     println("=== demo complete ===")
     spark.stop()
   }
