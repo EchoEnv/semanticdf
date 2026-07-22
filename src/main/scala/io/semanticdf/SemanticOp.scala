@@ -238,6 +238,25 @@ final case class SemanticJoinOp(
     rightRoot: SemanticTableOp,
     extraDimensions: Map[String, Dimension] = Map.empty,
     extraMeasures: Map[String, Measure] = Map.empty,
+    /** The originating SemanticTable for the left side of this join, if any.
+      * Carries side metadata (version, description, sourceTable, status) that
+      * the `leftRoot: SemanticTableOp` doesn't retain. Populated by the
+      * `join_*` family on `SemanticTable` and preserved through
+      * `withDimensions` / `withMeasures` updates.
+      *
+      * Default `None` for back-compat: hand-constructed `SemanticJoinOp`s
+      * (e.g. inside the test suite, future user code) keep working unchanged.
+      * The `SemanticManifest.toJson` joined-manifest reader (PR #151) falls
+      * back to deriving metadata from `leftRoot` when this is `None`.
+      *
+      * Foundation for the BLOCKed `joined-models-manifest` recipe
+      * (`docs/design/joined-models-manifest.md`). The recipe's wire shape
+      * §3 inlines the per-side semantic manifest; emitting it requires
+      * the originating `SemanticTable` (not just the op-level `leftRoot`).
+      */
+    leftSide: Option[SemanticTable] = None,
+    /** Right-side counterpart of [[leftSide]]. */
+    rightSide: Option[SemanticTable] = None,
 ) extends SemanticOp {
 
   /** The merged model combining dimensions and measures from both sides,
