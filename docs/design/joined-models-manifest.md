@@ -1,6 +1,6 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** DRAFT
+**Status:** DRAFT (BLOCK from senior-engineer review 2026-07-22; fundamental design issues — see `docs/design/REVIEW-FEEDBACK.md` for details)
 **Library version that would emit this shape:** `0.1.11-joined-manifest`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
 

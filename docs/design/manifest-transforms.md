@@ -1,6 +1,6 @@
 # Design Recipe: `transforms:` Block in `SemanticManifest`
 
-**Status:** DRAFT
+**Status:** DRAFT (BLOCK from senior-engineer review 2026-07-22; Transform model lacks `exprString` field — see `docs/design/REVIEW-FEEDBACK.md` for details)
 **Library version that would emit this shape:** `0.1.11-transforms`
 **Scope:** Single, additive feature. Extends the manifest schema with a `transforms: [...]` field paralleling `dimensions` and `measures`. Replays transforms on `fromJson`. No breaking wire changes.
 
