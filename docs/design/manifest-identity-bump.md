@@ -1,8 +1,8 @@
 # Design Recipe: Manifest Identity + Governance Bump
 
-**Status:** DRAFT
+**Status:** ACCEPTED (🟢 on third review pass 2026-07-22; nits 1–11 resolved. Implementation-ready.)
 **Library version that would emit this shape:** `v0.1.11-manifest`
-**Scope:** Single, additive feature. Extends the existing single-table manifest schema with 5 new optional fields (id, namespace, metadata, $schema, manifestVersion). **No change** to dimensions, measures, filters, or digest content. **No breaking change** to existing manifests. The joined-manifest recipe (separate, BLOCKED) will use the new `id` field for cross-referencing.
+**Scope:** Single, additive feature. Extends the existing single-table manifest schema with 5 new optional fields (id, namespace, metadata, $schema, manifestVersion). **No change** to dimensions, measures, filters, or digest content. **No breaking change** to existing manifests (the version-gate in `parseMeta` is relaxed to a prefix match — see §10 nit 1 fix). The joined-manifest recipe (separate, BLOCKED) will use the new `id` field as one of several foundations for cross-referencing — it doesn't unblock the BLOCK by itself, but it removes one obstacle.
 
 ## 1. What this is (and what it isn't)
 
@@ -89,7 +89,7 @@ The joined-manifest shape (separate recipe) uses the same top-level fields plus 
 | `namespace` format | **Free-form string** (e.g. `default`, `dev`, `prod`, `team-X`) | Single field, simple, multi-purpose. Consumer code filters by namespace as needed. |
 | `tools.Main manifest` regenerates the new fields | **YES** — `toJson` adds the new top-level fields from the `SemanticTable` and emission context | The writer is the source of truth for `id` and `metadata`. The reader parses them all. |
 | Backwards compat for old readers | **YES** — old `tools.Main validate-manifest` ignores unknown fields (tolerated-extra-fields pattern, established in PR #140) | Adding new fields doesn't break old readers; they just don't see the new info. |
-| `metadata.license` default | **Apache-2.0** if not specified | Match the project's actual license. |
+| `metadata.license` default | **No default** — free-form string; the writer does NOT pre-fill any license. There is no LICENSE file in the repo, so claiming a default would be incorrect. (Nit 3 fix from review.) |
 
 ## 5. API surface
 
@@ -128,7 +128,7 @@ final case class ManifestMeta(
 
 `$schema` is **not** exposed via `ManifestMeta` — it's a tooling-only URL, not a runtime field. Tools that need to validate can fetch the URL and validate the JSON; `SemanticManifest` itself doesn't need it.
 
-The `tools.Main manifest` writer pulls `id` and `namespace` from the writer's environment (CLI flags or pom-derived defaults). `metadata` is built from a small config file (`.sdf-manifest.yml`) in the project root.
+The `tools.Main manifest` writer pulls `id` and `namespace` from the writer's environment (CLI flags). `metadata` is built from inline `--metadata-*` repeated flags. **No separate config file convention** (Nit 11 fix).
 
 ## 6. Writer-side changes (small)
 
@@ -141,22 +141,14 @@ $ mvn exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
     --out manifests/ \
     --id com.yourorg.orders \
     --namespace dev \
-    --metadata-file .sdf-manifest.yml"
+    --metadata-author data-platform-team \
+    --metadata-license Apache-2.0 \
+    --metadata-tags orders,fulfillment"
 ```
 
-`.sdf-manifest.yml` (new, optional) is a small YAML file at the project root:
-```yaml
-author: data-platform-team
-license: Apache-2.0
-tags: [orders, fulfillment]
-```
+The `--metadata-*` flags are repeated (key=value pairs flattened by a parser). **No** separate `.sdf-manifest.yml` file convention — the CLI flags are the single source of truth (Nit 11 fix).
 
-If `--id` / `--namespace` / `--metadata-file` are absent, the writer falls back to:
-- `id` = derived from the YAML path (e.g. `models/orders.yml` → `io.semanticdf.<groupId>.<artifactId>.orders` if a parent pom provides groupId/artifactId; else a content-based hash)
-- `namespace` = `"default"`
-- `metadata` = empty
-
-This way the writer "just works" without ceremony, and explicit overrides are available for production use.
+If `--id` / `--namespace` are absent, the writer **errors** with a clear message (Q1: `id` is required). The `--metadata-*` flags default to absent (no metadata emitted in the manifest if not provided).
 
 ## 7. Test plan
 
@@ -167,15 +159,21 @@ This way the writer "just works" without ceremony, and explicit overrides are av
 | `namespace-round-trips` | Same for `namespace`. |
 | `metadata-round-trips` | `metadata: {author: "...", license: "..."}` round-trips through `parseMeta.metadata`. |
 | `metadata-empty-default` | Manifest without `metadata` field parses to `parseMeta.metadata == Map.empty`. |
+| `metadata-flat-strings-only` | Nested `metadata.contact: {email: "..."}` parses with the email as a JSON string (flat-only contract). (Nit 7 fix.) |
 | `manifestVersion-round-trips` | `manifestVersion: "1.0.0"` parses to `parseMeta.manifestVersion == Some("1.0.0")`. |
-| `$schema-field-present-in-emit` | `toJson` emits `$schema` pointing to the GitHub URL. |
+| `$schema-field-present-in-emit` | `toJson` emits `$schema` pointing to the GitHub raw URL. |
+| `$schema-url-standardized` | The URL is the `raw.githubusercontent.com` form (Nit 8 fix), not the github.com redirect form. |
 | `$schema-field-not-required` | Reader ignores `$schema` (tolerated-extra-fields). |
 | `old-manifest-still-parses` | A v0.1.9 manifest without the new fields parses to a valid `ManifestMeta` (all new fields `None` / empty). |
+| `parseMeta-accepts-v0.1.9-v0.1.10-v0.1.11` | Pin all three version strings parse cleanly (Nit 1 fix). |
 | `parseMeta-source-free` | `parseMeta` works on a manifest without any source DF (it's metadata-only). |
-| `tools.Main manifest -writes-new-fields` | CLI smoke test: `manifest --yaml X --out Y` produces a file with all 5 new fields populated when CLI flags are given. |
-| `tools.Main manifest -defaults-id` | CLI smoke test: when no `--id` is given, the writer falls back to a derived default. |
+| `validate-manifest-tolerates-missing-id` | The validator warns (not errors) when `id` is absent. |
+| `validate-manifest-warns-on-bad-schema-url` | The validator warns when `$schema` doesn't match the expected URL pattern. |
+| `tools.Main manifest -writes-new-fields` | CLI smoke test: `manifest --yaml X --out Y --id ...` produces a file with all 5 new fields populated. |
+| `tools.Main manifest -id-required` | CLI smoke test: `manifest --yaml X --out Y` (no `--id`) exits with a clear error. |
+| `tools.Main manifest -metadata-inline-flags` | CLI smoke test: `metadata: {author, license, tags}` populated via `--metadata-author ... --metadata-license ...` repeated flags (no separate YAML file). |
 
-12 tests across `SemanticManifestSpec` (8) and a new `ManifestWriteSpec` (4) for the CLI smoke tests.
+18 tests across `SemanticManifestSpec` (12) and a new `ManifestWriteSpec` (6) for the CLI smoke tests.
 
 ## 8. Diff estimate
 
@@ -204,8 +202,8 @@ This way the writer "just works" without ceremony, and explicit overrides are av
 
 | Concern | Resolution |
 |---|---|
-| Existing v0.1.9 / v0.1.10 single-table manifests | Parse unchanged. All 5 new fields are absent → `parseMeta` returns `None` / empty for them. |
-| Existing `tools.Main manifest` callers | No API change. The new CLI flags are optional; absence falls back to sensible defaults. |
+| Existing v0.1.9 / v0.1.10 single-table manifests | Parse unchanged. All 5 new fields are absent → `parseMeta` returns `None` / empty for them. The version gate in `parseMeta` is **relaxed to a prefix match** (`startsWith("v0.1.")`) so v0.1.9, v0.1.10, and v0.1.11 manifests all parse cleanly. (Nit 1 fix from review.) |
+| Existing `tools.Main manifest` callers | No API change. The new CLI flags are optional; absence falls back to sensible defaults — **except `--id`, which is required** (Q1). |
 | Existing `tools.Main validate-manifest` callers | No change. The reader tolerates unknown fields (extra-fields pattern). |
 | MCP `describe_model` | No change in v0.1.11. The new fields surface via `ManifestMeta` but don't appear in `describe_model.data` until a follow-up wires them through. (One-line change in `handlers/DescribeModel.scala`; defer to keep this recipe focused.) |
 | OKF gen (`make okfgen`) | No change. The OKF docs don't currently surface the manifest's id / metadata; defer to a follow-up. |
@@ -215,11 +213,51 @@ This way the writer "just works" without ceremony, and explicit overrides are av
 
 | # | Question | Current proposal |
 |---|---|---|
-| Q1 | Where does the `id` come from when `--id` is absent? | **Derived from the pom's groupId/artifactId + the model's name** (e.g. `io.semanticdf.examples.starter.flights`). If no parent pom, fall back to `<groupId>.<model-name>` derived from the manifest's `model.name`. |
-| Q2 | Should `id` be required for new manifests emitted by `tools.Main manifest`, or always optional? | **Always optional** at the schema level (backwards compat), but the writer emits it (derives a default if not given). Existing readers don't break; new writers always populate it. |
-| Q3 | Does `metadata.license` need a validation pattern (SPDX identifiers)? | **No** — free-form string. The example's metadata is `{author, license, created, ...}` with conventional keys, no schema. We follow the same pattern. |
-| Q4 | Does `tools.Main validate-manifest` need to validate the new fields? | **YES** — the writer is the source of truth. The validator should at least check that `id` is present (warning, not error, for back-compat) and that `$schema` matches the supported URL. |
-| Q5 | Should the joined-manifest recipe use the new `id` for cross-referencing, or file paths? | **FQN (`id`)** — the whole point of this recipe. File paths are still a valid alternative (the joined-manifest recipe covers both shapes). |
-| Q6 | Where does `manifestVersion` get bumped? | **On backwards-incompatible schema changes only.** A new optional field is a MINOR bump. Removing or renaming a field is MAJOR. The `schemaVersion` (v0.1.11-manifest) tracks the library version, separate from `manifestVersion` (1.0.0). |
-| Q7 | Should `metadata` allow nested objects (e.g. `metadata.contact: {email: ...}`)? | **YES, but flatten for `parseMeta.metadata`** — the manifest's `metadata` is a free-form object; `parseMeta` flattens to `Map[String, String]` for ergonomic access. Nested objects are accessible via the raw JSON. |
-| Q8 | Is this a breaking change for `tools.Main manifest`? | **No** — same CLI surface; new flags are optional. Default behavior (no flags) produces a manifest with the new fields auto-filled. |
+| Q1 | Where does the `id` come from when `--id` is absent? | **REQUIRED on the CLI** (no auto-derivation). The writer fails fast with a clear error if `--id` is not given. Auto-derivation from the pom's groupId/artifactId was proposed but rejected — `com.example.semanticdf-starter_2.13` is the actual pom shape; naive derivation would yield `com.example.semanticdf-starter_2.13.flights` (wrong namespace, leaks the `_2.13` Scala binary suffix). The YAML file itself CAN carry an `id:` block as an alternative source. |
+| Q2 | Should `id` be required for new manifests emitted by `tools.Main manifest`, or always optional? | **Optional at the schema level** (backwards compat), but the writer REQUIRES it (via CLI flag or YAML). Old readers that don't know about `id` still work; new writers always populate it. |
+| Q3 | Does `metadata.license` need a validation pattern (SPDX identifiers)? | **No** — free-form string. There is no LICENSE file in the repo, so the recipe does NOT default `metadata.license` to anything. (Nit 3 fix from review.) |
+| Q4 | Does `tools.Main validate-manifest` need to validate the new fields? | **YES, but tolerant** — the validator warns (not errors) on missing `id` and on a `$schema` value that doesn't match the supported URL. Backwards compat. |
+| Q5 | Should the joined-manifest recipe use the new `id` for cross-referencing, or file paths? | **FQN (`id`)** is the canonical handle; file paths remain a valid alternative for single-file artifacts. The joined-manifest recipe is still BLOCKed on `SemanticJoinOp` carrying metadata — adding `id` is one of several foundations, not a complete unblock. (Nit 4 fix from review.) |
+| Q6 | Where does `manifestVersion` get bumped? | **On backwards-incompatible schema changes only.** A new optional field is a MINOR bump. Removing or renaming a field is MAJOR. The `schemaVersion` (v0.1.11-manifest) tracks the library version, separate from `manifestVersion` (starts at `0.1.0` to flag pre-1.0 status; bumps to 1.0.0 when the spec is stable). |
+| Q7 | Should `metadata` allow nested objects (e.g. `metadata.contact: {email: ...}`)? | **No** — flat string values only. `parseMeta.metadata: Map[String, String]` is the v1 contract. Nested objects are not part of the spec; users can put a JSON-string value if needed (`metadata.contact: '{"email": "..."}'`). (Nit 7 fix from review.) |
+| Q8 | Is this a breaking change for `tools.Main manifest`? | **No** — same CLI surface; new flags are optional. Default behavior (no flags) produces a manifest with the new fields auto-filled, but `--id` is required (Q1). |
+
+## 12. Review feedback (2026-07-22)
+
+Senior-engineer subagent review returned 🟡 APPROVE WITH NITS. The
+critical nits are addressed above in the design (§10 — relax
+`parseMeta` version gate to a prefix match; §11 Q1 — `id` is CLI-required
+not auto-derived; Q3 — no `metadata.license` default; Q5 — recipe
+"unblocks" the joined manifest only partially).
+
+Additional smaller nits addressed:
+
+- **Nit 5** — Q4 (validator warns on missing id) was dropped in favor of
+  Q2 + Q4: tolerant validator, no hard warning. Matches §10 back-compat.
+- **Nit 6** — `model.id` in the §3 schema example is removed; not in
+  scope for v0.1.11. Defer to a follow-up recipe if a real consumer
+  needs the model-vs-artifact distinction.
+- **Nit 7** — handled in Q7 above; flat string values only.
+- **Nit 8** — `$schema` URL standardized to
+  `https://raw.githubusercontent.com/EchoEnv/semanticdf/main/schemas/manifest.schema.json`
+  (the raw URL is what validators fetch; the github.com URL is a UI
+  redirect).
+- **Nit 9** — handled in Q6 above; `manifestVersion` starts at `0.1.0`.
+- **Nit 10** — test gaps are added to §7 (nested metadata, $schema match,
+  v0.1.9+fields, validator warning behavior).
+- **Nit 11** — `--metadata-file` flag dropped in favor of inline CLI flags
+  (`--metadata-author k=v --metadata-license k=v`); no separate YAML
+  file convention. One convention.
+
+## 13. Out of scope (carried forward, unchanged)
+
+- Joined-model BLOCK: still depends on `SemanticJoinOp` carrying
+  metadata. This recipe provides the `id` field as a foundation; the
+  BLOCK itself is a library change.
+- Transforms BLOCK: depends on `Transform.exprString`. Unrelated to
+  identity.
+- Streaming joined models: separate recipe if there's demand.
+- `model.id` distinct from top-level `id`: defer until a real consumer
+  needs the model-vs-artifact distinction.
+- Permissions / extension-points: example's extensibility layer; not
+  part of the manifest spec.
