@@ -1,8 +1,20 @@
 # Design Recipe: Manifest Identity + Governance Bump
 
-**Status:** ACCEPTED (🟢 on third review pass 2026-07-22; nits 1–11 resolved. Implementation-ready.)
-**Library version that would emit this shape:** `v0.1.11-manifest`
+**Status:** SHIPPED (recipe was ACCEPTED 🟢 on third review pass 2026-07-22; implementation landed in PR #148 for v0.1.11)
+**Library version that emits this shape:** `v0.1.11-manifest`
 **Scope:** Single, additive feature. Extends the existing single-table manifest schema with 5 new optional fields (id, namespace, metadata, $schema, manifestVersion). **No change** to dimensions, measures, filters, or digest content. **No breaking change** to existing manifests (the version-gate in `parseMeta` is relaxed to a prefix match — see §10 nit 1 fix). The joined-manifest recipe (separate, BLOCKED) will use the new `id` field as one of several foundations for cross-referencing — it doesn't unblock the BLOCK by itself, but it removes one obstacle.
+
+## Implementation notes (from PR #148)
+
+The recipe's 18-test plan and ~310 LOC implementation estimate landed at +1828 LOC across PR #148 (mostly worked example, audit, and joined-Cli-Behavior spec). Highlights:
+
+- `SemanticManifest.Identity` case class + the optional-`identity` overload on `toJson`.
+- `SemanticManifest.parseMeta` version gate relaxed to `startsWith("v0.1.")` so old manifests continue to parse after the schemaVersion string bumps.
+- `tools.Main manifest` gains `--id` (required), `--namespace`, and repeated `--metadata-K V` flags.
+- `schemas/manifest.schema.json` (first JSON Schema in the repo).
+- `SemanticTable.isJoined` public accessor + `SemanticManifest.sideIdentity` per-side FQN helper + worked example.
+
+The recipe framed this work as “one of several foundations” — it removed one obstacle for joined-manifest but did not unblock that recipe on its own. PR #150 (foundation) + PR #151 (implementation) carried the actual unblock.
 
 ## 1. What this is (and what it isn't)
 

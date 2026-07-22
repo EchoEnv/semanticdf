@@ -1,8 +1,48 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** DRAFT (BLOCK from senior-engineer review 2026-07-22; fundamental design issues — see `docs/design/REVIEW-FEEDBACK.md` for details)
-**Library version that would emit this shape:** `0.1.11-joined-manifest`
+**Status:** SHIPPED with caveats (recipe was DRAFT-BLOCK on 2026-07-22; foundation landed in PR #150 and implementation in PR #151 for v0.1.11)
+**Library version that emits this shape:** `0.1.11-joined-manifest`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
+
+## Implementation status (from PRs #150 + #151)
+
+The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Two are resolved by v0.1.11:
+
+- ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — PR #150 added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp` so the per-side originating SemanticTable is recoverable. The implementation PR (#151) uses these to emit embedded per-side manifests.
+- ✅ **#5 “API / tests / decisions remain unresolved”** — PR #151 added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests, all green).
+
+Three remain BLOCK and are honestly flagged in the implementation:
+
+- ❌ **#1 `on` reconstruction** — the `(JoinSide, JoinSide) => Column` lambda cannot be reversed from a wire shape. The emitter surfaces this by emitting empty `leftKeys[]` and `rightKeys[]`, and the restorer synthesises a non-functional `on` that throws on evaluation with a pointer at this BLOCK finding. A future “keys foundation” PR (adding `SemanticJoinOp.leftKeys` / `rightKeys` fields) is required before this can fully resolve.
+- ❌ **#3 “Prefixes don't match runtime semantics”** — not addressed; deferred. The recipe's `leftPrefix` / `rightPrefix` fields are not implemented.
+- ❌ **#4 “The key model is inaccurate”** — same root cause as #1.
+
+The BLOCK §2 "schema drops essential merged-model state" is partially handled (per-side dims/measures round-trip), but the alias-prefixed dim names from the joined runtime don't flow through and require a future recipe revision.
+
+## What works today (per PR #151)
+
+```scala
+import io.semanticdf._
+import io.semanticdf.SemanticManifest
+import io.semanticdf.SemanticManifest.Identity
+
+val joined = toSemanticTable(leftDf,  name = Some("customers"))
+  .join_one(toSemanticTable(rightDf, name = Some("orders")),
+            (l, r) => l("customer_id") === r("customer_id"))
+
+val json = SemanticManifest.toJoinedJson(joined, Identity(...))
+val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
+// Per-side dims/measures round-trip cleanly. Restored model's metadata is
+// faithful. Executing the restored join throws with the BLOCK #1 reference.
+```
+
+A worked example at `examples/joined-manifest/` exercises this end-to-end.
+
+## What remains BLOCK (for a future keys-foundation PR)
+
+- `SemanticJoinOp.leftKeys` / `rightKeys` fields enabling real extraction.
+- The recipe’s §3 wire shape leaves room for `model.join.leftPrefix` / `rightPrefix`; not implemented.
+- A future revision would re-submit the recipe for senior-engineer review once the keys foundation lands.
 
 ## 1. What this is (and what it isn't)
 

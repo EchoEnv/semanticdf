@@ -1,8 +1,22 @@
 # Design Recipe: `transforms:` Block in `SemanticManifest`
 
-**Status:** DRAFT (BLOCK from senior-engineer review 2026-07-22; Transform model lacks `exprString` field — see `docs/design/REVIEW-FEEDBACK.md` for details)
-**Library version that would emit this shape:** `0.1.11-transforms`
+**Status:** SHIPPED (recipe was DRAFT-BLOCK on 2026-07-22; implementation landed in PR #149 for v0.1.11)
+**Library version that emits this shape:** `0.1.11-transforms`
 **Scope:** Single, additive feature. Extends the manifest schema with a `transforms: [...]` field paralleling `dimensions` and `measures`. Replays transforms on `fromJson`. No breaking wire changes.
+
+## Implementation notes (from PR #149)
+
+The BLOCK on this recipe (Transform needs `exprString`) was resolved by adding the field to the case class. Implementation summary:
+
+- `Transform.exprString: Option[String] = None` — the source SQL string.
+- `YamlLoader.buildTransform` populates `exprString = Some(exprStr)` from the YAML source.
+- `SemanticManifest.buildJsonTree` emits a `transforms[]` block when transforms are declared; `digest.transforms` carries the count.
+- `SemanticManifest.readManifest` reconstructs a `SemanticTransformsOp` with all transforms wrapped around the restored root.
+- `readTransform` parses one node with `<lambda>` sentinel handling for hand-built transforms.
+
+The BLOCK call (“Transform lacks `exprString`”) is fully resolved. Other BLOCK reviewers' concerns (cal-measure round-trip, calc dependencies) are implemented in adjacent PRs (#140 for calc measures).
+
+A worked example at `examples/manifest-transforms-load/` exercises the round-trip end-to-end.
 
 ## 1. What this is (and what it isn't)
 
