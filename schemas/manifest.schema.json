@@ -54,7 +54,18 @@
         "version":     { "type": "integer", "minimum": 0 },
         "status":      { "type": "string", "enum": ["draft", "published", "deprecated"] },
         "description": { "type": "string" },
-        "sourceTable": { "type": "string" }
+        "sourceTable": { "type": "string" },
+        "left":        { "$ref": "#/$defs/single-table-manifest" },
+        "right":       { "$ref": "#/$defs/single-table-manifest" },
+        "join": {
+          "type": "object",
+          "required": ["cardinality"],
+          "properties": {
+            "cardinality": { "type": "string", "enum": ["one", "many", "cross"] },
+            "leftKeys":    { "type": "array", "items": { "type": "string" } },
+            "rightKeys":   { "type": "array", "items": { "type": "string" } }
+          }
+        }
       }
     },
     "dimensions": {
@@ -102,5 +113,12 @@
     },
     "digest":    { "type": "object" },
     "warnings":  { "type": "array", "items": { "type": "string" } }
+  },
+
+  "$defs": {
+    "single-table-manifest": {
+      "type": "object",
+      "description": "Per-side embedded single-table manifest inside a joined envelope (PR #151)."
+    }
   }
 }

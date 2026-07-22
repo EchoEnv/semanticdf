@@ -30,6 +30,8 @@ object Main {
           runManifest(args.tail)
         case Some("validate-manifest") =>
           runValidateManifest(args.tail)
+        case Some("validate-joined-manifest") =>
+          runValidateJoinedManifest(args.tail)
         case Some(cmd) =>
           System.err.println(s"Unknown subcommand: $cmd")
           printUsage()
@@ -183,6 +185,47 @@ object Main {
     } catch {
       case e: ManifestParsingException =>
         System.err.println(s"Invalid manifest: ${e.getMessage}")
+        sys.exit(1)
+    }
+  }
+
+  /** validate-joined-manifest — read a joined manifest, surface identity + digest.
+    * Source-free (no Spark session required). Mirrors validate-manifest but
+    * for the joined wire shape introduced in PR #151. */
+  private def runValidateJoinedManifest(args: Array[String]): Unit = {
+    val parser = new CliParser(args)
+    val file   = parser.require("--file", "Usage: validate-joined-manifest --file <manifest.json>")
+    val src    = scala.io.Source.fromFile(file)
+    val text   = try src.getLines.mkString("\n") finally src.close()
+
+    try {
+      val meta = SemanticManifest.parseJoinedMeta(text)
+      println(s"OK joined manifest")
+      println(s"  schemaVersion    : ${meta.schemaVersion}")
+      println(s"  kind             : ${meta.kind}")
+      println(s"  modelName        : ${meta.modelName.getOrElse("(none)")}")
+      println(s"  version          : ${meta.version}")
+      println(s"  description      : ${meta.description.getOrElse("(none)")}")
+      println(s"  identity.id      : ${meta.id.getOrElse("(none)")}")
+      println(s"  identity.namespace : ${meta.namespace.getOrElse("(none)")}")
+      println(s"  cardinality      : ${meta.cardinality}")
+      println(s"  leftKeys         : ${meta.leftKeys.mkString(", ")}")
+      println(s"  rightKeys        : ${meta.rightKeys.mkString(", ")}")
+      println(s"  leftDimensions   : ${meta.leftDimensions}")
+      println(s"  rightDimensions  : ${meta.rightDimensions}")
+      println(s"  mergedDimensions : ${meta.mergedDimensions}")
+      println(s"  leftMeasures     : ${meta.leftMeasures}")
+      println(s"  rightMeasures    : ${meta.rightMeasures}")
+      println(s"  mergedMeasures   : ${meta.mergedMeasures}")
+      println(s"  isStreaming      : ${meta.isStreaming}")
+      println(s"  warnings:")
+      println(s"    - joined-manifest wire shape BLOCK §1 (recipe §10):")
+      println(s"      semanticdfModel.join.on cannot be reconstructed from the wire;")
+      println(s"      the restored SemanticTable won't execute its join without")
+      println(s"      re-loading from YAML or supplying explicit join keys.")
+    } catch {
+      case e: ManifestParsingException =>
+        System.err.println(s"Invalid joined manifest: ${e.getMessage}")
         sys.exit(1)
     }
   }

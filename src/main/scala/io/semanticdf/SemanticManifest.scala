@@ -7,7 +7,7 @@ import scala.jdk.CollectionConverters._
 
 import com.fasterxml.jackson.databind.{ObjectMapper, DeserializationFeature, SerializationFeature}
 
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{Column, DataFrame}
 
 /** Persist a [[SemanticTable]] to a portable JSON artifact and parse it back.
   *
@@ -71,6 +71,44 @@ object SemanticManifest {
       filters:          Int,
       isStreaming:      Boolean,
       usesTAll:         Boolean,
+  )
+
+  /** Joined-manifest identity-only header (kind = `semanticdf-joined-manifest`).
+    *
+    * Source-free; usable by tooling that needs to inspect a joined manifest
+    * without loading Spark or providing two source DataFrames. Complements
+    * [[ManifestMeta]] for the joined case — the per-side details (left/right
+    * dims/measures) are NOT included here because tooling should call
+    * [[fromJoinedJson]] for those, or read the raw JSON.
+    *
+    * The `kind` discriminator matches the writer ([[toJoinedJson]]) so
+    * callers can route: `kind == "semanticdf-joined-manifest"` →
+    * [[fromJoinedJson]]; otherwise → [[fromJson]].
+    *
+    * See `docs/design/joined-models-manifest.md` §5 for the field
+    * rationale. */
+  final case class JoinedManifestMeta(
+      schemaVersion:    String,
+      kind:             String,
+      modelName:        Option[String],
+      version:          Int,
+      description:      Option[String],
+      // Identity + governance fields (mirrors ManifestMeta).
+      manifestVersion:  Option[String] = None,
+      id:               Option[String] = None,
+      namespace:        Option[String] = None,
+      metadata:         Map[String, String] = Map.empty,
+      // Joined-specific shape from recipe §3.
+      cardinality:      String,         // "one" | "many" | "cross"
+      leftKeys:         Seq[String],    // extracted from `on`; empty for cross joins
+      rightKeys:        Seq[String],    // extracted from `on`; empty for cross joins
+      leftDimensions:   Int,
+      rightDimensions:  Int,
+      mergedDimensions: Int,
+      leftMeasures:     Int,
+      rightMeasures:    Int,
+      mergedMeasures:   Int,
+      isStreaming:      Boolean,
   )
 
   private val mapper: ObjectMapper = new ObjectMapper()
@@ -156,8 +194,9 @@ object SemanticManifest {
         s"manifest schemaVersion is '$schemaVersion', expected prefix '$SupportedSchemaPrefix*'.")
     val kind = optStringField(obj, "kind")
       .getOrElse(throw ManifestParsingException("missing `kind`"))
-    if (kind != "semanticdf-model-manifest")
-      throw ManifestParsingException(s"unknown manifest kind '$kind'")
+    if (kind != "semanticdf-model-manifest" && kind != "semanticdf-joined-manifest")
+      throw ManifestParsingException(
+        s"unknown manifest kind '$kind'. Expected `semanticdf-model-manifest` or `semanticdf-joined-manifest`.")
 
     val dig = obj.path("digest")
     val mod = obj.path("model")
@@ -188,6 +227,315 @@ object SemanticManifest {
       filters         = optIntField(dig, "filters").getOrElse(0),
       isStreaming     = optBoolField(dig, "isStreaming"),
       usesTAll        = optBoolField(dig, "usesTAll"),
+    )
+  }
+
+  /** Source-free joined-manifest header for `kind = semanticdf-joined-manifest`.
+    *
+    * Mirrors [[parseMeta]] for the joined case. Used by `tools.Main
+    * validate-joined-manifest` (added in PR #151). Throws
+    * [[ManifestParsingException]] if the JSON is not a joined manifest.
+    *
+    * Implementation note: the joined wire shape per
+    * `docs/design/joined-models-manifest.md` §3 is:
+    * {{{
+    *   {
+    *     "schemaVersion": ..., "kind": "semanticdf-joined-manifest",
+    *     "model": { "name", "version", "description", "left", "right",
+    *                "join": { "cardinality", "leftKeys", "rightKeys" } },
+    *     "digest": { "leftDimensions", "rightDimensions", "mergedDimensions",
+    *                 "leftMeasures", "rightMeasures", "mergedMeasures",
+    *                 "isStreaming" }
+    *   }
+    * }}}
+    *
+    * Note: the recipe envisioned per-side manifests inlined under
+    * `model.left` / `model.right`. Today, the implementation emits them
+    * directly (not as embedded sub-manifests); the BLOCK review
+    * identified this as one of the unresolved items. For now
+    * `left` / `right` are stub top-level field references (paths to the
+    * per-side manifests), kept opaque by the parser.
+    */
+  def parseJoinedMeta(text: String): JoinedManifestMeta = {
+    val tree = mapper.readTree(text)
+    val obj  = requireObject(tree, "manifest root")
+    val schemaVersion = optStringField(obj, "schemaVersion")
+      .getOrElse(throw ManifestParsingException("missing `schemaVersion`"))
+    if (!schemaVersion.startsWith(SupportedSchemaPrefix))
+      throw ManifestParsingException(
+        s"manifest schemaVersion is '$schemaVersion', expected prefix '$SupportedSchemaPrefix*'.")
+    val kind = optStringField(obj, "kind")
+      .getOrElse(throw ManifestParsingException("missing `kind`"))
+    if (kind != "semanticdf-joined-manifest")
+      throw ManifestParsingException(
+        s"parseJoinedMeta: expected `semanticdf-joined-manifest` kind, got '$kind'")
+
+    val mod = obj.path("model")
+    val dig = obj.path("digest")
+    val jn  = mod.path("join")
+    val metadataObj = obj.path("metadata")
+    val metadataMap: Map[String, String] =
+      if (metadataObj.isObject) metadataObj.fieldNames.asScala.toList.map { k =>
+        k -> (if (metadataObj.get(k).isTextual) metadataObj.get(k).asText("") else metadataObj.get(k).toString)
+      }.toMap
+      else Map.empty
+
+    JoinedManifestMeta(
+      schemaVersion    = schemaVersion,
+      kind             = kind,
+      modelName        = optStringField(mod, "name"),
+      version          = optIntField(mod, "version").getOrElse(0),
+      description      = optStringField(mod, "description"),
+      manifestVersion  = optStringField(obj, "manifestVersion").orElse(Some(InitialManifestVersion)),
+      id               = optStringField(obj, "id"),
+      namespace        = optStringField(obj, "namespace").orElse(Some("default")),
+      metadata         = metadataMap,
+      cardinality      = optStringField(jn, "cardinality").getOrElse("one"),
+      leftKeys         = readStringArray(jn.path("leftKeys")),
+      rightKeys        = readStringArray(jn.path("rightKeys")),
+      leftDimensions   = optIntField(dig, "leftDimensions").getOrElse(0),
+      rightDimensions  = optIntField(dig, "rightDimensions").getOrElse(0),
+      mergedDimensions = optIntField(dig, "mergedDimensions").getOrElse(0),
+      leftMeasures     = optIntField(dig, "leftMeasures").getOrElse(0),
+      rightMeasures    = optIntField(dig, "rightMeasures").getOrElse(0),
+      mergedMeasures   = optIntField(dig, "mergedMeasures").getOrElse(0),
+      isStreaming      = optBoolField(dig, "isStreaming"),
+    )
+  }
+
+  /** Read a JSON array field as a `Seq[String]`. Empty for missing
+    * or non-array nodes. */
+  private def readStringArray(node: com.fasterxml.jackson.databind.JsonNode): Seq[String] =
+    if (node.isArray)
+      node.elements.asScala.toList.map(_.asText(""))
+    else
+      Seq.empty
+
+  /** Walk past passthrough ops (filters, transforms) to reach the
+    * underlying `SemanticTableOp` (or its streaming equivalent). Used
+    * by `fromJoinedJson` so a per-side embedded manifest carrying
+    * pre-aggregate filters (e.g. `require_name_not_null`) is reduced
+    * to its root when the joined op needs an `Op`. */
+  private def unwrapToTableOp(op: SemanticOp): SemanticTableOp = op match {
+    case t: SemanticTableOp         => t
+    case s: SemanticStreamingTableOp =>
+      SemanticTableOp(s.stream, s.name, s.description, s.dimensions, s.measures)
+    case f: SemanticRowFilterOp     => unwrapToTableOp(f.source)
+    case tr: SemanticTransformsOp   => unwrapToTableOp(tr.source)
+    case other =>
+      throw new IllegalStateException(
+        s"fromJoinedJson: expected a single-table op after unwrapping filters/transforms, " +
+        s"got ${other.getClass.getSimpleName}. The per-side embedded manifest must be " +
+        s"a single-table manifest (filters/transforms are preserved on the side's " +
+        s"SemanticTable but the joined op needs an unwrappable root).")
+  }
+
+  /** Emit a joined manifest. Requires the model to be `SemanticJoinOp`-rooted
+    * and have both `leftSide` and `rightSide` populated (the foundation
+    * `feat/joined-manifest-foundation` PR ensures these are populated for
+    * models built via the public `join_*` API).
+    *
+    * Throws `IllegalStateException` if the model isn't joined-rooted or
+    * doesn't carry side metadata. The thrown message names the dispatch
+    * rule.
+    *
+    * See [[toJson]] for the single-table path; this method is the
+    * joined counterpart. */
+  def toJoinedJson(
+      model: SemanticTable,
+      identity: Identity = Identity.empty,
+      prettyPrint: Boolean = true,
+  ): String = {
+    val op = model.root match {
+      case j: SemanticJoinOp => j
+      case other =>
+        throw new IllegalStateException(
+          s"SemanticManifest.toJoinedJson: expected a SemanticJoinOp-rooted model, " +
+          s"got ${other.getClass.getSimpleName}. Use this method only on joined models.")
+    }
+    val leftT  = op.leftSide.getOrElse(
+      throw new IllegalStateException(
+        "SemanticManifest.toJoinedJson: joined op has no `leftSide`. " +
+        "Construct joins via `SemanticTable.join_*` (which populates the side fields), " +
+        "not by hand-assembling SemanticJoinOp, so the originating SemanticTable " +
+        "is recoverable. See PR #150 (feat/model: SemanticJoinOp carries originating " +
+        "SemanticTable sides)."))
+    val rightT = op.rightSide.getOrElse(
+      throw new IllegalStateException(
+        "SemanticManifest.toJoinedJson: joined op has no `rightSide`. " +
+        "See `leftSide` documentation in this method."))
+
+    // Per-side embedded manifests (single-table kind), driven by the
+    // identity-bump API. The side identity derives from the parent's
+    // identity via sideIdentity.
+    val leftId  = sideIdentity(identity, "left",  op.leftRoot.name.getOrElse("left"))
+    val rightId = sideIdentity(identity, "right", op.rightRoot.name.getOrElse("right"))
+    val leftJson  = toJson(leftT,  leftId,  prettyPrint = prettyPrint)
+    val rightJson = toJson(rightT, rightId, prettyPrint = prettyPrint)
+
+    // Compose the joined envelope.
+    val merged  = op.mergedModel
+    val dimCount = merged.dimensions.size
+    val mesCount = merged.measures.size
+    val cardinality = op.cardinality match {
+      case JoinCardinality.One   => "one"
+      case JoinCardinality.Many  => "many"
+      case JoinCardinality.Cross => "cross"
+    }
+
+    val root = mapper.createObjectNode()
+    root.put("schemaVersion", CurrentSchemaVersion)
+    root.put("kind",          "semanticdf-joined-manifest")
+    root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+
+    if (identity.id.nonEmpty || identity.metadata.nonEmpty || identity.manifestVersion != InitialManifestVersion || identity.namespace != "default") {
+      root.put("manifestVersion", identity.manifestVersion)
+      if (identity.id.nonEmpty) root.put("id", identity.id)
+      if (identity.namespace.nonEmpty) root.put("namespace", identity.namespace)
+      if (identity.metadata.nonEmpty) {
+        val metaObj = root.putObject("metadata")
+        identity.metadata.foreach { case (k, v) => metaObj.put(k, v) }
+      }
+      root.put("$schema", SchemaUrl)
+    }
+
+    val modelObj = root.putObject("model")
+    putOptString(modelObj, "name",        merged.name)
+    modelObj.put("version",     model.version)
+    modelObj.put("status",      model.status.asString)
+    putOptString(modelObj, "description", merged.description.orElse(model.description))
+
+    // Embed the per-side manifests as JSON sub-trees. Parse the strings
+    // back so we can attach them as nested nodes (Jackson doesn't have a
+    // builder for "merge a parsed JSON string at this path").
+    val leftNode  = mapper.readTree(leftJson)
+    val rightNode = mapper.readTree(rightJson)
+    val modelMap  = root.get("model").asInstanceOf[com.fasterxml.jackson.databind.node.ObjectNode]
+    val placeholder = mapper.createObjectNode()
+    modelMap.set[com.fasterxml.jackson.databind.JsonNode]("left",  placeholder)
+    modelMap.set[com.fasterxml.jackson.databind.JsonNode]("right", placeholder)
+    // Replace the placeholder with the parsed side manifests.
+    modelMap.set[com.fasterxml.jackson.databind.JsonNode]("left",  leftNode)
+    modelMap.set[com.fasterxml.jackson.databind.JsonNode]("right", rightNode)
+
+    val joinObj = modelObj.putObject("join")
+    joinObj.put("cardinality", cardinality)
+    // leftKeys / rightKeys are the BLOCK "join key model is inaccurate" —
+    // SemanticJoinOp.on is `(JoinSide, JoinSide) => Column`, not
+    // Seq[(String, String)]. Extracting key names from the lambda requires
+    // bytecode/Scala-reflection tricks that are out of scope here. We
+    // surface empty arrays; the recipe acknowledges this gap. A future
+    // foundation PR can add explicit `leftKeys` / `rightKeys` fields on
+    // SemanticJoinOp to enable real extraction.
+    joinObj.putArray("leftKeys")
+    joinObj.putArray("rightKeys")
+
+    // Digest (left/right/merged counts).
+    val dig = root.putObject("digest")
+    val leftDims  = op.leftRoot.dimensions
+    val rightDims = op.rightRoot.dimensions
+    dig.put("leftDimensions",   leftDims.size)
+    dig.put("rightDimensions",  rightDims.size)
+    dig.put("mergedDimensions", dimCount)
+    dig.put("leftMeasures",     op.leftRoot.measures.size)
+    dig.put("rightMeasures",    op.rightRoot.measures.size)
+    dig.put("mergedMeasures",   mesCount)
+    dig.put("joins",            1)
+    dig.put("isStreaming",      findStreamOp(model.root).isDefined)
+
+    val out = mapper.writeValueAsString(root)
+    if (prettyPrint) out else out
+  }
+
+  /** Reconstruct a `SemanticTable` rooted at `SemanticJoinOp` from a
+    * joined manifest JSON. The two source DataFrames are bound by the
+    * caller (typically the operator), since the manifest itself doesn't
+    * carry data — just metadata.
+    *
+    * The shape of the input JSON is the joined envelope produced by
+    * [[toJoinedJson]]: `kind = "semanticdf-joined-manifest"`, with
+    * `model.left` / `model.right` as embedded per-side single-table
+    * manifests. Each embedded manifest is fed back through [[readManifest]]
+    * with the supplied source DF.
+    *
+    * Limitations / BLOCK findings surfaced here:
+    *   - The `on` lambda cannot be reconstructed from the joined wire
+    *     shape without keys. This implementation uses an identity
+    *     predicate `l(<no-key>) === r(<no-key>)` that always throws at
+    *     evaluation time. To actually evaluate the restored model, the
+    *     caller should re-load from YAML (which carries the original
+    *     lambda or the join key strings). The metadata round-trip
+    *     (name, version, status, dimensions, measures) DOES work.
+    *   - The merged-model state carries through (extra dims/measures,
+    *     cardinality) — the original complex reconstruction from the
+    *     BLOCK recipe §3's "right ++ left ++ extras" pattern is
+    *     approximated; full reconstruction requires the keys. */
+  def fromJoinedJson(
+      text: String,
+      leftSource: DataFrame,
+      rightSource: DataFrame,
+  ): SemanticTable = {
+    val tree = mapper.readTree(text)
+    val obj  = requireObject(tree, "manifest root")
+    val schemaVersion = optStringField(obj, "schemaVersion").getOrElse(
+      throw ManifestParsingException("missing `schemaVersion`"))
+    if (!schemaVersion.startsWith(SupportedSchemaPrefix))
+      throw ManifestParsingException(
+        s"manifest schemaVersion is '$schemaVersion', expected prefix '$SupportedSchemaPrefix*'.")
+    val kind = optStringField(obj, "kind").getOrElse(
+      throw ManifestParsingException("missing `kind`"))
+    if (kind != "semanticdf-joined-manifest")
+      throw ManifestParsingException(
+        s"fromJoinedJson: expected `semanticdf-joined-manifest` kind, got '$kind'")
+
+    val modelObj    = obj.path("model")
+    val description = optStringField(modelObj, "description")
+    val version     = optIntField(modelObj, "version").getOrElse(0)
+    val joinedName  = optStringField(modelObj, "name")
+    val joinedStatus= optStringField(modelObj, "status").getOrElse("published")
+
+    // Embedded per-side single-table manifests.
+    val leftManifest  = modelObj.path("left")
+    val rightManifest = modelObj.path("right")
+    val leftT  = if (leftManifest.isObject)  readManifest(leftManifest,  leftSource)  else null
+    val rightT = if (rightManifest.isObject) readManifest(rightManifest, rightSource) else null
+    if (leftT  == null) throw ManifestParsingException("joined manifest missing `model.left`")
+    if (rightT == null) throw ManifestParsingException("joined manifest missing `model.right`")
+
+    val joinObj     = modelObj.path("join")
+    val cardinality = joinObj.path("cardinality").asText("one") match {
+      case "cross" => JoinCardinality.Cross
+      case "many"  => JoinCardinality.Many
+      case _       => JoinCardinality.One
+    }
+
+    // Identity-predicate for the `on` lambda. Reconstructing the real
+    // join key from the wire is BLOCKed (see method docstring above) —
+    // we use a non-functional default that throws on evaluation. The
+    // metadata round-trip (everything except `on`) works correctly.
+    val on: (JoinSide, JoinSide) => Column =
+      (_, _) => throw new IllegalStateException(
+        "SemanticManifest.fromJoinedJson: the join key (on) cannot be reconstructed " +
+        "from the wire shape; BLOCKed by docs/design/joined-models-manifest.md §1. " +
+        "Re-load from YAML to get a functional SemanticJoinOp.")
+
+    val leftRoot  = unwrapToTableOp(leftT.root)
+    val rightRoot = unwrapToTableOp(rightT.root)
+    val join = SemanticJoinOp(
+      left   = leftRoot,
+      right  = rightRoot,
+      on     = on,
+      cardinality = cardinality,
+      leftRoot    = leftRoot,
+      rightRoot   = rightRoot,
+      leftSide    = Some(leftT),
+      rightSide   = Some(rightT),
+    )
+    new SemanticTable(
+      root        = join,
+      version     = version,
+      sourceTable = None,
+      status      = ModelStatus.fromString(joinedStatus).getOrElse(ModelStatus.Published),
     )
   }
 

@@ -147,9 +147,80 @@ side, **add one** — it should mirror the columns and shapes of the
 source table the join consumes. That's the simplest fix; the BLOCKed
 recipe's eventual native emit will eliminate this workaround.
 
-## 5. Hand-rolling the joined envelope
+## 5. The real path: `SemanticManifest.toJoinedJson` (v0.1.11)
 
-Once you have the two per-side manifests, you can compose a
+As of v0.1.11, `SemanticManifest.toJoinedJson(model, identity)` emits a
+real joined manifest on the wire — the hand-roll below is now only
+needed if you need a custom envelope shape that the library doesn't
+cover.
+
+```scala
+import io.semanticdf._
+import io.semanticdf.SemanticManifest
+import io.semanticdf.SemanticManifest.Identity
+
+// Joined model — built via the public join_* API so the foundation
+// populates SemanticJoinOp.leftSide / rightSide (PR #150).
+val leftT  = toSemanticTable(leftDf,  name = Some("customers"))
+val rightT = toSemanticTable(rightDf, name = Some("orders"))
+val joined = leftT.join_one(rightT, (l, r) => l("customer_id") === r("customer_id"))
+
+val identity = Identity(
+  id              = "io.acme.warehouse.orders",
+  manifestVersion = "0.1.0",
+  namespace       = "prod",
+  metadata        = Map("owner" -> "data-platform"),
+)
+val json = SemanticManifest.toJoinedJson(joined, identity, prettyPrint = true)
+// -> kind: "semanticdf-joined-manifest" with embedded
+//          model.left / model.right (single-table manifests)
+//          and a model.join block with cardinality
+
+// Round-trip:
+val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
+// restored.isJoined == true; restored.joins.length == 1
+
+// Source-free header:
+val meta = SemanticManifest.parseJoinedMeta(json)
+// meta.cardinality == "one", meta.leftDimensions / rightDimensions
+// / mergedDimensions counts populated
+```
+
+The worked example `examples/joined-manifest/` walks through this flow
+end-to-end.
+
+**Caveat (BLOCK §1, still in effect):** the `on` join key cannot be
+reconstructed from the wire — `leftKeys` and `rightKeys` are emitted
+empty. The restored `SemanticTable` carries the metadata side fully,
+but executing the join needs YAML or an explicit key list. The error
+message on `restored.execute(spark)` points at the BLOCK finding.
+
+If you still want to hand-roll a joined envelope (rare — for a custom
+shape that doesn't match the library's), see §5.5 below.
+
+## 5.5. Hand-rolling the joined envelope (rare; pre-v0.1.11 era)
+
+If you need a custom envelope shape that the library doesn't cover
+(e.g. a joined manifest in a v0.1.9 / v0.1.10 toolchain), you can still
+compose a "joined bundle" of your own. Use the wire shape the BLOCKed
+recipe's §3 proposes — that way, when the recipe unblocks and you
+replace your hand-roll with `SemanticManifest.toJoinedJson(...)`, your
+downstream tools' parsing code stays the same.
+
+```json
+{
+  "schemaVersion": "v0.1.11-manifest",
+  "kind":           "semanticdf-joined-manifest",
+  "model": {
+    "name":    "orders",
+    "version": 0,
+    "left":    { ... customers manifest ... },
+    "right":   { ... orders   manifest ... },
+    "join": {
+      "cardinality": "one",
+      "leftKeys":    ["customer_id"],
+      "rightKeys":   ["customer_id"]
+
 "joined bundle" of your own. Use the wire shape the BLOCKed recipe's
 §3 proposes — that way, when the recipe unblocks and you replace
 your hand-roll with `SemanticManifest.toJoinedJson(...)`, your
@@ -178,7 +249,7 @@ the only consumer is `SemanticManifest.parseMeta`, which doesn't know
 `semanticdf-joined-manifest`; that gate is intentional — it keeps
 the slot open for the BLOCKed recipe without committing to a schema.
 
-## 6. The worked example
+## 7. The worked example
 
 [`examples/joined-manifest-split/`](../examples/joined-manifest-split/)
 walks through every step above in runnable form:
@@ -223,7 +294,7 @@ Expected output (last lines):
 Each per-side manifest passes through `parseMeta` cleanly
 (`kind = semanticdf-model-manifest`, all identity fields populated).
 
-## 7. Glossary (terms you'll see in the recipes)
+## 8. Glossary (terms you'll see in the recipes)
 
 | Term | What it means |
 |---|---|
@@ -235,7 +306,7 @@ Each per-side manifest passes through `parseMeta` cleanly
 | Anti-scope | A deliberate non-feature. Documented in a recipe as "we are not going to support this" — usually with a rationale + a future ticket |
 | BLOCK | A senior-engineer-review verdict meaning "this design needs fundamental work before it can be implemented" (vs 🟡 REVISE which means "tweak and resubmit") |
 
-## 8. Where to look next
+## 9. Where to look next
 
 - [`docs/design/manifest-artifact.md`](design/manifest-artifact.md) —
   the v0.1.9 single-table manifest recipe (now implemented)
