@@ -49,6 +49,7 @@ self-contained once you've done `starter/`.
 ### "I want to load a pre-built model artifact (CI / version-pinning)"
 1. `starter/`
 2. [`manifest-load/`](manifest-load/) — `SemanticManifest.fromJson` end-to-end. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md); shows the runtime half of the build/load workflow.
+3. [`streaming-manifest-load/`](streaming-manifest-load/) — the streaming analog: load a streaming manifest, build a `StreamingConfig`, run a streaming query.
 
 ## What each example shows
 
@@ -63,6 +64,7 @@ self-contained once you've done `starter/`.
 | [`telco-analytics/`](telco-analytics/) | Telco domain: carriers, plans, promotions |
 | [`cli-consumer/`](cli-consumer/) | Standalone CLI client (`sdf`) for the REST API — uses no Spark, no SemanticDF dep |
 | [`manifest-load/`](manifest-load/) | Load a pre-built `SemanticManifest` JSON artifact and reconstruct a `SemanticTable`. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md) |
+| [`streaming-manifest-load/`](streaming-manifest-load/) | Load a pre-built streaming `SemanticManifest` and run a streaming query. Companion to the [streaming-manifest recipe](../docs/design/streaming-manifest.md) |
 
 ## Prerequisites
 
