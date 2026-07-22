@@ -1,12 +1,12 @@
 # Design Recipe: Manifest Identity + Governance Bump
 
-**Status:** SHIPPED (recipe was ACCEPTED 🟢 on third review pass 2026-07-22; implementation landed in PR #148 for v0.1.11)
+**Status:** SHIPPED (recipe was ACCEPTED)
 **Library version that emits this shape:** `v0.1.11-manifest`
 **Scope:** Single, additive feature. Extends the existing single-table manifest schema with 5 new optional fields (id, namespace, metadata, $schema, manifestVersion). **No change** to dimensions, measures, filters, or digest content. **No breaking change** to existing manifests (the version-gate in `parseMeta` is relaxed to a prefix match — see §10 nit 1 fix). The joined-manifest recipe (separate, BLOCKED) will use the new `id` field as one of several foundations for cross-referencing — it doesn't unblock the BLOCK by itself, but it removes one obstacle.
 
-## Implementation notes (from PR #148)
+## Implementation notes
 
-The recipe's 18-test plan and ~310 LOC implementation estimate landed at +1828 LOC across PR #148 (mostly worked example, audit, and joined-Cli-Behavior spec). Highlights:
+The recipe's 18-test plan and ~310 LOC implementation estimate landed at ~1828 LOC across the implementation PR (mostly worked example, audit, and joined-Cli-Behavior spec). Highlights:
 
 - `SemanticManifest.Identity` case class + the optional-`identity` overload on `toJson`.
 - `SemanticManifest.parseMeta` version gate relaxed to `startsWith("v0.1.")` so old manifests continue to parse after the schemaVersion string bumps.
@@ -14,11 +14,11 @@ The recipe's 18-test plan and ~310 LOC implementation estimate landed at +1828 L
 - `schemas/manifest.schema.json` (first JSON Schema in the repo).
 - `SemanticTable.isJoined` public accessor + `SemanticManifest.sideIdentity` per-side FQN helper + worked example.
 
-The recipe framed this work as “one of several foundations” — it removed one obstacle for joined-manifest but did not unblock that recipe on its own. PR #150 (foundation) + PR #151 (implementation) carried the actual unblock.
+The recipe framed this work as “one of several foundations” — it removed one obstacle for joined-manifest but did not unblock that recipe on its own. The foundation + implementation PRs carried the actual unblock.
 
 ## 1. What this is (and what it isn't)
 
-The current single-table manifest (PR #132, refined in #139 / #140 / #144) records a model's static definition. What's missing is the **identity + governance** layer that lets manifests reference each other and be tracked across environments. This recipe adds 5 optional top-level fields that are **metadata, not content** — the dim/measure/filter shape is untouched.
+The current single-table manifest (refined across multiple releases) records a model's static definition. What's missing is the **identity + governance** layer that lets manifests reference each other and be tracked across environments. This recipe adds 5 optional top-level fields that are **metadata, not content** — the dim/measure/filter shape is untouched.
 
 **What it is:** 5 new optional fields, all backwards-compatible. Every existing manifest parses unchanged. The recipe is the foundation for:
 - The joined-manifest recipe (BLOCKED) — uses the new `id` field to reference side manifests by FQN
@@ -100,7 +100,7 @@ The joined-manifest shape (separate recipe) uses the same top-level fields plus 
 | `metadata` shape | **Free-form object** with conventional keys | The example uses `{author, license, created, tags, ...}` — no schema, just conventional keys. Tools can read any keys; no required field beyond what's in the example. |
 | `namespace` format | **Free-form string** (e.g. `default`, `dev`, `prod`, `team-X`) | Single field, simple, multi-purpose. Consumer code filters by namespace as needed. |
 | `tools.Main manifest` regenerates the new fields | **YES** — `toJson` adds the new top-level fields from the `SemanticTable` and emission context | The writer is the source of truth for `id` and `metadata`. The reader parses them all. |
-| Backwards compat for old readers | **YES** — old `tools.Main validate-manifest` ignores unknown fields (tolerated-extra-fields pattern, established in PR #140) | Adding new fields doesn't break old readers; they just don't see the new info. |
+| Backwards compat for old readers | **YES** — old `tools.Main validate-manifest` ignores unknown fields (tolerated-extra-fields pattern, established by the unknown-fields tolerance) | Adding new fields doesn't break old readers; they just don't see the new info. |
 | `metadata.license` default | **No default** — free-form string; the writer does NOT pre-fill any license. There is no LICENSE file in the repo, so claiming a default would be incorrect. (Nit 3 fix from review.) |
 
 ## 5. API surface

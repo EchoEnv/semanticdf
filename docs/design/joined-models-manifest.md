@@ -1,6 +1,6 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; foundation in PR #150, partial implementation in PR #151, key-fields foundation in PR #153, wire-shape completion in PR #154 for v0.1.11)
+**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; implementation in v0.1.11)
 **Library version that emits this shape:** `0.1.11-joined-manifest`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
 
@@ -8,24 +8,23 @@
 
 The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Three are resolved by v0.1.11:
 
-- ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — PR #150 added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp`. The implementation PR (#151) uses these to emit embedded per-side manifests.
-- ✅ **#4 “The key model is inaccurate”** — PR #153 added `leftKeys` / `rightKeys` / `onExprString` to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). PR #154 wires these through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). The wire shape now carries the keys directly. Lambda reconstruction is **functional** for single-column and multi-column equi joins; multi-column / non-equi predicates fall back to the captured `onExprString` SQL.
-- ✅ **#5 “API / tests / decisions remain unresolved”** — PR #151 added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests).
+- ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — The foundation PR added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp` (foundational addition). The implementation uses these to emit embedded per-side manifests.
+- ✅ **#4 “The key model is inaccurate”** — `leftKeys` / `rightKeys` / `onExprString` were added to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). These are wired through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). The wire shape now carries the keys directly. Lambda reconstruction is **functional** for single-column and multi-column equi joins; multi-column / non-equi predicates fall back to the captured `onExprString` SQL.
+- ✅ **#5 “API / tests / decisions remain unresolved”** — This added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests).
 
 Two remain BLOCK and are deferred:
 
 - ❌ **#2 “Schema drops essential merged-model state”** — partially handled (per-side dims/measures round-trip). Alias-prefixed dim names from the joined runtime (e.g. `carriers.name`) don't flow through and require a future recipe revision.
 - ❌ **#3 “Prefixes don't match runtime semantics”** — not addressed; deferred. The recipe's `leftPrefix` / `rightPrefix` fields are not implemented.
 
-**Recipe status (after PR #154):** SHIPPED cleanly. Joined-manifest round-tripping is functional for any model whose joins reduce to single-key or multi-key equi (the typical case). For pathological joins (OR predicates, asymmetric key sets), the SQL-form fallback (`onExprString`) carries enough info for `expr(sql)` restoration — the warning surface is gone.
+**Recipe status (in v0.1.11):** SHIPPED cleanly. Joined-manifest round-tripping is functional for any model whose joins reduce to single-key or multi-key equi (the typical case). For pathological joins (OR predicates, asymmetric key sets), the SQL-form fallback (`onExprString`) carries enough info for `expr(sql)` restoration — the warning surface is gone.
 
 **Caveats preserved from the implementation:**
 
 - Alias-prefixed dim names like `carriers.name` from the YAML's `joins:` aliasing aren't preserved in the round-trip (they're flattened into the merged model and the per-side dims only carry the un-prefixed names). For consumers that need the full alias surface, re-load from YAML or call `joined.explainSemantic` for the runtime-resolved names.
 - The `on` lambda's `onExprString` rebuild uses `expr(sql)` which evaluates the SQL against the per-side scope. Tests confirm `l(id) === r(id)` style predicates round-trip end-to-end.
 
-## What works today (per PR #151)
-
+## What works today (in v0.1.11
 ```scala
 import io.semanticdf._
 import io.semanticdf.SemanticManifest
@@ -51,7 +50,7 @@ A worked example at `examples/joined-manifest/` exercises this end-to-end.
 
 ## 1. What this is (and what it isn't)
 
-The current manifest (PR #132) is intentionally single-table — recipe §10 documents that joined models throw at `toJson` time. This recipe proposes a separate `kind` for joined models so they can round-trip alongside the single-table form.
+The current manifest is intentionally single-table — recipe §10 documents that joined models throw at `toJson` time. This recipe proposes a separate `kind` for joined models so they can round-trip alongside the single-table form.
 
 **What it is:** a manifest schema for joined models, with both sides inlined as single-table manifests plus a `join` block. Carries enough information for a runtime with access to two source DataFrames to reconstruct the joined `SemanticTable` and query it.
 
@@ -127,7 +126,7 @@ The two embedded `left` / `right` blocks are **the same shape as the existing si
 | 2-way joins only | **Yes** | N-way joins can be expressed as 2-way chained, but the manifest should match the runtime's natural unit. `SemanticJoinOp` is 2-way; chained joins stay in YAML. |
 | `leftKeys` / `rightKeys` schema | **String arrays, ordered, equi-join only** | Mirrors the existing `SemanticJoinOp.on` (which is `Seq[(String, String)]`). Non-equi joins are out of scope. |
 | Prefix strategy | **Optional `leftPrefix` / `rightPrefix`, default `""`** | `SemanticJoinOp` has no prefix support today; consumers pick prefixes that avoid column collisions. When a prefix is needed, it's recorded in the manifest. The default of `""` matches the existing in-memory behavior. |
-| Joined-model `toJson` failure | **Throws `IllegalStateException`** | Same as the current recipe §10. The error message names the dispatch rule: `"semanticdf-joined-manifest is the joined-model kind; if you want a joined manifest, you must call SemanticManifest.toJoinedJson(joined, ...) which is not yet implemented. PR #141."` |
+| Joined-model `toJson` failure | **Throws `IllegalStateException`** | Same as the current recipe §10. The error message names the dispatch rule: `"semanticdf-joined-manifest is the joined-model kind; if you want a joined manifest, you must call SemanticManifest.toJoinedJson(joined, ...) which is not yet implemented. v0.1.11."` |
 | Backwards compat | **Existing single-table manifests parse unchanged** | The `kind` field is the discriminator. A consumer seeing `kind: "semanticdf-model-manifest"` reads the existing fields; seeing `semanticdf-joined-manifest` reads the new fields. |
 
 ## 5. API surface

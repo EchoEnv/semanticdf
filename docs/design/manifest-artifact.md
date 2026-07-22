@@ -1,10 +1,10 @@
 # Design Recipe: Manifest Artifact (`SemanticManifest.toJson` / `fromJson`)
 
-**Status:** SHIPPED (recipe was ACCEPTED; implementation landed in PR #132 for v0.1.9 — extended in PR #140 for calc measures and PR #132's example in PR #139)
+**Status:** SHIPPED (recipe was ACCEPTED)
 **Library version that emits this shape:** `0.1.9-manifest` (extended in `v0.1.11-manifest`)
 **Scope:** Single, additive feature (`SemanticManifest` object + `tools.Main manifest` route + tests). No op-tree changes. No new framework dependencies.
 
-> **Implementation note (carried from PR #132):** The recipe originally
+> **Implementation note:** The recipe originally
 > said "no new external dependencies." The implementation took a small
 > deviation: it uses **`jackson-databind` + `jackson-module-scala_2.13`**
 > (already a project dep via `semanticdf-mcp`, pinned to 2.15.2 to match
@@ -126,7 +126,7 @@ A **manifest** is the semantic model's *static definition* serialized as JSON. I
 | `digest` block | Top-level cheap counters | `jq` consumers want a one-look summary | Reasonable design. Should `digest` be a separate file (`flights.json + flights.digest.json`)? NO — one artifact, more atomic. |
 | `dimensions[].kind` field | `"time" \| "entity" \| "categorical" \| "derived-time"` | Distinguishes 4 cases | Simpler as 2 fields (`isTimeDimension: bool`, `isEntity: bool`, `isDerived: bool`)? PICK: `kind` is cleaner for non-tooling consumers; if you reject `kind`, the 3 bools default. |
 | `dimensions[].expr` | String form only | Lambda isn't serializable | Lossy — round-trip can't reconstruct the original lambda, only the string. See §5 (round-trip policy). |
-| `dimensions[].isDerived` | New flag for derived-time dims (added in PR #129) | Distinguishes auto-derived from user-declared | If you have no use for it, omit. I include it because today's code already has the field. |
+| `dimensions[].isDerived` | New flag for derived-time dims (added in v0.1.10+) | Distinguishes auto-derived from user-declared | If you have no use for it, omit. I include it because today's code already has the field. |
 | `measures[].dependsOn` | `Seq[String]` of base-measure names | Quick-glance dependency closure for calc measures | Computed at serialize time from the calc measure's AST — cheap. |
 | `filters[].appliedAt` | `"pre_aggregate" \| "post_aggregate"` | Currently we have `SemanticRowFilterOp` (pre) and `SemanticFilterOp` (post) | PICK: just 2 values. Future filter types would add new enum values. |
 | `joins[].cardinality` | `"many_to_one" \| "one_to_one" \| ...` | Already in the existing op | Pre-existing. |

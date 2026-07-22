@@ -1,8 +1,8 @@
 # Design Recipe: Streaming-Manifest Worked Example
 
-**Status:** SHIPPED (recipe was WORKING DRAFT pending tactical resolution of the BLOCK feedback; implementation landed in PR #143 for v0.1.11)
+**Status:** SHIPPED (recipe was WORKING DRAFT pending tactical resolution of the BLOCK feedback)
 **Library version that emits this shape:** `0.1.11-streaming-example`
-**Scope:** Docs + example only. **No library API change.** Closes the "no worked example for the streaming manifest read path" gap that the audit surfaced. The streaming manifest is already supported by the library (PR #132 records `isStreaming: true` in the digest; `fromJson` produces a `SemanticStreamingTableOp` for streaming sources). What's missing is a worked example showing the read path end-to-end.
+**Scope:** Docs + example only. **No library API change.** Closes the "no worked example for the streaming manifest read path" gap that the audit surfaced. The streaming manifest is already supported by the library (`isStreaming: true` is already recorded in the digest; `fromJson` produces a `SemanticStreamingTableOp` for streaming sources). What's missing is a worked example showing the read path end-to-end.
 
 ## 1. What this is (and what it isn't)
 
@@ -20,16 +20,16 @@ A worked example that demonstrates the **runtime half** of the streaming-manifes
                                          → StreamingQuery
 ```
 
-This is the streaming analog of the existing `manifest-load` example (PR #139). The example file lives at `examples/streaming-manifest-load/` (or extends the existing `streaming-events` example).
+This is the streaming analog of the existing `manifest-load` example. The example file lives at `examples/streaming-manifest-load/` (or extends the existing `streaming-events` example.
 
 **What it is NOT:**
 - ❌ A code change to `SemanticManifest` or the streaming terminal
 - ❌ A new manifest schema kind
-- ❌ A change to how the streaming terminal works (operator-side per PR #124)
+- ❌ A change to how the streaming terminal works (operator-side)
 
 ## 2. The gap this fills
 
-The streaming terminal (PR #124 boundary) requires:
+The streaming terminal (terminal boundary) requires:
 - A `StreamingConfig` (operator-side, NOT in the manifest)
 - A source `DataStream` (operator-side, NOT in the manifest)
 - The static model definition (THIS is what the manifest carries)
@@ -67,13 +67,13 @@ The example is self-contained: pre-built manifest + a streaming source that anyo
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| New example directory vs extend existing | **New `examples/streaming-manifest-load/`** | Same separation as `manifest-load` (PR #139) vs the rest. Each example has one job: one manifest artifact, one query. |
+| New example directory vs extend existing | **New `examples/streaming-manifest-load/`** | Same separation as `manifest-load` (v0.1.11) vs the rest. Each example has one job: one manifest artifact, one query. |
 | Streaming source for the example | **`spark.readStream.format("rate")`** | Self-contained, no external dependencies (no Kafka, no Parquet, no external infrastructure). The rate source gives a `timestamp, value` schema that demonstrates streaming query without needing a real source. |
 | Manifest artifact | **Generated from `examples/streaming-events/models/events.yml`** (re-generated to `events.json`) | Reuses an existing model. The streaming-events example already demonstrates the same model via the YAML loader, so the manifest is just an alternate view. |
 | Build via the new example? **Yes** — show the build (CI) half, then the load (runtime) half | Mirrors the manifest-load example's "Regenerate the manifest" section. Users see the full workflow in one place. |
 | Streaming source / model mismatch | **Documented** | The example uses a `rate` source whose schema (`timestamp, value`) doesn't match the `events.yml` model's dims (`timestamp_bucket`, `type`, `value`). The example only inspects metadata, not queries the stream; if it did query, the schema mismatch would surface as a clear error. |
 | `toStreamingQuery` duration | **5 seconds** | Long enough to demonstrate "stream is running", short enough to not slow CI / local test runs. Uses `awaitTermination` with a finite timeout. |
-| Operator-side `StreamingConfig` | **Built in the example, documented as "this is what YOU write in your app"** | Mirrors PR #124's documented boundary: the manifest captures the model, the operator captures the runtime config. |
+| Operator-side `StreamingConfig` | **Built in the example, documented as "this is what YOU write in your app"** | Mirrors the terminal layer's documented boundary: the manifest captures the model, the operator captures the runtime config. |
 
 ## 5. Files
 

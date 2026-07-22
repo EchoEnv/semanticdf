@@ -1,10 +1,10 @@
 # Design Recipe: `transforms:` Block in `SemanticManifest`
 
-**Status:** SHIPPED (recipe was DRAFT-BLOCK on 2026-07-22; implementation landed in PR #149 for v0.1.11)
+**Status:** SHIPPED (recipe was DRAFT-BLOCK on 2026-07-22)
 **Library version that emits this shape:** `0.1.11-transforms`
 **Scope:** Single, additive feature. Extends the manifest schema with a `transforms: [...]` field paralleling `dimensions` and `measures`. Replays transforms on `fromJson`. No breaking wire changes.
 
-## Implementation notes (from PR #149)
+## Implementation notes
 
 The BLOCK on this recipe (Transform needs `exprString`) was resolved by adding the field to the case class. Implementation summary:
 
@@ -20,7 +20,7 @@ A worked example at `examples/manifest-transforms-load/` exercises the round-tri
 
 ## 1. What this is (and what it isn't)
 
-The current manifest (PR #132, refined in #139 and #140) supports per-row `transforms:` from the YAML loader side, but does NOT carry the transform expressions across the serialization boundary. Models that depend on transform-produced columns (like `operations-analytics/orders` with its `ship_days` and `on_time_flag`) cannot be loaded from a manifest without first re-applying the transforms to the source DF.
+The current manifest (refined across multiple releases) supports per-row `transforms:` from the YAML loader side, but does NOT carry the transform expressions across the serialization boundary. Models that depend on transform-produced columns (like `operations-analytics/orders` with its `ship_days` and `on_time_flag`) cannot be loaded from a manifest without first re-applying the transforms to the source DF.
 
 This recipe adds a `transforms: [...]` field to the manifest. `fromJson` replays the per-row computations on the source DF before constructing the model.
 
@@ -92,7 +92,7 @@ The manifest gains a new field paralleling `dimensions` and `measures`:
 | Decision | Choice | Rationale |
 |---|---|---|
 | Add new field vs. extend existing | **New `transforms: []` field** | Parallel to `dimensions` and `measures` — same shape (`{name, expr}`), same place in the JSON. Writer reads them once and passes them to the new `withTransforms` op. |
-| Backwards compat | **Existing manifests without `transforms:` parse unchanged** | The field is optional. `fromJson` checks for its presence; if absent, no transforms are applied. The reader is tolerant (tolerated-extra-fields pattern, established in PR #140). |
+| Backwards compat | **Existing manifests without `transforms:` parse unchanged** | The field is optional. `fromJson` checks for its presence; if absent, no transforms are applied. The reader is tolerant (tolerated-extra-fields pattern, established by the unknown-fields tolerance). |
 | Replay mechanism | **In `fromJson`, before constructing the model** | Mirrors the YAML loader: the source DF is `withColumn`-ed for each transform, then the transformed DF becomes the model's root. The order of transforms is preserved (manifest is an array). |
 | Transform expression semantics | **`F.expr` per transform, evaluated on the source DF** | Exactly the same as `YamlLoader`'s current behavior (which uses `SemanticTransformsOp`). No semantic divergence between YAML and manifest. |
 | Streaming transforms | **Allowed for batch only in v1** | A streaming model can't have transforms in the YAML loader today (`SemanticTransformsOp` requires a `Dataset`, not a `DataStream`). The manifest should refuse transforms on a streaming source: `toJson` throws a clear `IllegalArgumentException`. |
