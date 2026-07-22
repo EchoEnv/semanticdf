@@ -1,0 +1,16 @@
+customer_id,name,email,signup_date,city
+C001,Alice Chen,alice@example.com,2023-01-15,Boston
+C002,Bob Diaz,bob@example.com,2023-02-20,Chicago
+C003,Carla Singh,carla@example.com,2023-03-10,Austin
+C004,Dan Murphy,dan@example.com,2023-04-05,Seattle
+C005,Eve Park,eve@example.com,2023-05-12,New York
+C006,Frank Wu,frank@example.com,2023-06-18,San Francisco
+C007,Grace Kim,grace@example.com,2023-07-22,Denver
+C008,Henry Lopez,henry@example.com,2023-08-30,Portland
+C009,Iris Patel,iris@example.com,2023-09-14,Boston
+C010,Jack Tan,jack@example.com,2023-10-25,Chicago
+C011,Kira Brown,kira@example.com,2023-11-08,Austin
+C012,Liam Wang,liam@example.com,2023-12-19,Seattle
+C013,Maya Singh,maya@example.com,2024-01-05,New York
+C014,Noah Lee,noah@example.com,2024-02-11,San Francisco
+C015,Olivia Kim,olivia@example.com,2024-03-15,Denver

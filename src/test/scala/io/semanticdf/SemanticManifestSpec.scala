@@ -2,6 +2,7 @@ package io.semanticdf
 
 import scala.io.Source
 
+import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.spark.sql.{Row, functions => F}
 import org.apache.spark.sql.types._
 import org.scalatest.funspec.AnyFunSpec
@@ -53,20 +54,24 @@ class SemanticManifestSpec
 
       val json = SemanticManifest.toJson(model)
       SemanticManifest.parseMeta(json) shouldBe ManifestMeta(
-        schemaVersion = SemanticManifest.CurrentSchemaVersion,
-        kind          = "semanticdf-model-manifest",
-        modelName     = Some("kpi_facts"),
-        version       = 7,
-        description   = Some("the kpi facts table"),
-        sourceTable   = Some("kpi_facts_raw"),
-        status        = "published",
-        dimensions    = 1,
-        measures      = 1,
-        calcMeasures  = 0,
-        joins         = 0,
-        filters       = 0,
-        isStreaming   = false,
-        usesTAll      = false,
+        schemaVersion   = SemanticManifest.CurrentSchemaVersion,
+        kind            = "semanticdf-model-manifest",
+        manifestVersion = Some(SemanticManifest.InitialManifestVersion),
+        id              = None,
+        namespace       = Some("default"),
+        metadata        = Map.empty,
+        modelName       = Some("kpi_facts"),
+        version         = 7,
+        description     = Some("the kpi facts table"),
+        sourceTable     = Some("kpi_facts_raw"),
+        status          = "published",
+        dimensions      = 1,
+        measures        = 1,
+        calcMeasures    = 0,
+        joins           = 0,
+        filters         = 0,
+        isStreaming     = false,
+        usesTAll        = false,
       )
 
       // Round-trip should give back a working model with the same identity.
@@ -77,6 +82,127 @@ class SemanticManifestSpec
       round.version shouldBe 7
       round.dimensions.keySet shouldBe Set("kind")
       round.measures.keySet shouldBe Set("count")
+    }
+
+    // -- 1b. identity fields (added in v0.1.11) -------------------------------
+
+    it("id-round-trips via the new two-arg toJson") {
+      // The single-arg toJson passes Identity.empty (back-compat for tests).
+      // The two-arg toJson with an explicit Identity emits the new fields.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df, name = Some("kpi_facts"))
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val identity = SemanticManifest.Identity(
+        id              = "io.semanticdf.examples.manifest_load.kpi_facts",
+        manifestVersion = "0.1.0",
+        namespace       = "default",
+        metadata        = Map("author" -> "data-platform-team", "license" -> "Apache-2.0"),
+      )
+      val json = SemanticManifest.toJson(model, identity)
+      val pm = SemanticManifest.parseMeta(json)
+      pm.id shouldBe Some("io.semanticdf.examples.manifest_load.kpi_facts")
+      pm.manifestVersion shouldBe Some("0.1.0")
+      pm.namespace shouldBe Some("default")
+      pm.metadata shouldBe Map("author" -> "data-platform-team", "license" -> "Apache-2.0")
+    }
+
+    it("id-absent-omits-field (single-arg toJson uses Identity.empty)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val json = SemanticManifest.toJson(model)
+      val parsed = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json)
+      parsed.has("id") shouldBe false
+      parsed.has("metadata") shouldBe false
+      // The single-arg path uses defaults; parseMeta still exposes them.
+      SemanticManifest.parseMeta(json).id shouldBe None
+      SemanticManifest.parseMeta(json).metadata shouldBe Map.empty
+    }
+
+    it("namespace-round-trips") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val id1 = SemanticManifest.Identity(id = "x.y.z", namespace = "dev")
+      val id2 = SemanticManifest.Identity(id = "x.y.z", namespace = "prod")
+      val pm1 = SemanticManifest.parseMeta(SemanticManifest.toJson(model, id1))
+      val pm2 = SemanticManifest.parseMeta(SemanticManifest.toJson(model, id2))
+      pm1.namespace shouldBe Some("dev")
+      pm2.namespace shouldBe Some("prod")
+    }
+
+    it("metadata-round-trips (flat string values only)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val id = SemanticManifest.Identity(
+        id       = "x.y.z",
+        metadata = Map("author" -> "alice", "license" -> "Apache-2.0", "tags" -> "kpi,orders"),
+      )
+      val pm = SemanticManifest.parseMeta(SemanticManifest.toJson(model, id))
+      pm.metadata shouldBe Map("author" -> "alice", "license" -> "Apache-2.0", "tags" -> "kpi,orders")
+    }
+
+    it("manifestVersion-round-trips") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val id = SemanticManifest.Identity(id = "x.y.z", manifestVersion = "1.0.0")
+      val pm = SemanticManifest.parseMeta(SemanticManifest.toJson(model, id))
+      pm.manifestVersion shouldBe Some("1.0.0")
+    }
+
+    it("$schema-url-is-emitted-and-is-the-raw-github-form") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMeasures(Measure("c", _ => F.lit(1), exprString = Some("count(1)")))
+      val id = SemanticManifest.Identity(id = "x.y.z")
+      val parsed = new com.fasterxml.jackson.databind.ObjectMapper().readTree(
+        SemanticManifest.toJson(model, id))
+      parsed.get("$schema").asText() shouldBe SemanticManifest.SchemaUrl
+      parsed.get("$schema").asText() should startWith("https://raw.githubusercontent.com/")
+    }
+
+    it("old-manifest-still-parses (v0.1.9 and v0.1.10 lack new fields)") {
+      // SchemaVersion is bumped to v0.1.11 but the reader accepts
+      // v0.1.9 and v0.1.10 via the prefix match.
+      for (sv <- Seq("v0.1.9-manifest", "v0.1.10-manifest", "v0.1.11-manifest")) {
+        val json =
+          s"""{
+            |  "schemaVersion": "$sv",
+            |  "kind": "semanticdf-model-manifest",
+            |  "model": { "name": "kpi", "version": 0, "status": "published" }
+            |}""".stripMargin
+        val pm = SemanticManifest.parseMeta(json)
+        pm.schemaVersion shouldBe sv
+        pm.kind shouldBe "semanticdf-model-manifest"
+        pm.modelName shouldBe Some("kpi")
+      }
+    }
+
+    it("parseMeta-source-free works on a manifest with no source DF") {
+      // parseMeta is metadata-only; no DataFrame is required.
+      val json =
+        """{
+          |  "schemaVersion": "v0.1.11-manifest",
+          |  "kind": "semanticdf-model-manifest",
+          |  "model": { "name": "kpi" }
+          |}""".stripMargin
+      SemanticManifest.parseMeta(json).modelName shouldBe Some("kpi")
     }
 
     // -- 2. round-trip-preserves-dims-and-measures ----------------------------

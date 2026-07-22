@@ -609,7 +609,12 @@ The string format is **wire-stable**. Renaming is a breaking change.
  the closed table above. No exception invented in the adapter.
 3. **No mutating endpoints in v1.** All tools are read-only.
 4. **Single SparkSession**, shared across calls. Never create one per request.
-5. **Logs to stderr only.** stdout = JSON-RPC. (MCP hard requirement.)
+5. **Logs to stderr only.** stdout = JSON-RPC. (MCP hard requirement.) 
+6. **`SemanticManifest` JSON shape** includes optional identity and governance
+ fields (`id`, `manifestVersion`, `$schema`, `namespace`, `metadata`). The
+ MCP server itself does NOT surface the manifest today — manifests are an
+ operator-emitted artifact. If a future MCP tool exposes a manifest
+ (e.g. `publish_manifest`), the request schema must mirror `manifest-version: v0.1.11-manifest` (prefix-matched) and the response should include the same `id`, `namespace`, `metadata` fields for round-tripping through downstream catalogs.
 6. **`closestMatch` for typos.** Server reuses `io.semanticdf.closestMatch` for
  typo suggestions. No hand-rolled Levenshtein in the adapter layer.
 7. **`RESULT_TOO_LARGE` is a fast rejection.** Check the projected limit

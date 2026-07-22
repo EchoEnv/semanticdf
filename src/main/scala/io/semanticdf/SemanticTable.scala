@@ -1649,6 +1649,20 @@ final class SemanticTable private[semanticdf] (
     * Returns None for anonymous models (no name was ever assigned). */
   def name: Option[String] = resolveRootModel.name
 
+  /** True if the table's root op is a join (i.e. the model was built by
+    * one or more `join_inner` / `join_cross` / `join_outer` calls, or
+    * carries a YAML `joins:` block). Used by writers and CLI tools to
+    * decide between single-table vs joined manifests.
+    *
+    * Mirrors `SemanticManifest.toJson`'s writer behavior: emitting a
+    * manifest for a joined table throws `IllegalStateException` (recipe
+    * §10 anti-scope). Callers should branch on `isJoined` BEFORE
+    * calling `toJson` so the failure mode is `if/else`, not `try/catch`. */
+  def isJoined: Boolean = root match {
+    case _: SemanticJoinOp => true
+    case _                  => false
+  }
+
   /** Human-readable description declared on this semantic table, if any. Set by
     * `toSemanticTable(description=)` or the YAML `description:` field. */
   def description: Option[String] = resolveRootModel.description
