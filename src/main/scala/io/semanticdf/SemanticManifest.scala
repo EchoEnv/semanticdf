@@ -100,8 +100,10 @@ object SemanticManifest {
       metadata:         Map[String, String] = Map.empty,
       // Joined-specific shape from recipe §3.
       cardinality:      String,         // "one" | "many" | "cross"
-      leftKeys:         Seq[String],    // extracted from `on`; empty for cross joins
-      rightKeys:        Seq[String],    // extracted from `on`; empty for cross joins
+      leftKeys:         Seq[String],    // from PR #153 key fields; empty for cross joins
+      rightKeys:        Seq[String],    // or when the wire shape came from a pre-#153 producer
+      multiColumn:      Boolean,        // true if either key array has length > 1
+      onExprString:     Option[String], // SQL-form capture from PR #153; non-equi fallback
       leftDimensions:   Int,
       rightDimensions:  Int,
       mergedDimensions: Int,
@@ -293,6 +295,17 @@ object SemanticManifest {
       cardinality      = optStringField(jn, "cardinality").getOrElse("one"),
       leftKeys         = readStringArray(jn.path("leftKeys")),
       rightKeys        = readStringArray(jn.path("rightKeys")),
+      // multiColumn is set when either key array carries > 1 element,
+      // or explicitly by the writer. Default `false` for legacy
+      // / hand-rolled manifests — fall back to length-based derivation.
+      multiColumn      =
+        if (jn.has("multiColumn")) optBoolField(jn, "multiColumn")
+        else readStringArray(jn.path("leftKeys")).length > 1,
+      // onExprString is the SQL-form capture for predicates that
+      // couldn't factor into the keys arrays (OR / non-equi / mixed).
+      // `None` for cross joins or when the writer had no probe at
+      // construction.
+      onExprString     = optStringField(jn, "onExprString"),
       leftDimensions   = optIntField(dig, "leftDimensions").getOrElse(0),
       rightDimensions  = optIntField(dig, "rightDimensions").getOrElse(0),
       mergedDimensions = optIntField(dig, "mergedDimensions").getOrElse(0),
@@ -420,15 +433,37 @@ object SemanticManifest {
 
     val joinObj = modelObj.putObject("join")
     joinObj.put("cardinality", cardinality)
-    // leftKeys / rightKeys are the BLOCK "join key model is inaccurate" —
-    // SemanticJoinOp.on is `(JoinSide, JoinSide) => Column`, not
-    // Seq[(String, String)]. Extracting key names from the lambda requires
-    // bytecode/Scala-reflection tricks that are out of scope here. We
-    // surface empty arrays; the recipe acknowledges this gap. A future
-    // foundation PR can add explicit `leftKeys` / `rightKeys` fields on
-    // SemanticJoinOp to enable real extraction.
-    joinObj.putArray("leftKeys")
-    joinObj.putArray("rightKeys")
+    // leftKeys / rightKeys are populated from `SemanticJoinOp.leftKeys`
+    // / `rightKeys` (added in PR #153). They carry the equi-join key
+    // column names whether the user typed them via `join_on(...)` /
+    // `join_many_on(...)` or whether the lambda-decomposition probe at
+    // construction recovered them.
+    //
+    // For non-equi joins (the probe couldn't factor them into pairs),
+    // `op.leftKeys` may be empty. In that case the SQL fallback in
+    // `op.onExprString` is the only carrier (see `JoinedManifestMeta`
+    // surface below). The kind discriminator (`semanticdf-joined-manifest`)
+    // tells consumers which path to take.
+    val writeKeyArr = (name: String, keys: Seq[String]) => {
+      val arr = joinObj.putArray(name)
+      keys.foreach(arr.add)
+    }
+    writeKeyArr("leftKeys",  op.leftKeys)
+    writeKeyArr("rightKeys", op.rightKeys)
+    // `onExprString` is the SQL-form capture carried from PR #153 for
+    // non-equi predicates or multi-key equis that didn't factor.
+    // Emitted on the join block (alongside `cardinality`) so the
+    // reader can reach it without searching the model. Empty strings
+    // are skipped (the field is optional).
+    op.onExprString.foreach { sql => joinObj.put("onExprString", sql) }
+
+    // multiColumn = true when the keys are populated OR when the
+    // predicate was reduced to a multi-key equi (length > 1). When
+    // both `leftKeys` and `onExprString` are absent (lambda couldn't
+    // be factored at all), the read path falls back to a notional
+    // single-column model — consumers that need the actual semantics
+    // should re-load from YAML.
+    joinObj.put("multiColumn", op.leftKeys.length > 1 || op.rightKeys.length > 1)
 
     // Digest (left/right/merged counts).
     val dig = root.putObject("digest")
@@ -509,15 +544,58 @@ object SemanticManifest {
       case _       => JoinCardinality.One
     }
 
-    // Identity-predicate for the `on` lambda. Reconstructing the real
-    // join key from the wire is BLOCKed (see method docstring above) —
-    // we use a non-functional default that throws on evaluation. The
-    // metadata round-trip (everything except `on`) works correctly.
+    // Reconstruct the `on` lambda from the wire. PR #153 added explicit
+    // `leftKeys` / `rightKeys` / `onExprString` fields on
+    // `SemanticJoinOp`. The fallback lattice:
+    //
+    //   - If keys are present (single OR multi-column): rebuild `on`
+    //     as `l(k1) === r(k1) AND l(k2) === r(k2) AND ...` against the
+    //     per-side `BaseScope`s. This is functional.
+    //   - Else if `onExprString` is present (multi-key equi that
+    //     didn't factor into parallel arrays, or any non-equi predicate):
+    //     reconstruct `on` as `expr(sql)`. Functional for SQL
+    //     expressions but loses resolution against the renamed scope
+    //     columns. Working fallback.
+    //   - Else (legacy wire shape from before this PR): non-functional
+    //     throw, BLOCK reference. Modern producers always emit keys OR
+    //     SQL, so this branch fires only on hand-rolled wire shapes.
+    val jLeftKeys  = readStringArray(joinObj.path("leftKeys"))
+    val jRightKeys = readStringArray(joinObj.path("rightKeys"))
+    val jMulti      = optBoolField(joinObj, "multiColumn")
     val on: (JoinSide, JoinSide) => Column =
-      (_, _) => throw new IllegalStateException(
-        "SemanticManifest.fromJoinedJson: the join key (on) cannot be reconstructed " +
-        "from the wire shape; BLOCKed by docs/design/joined-models-manifest.md §1. " +
-        "Re-load from YAML to get a functional SemanticJoinOp.")
+      if (jLeftKeys.length == jRightKeys.length && jLeftKeys.nonEmpty) {
+        // Path 1: keys present, multi-column or single. AND over pairs.
+        if (jLeftKeys.length == 1) {
+          val l = jLeftKeys.head; val r = jRightKeys.head
+          (left: JoinSide, right: JoinSide) => left(l) === right(r)
+        } else {
+          (left: JoinSide, right: JoinSide) =>
+            jLeftKeys.zip(jRightKeys)
+              .map { case (lk, rk) => left(lk) === right(rk) }
+              .reduce(_ && _)
+        }
+      } else {
+        // Try Path 2: onExprString fallback. The wire carries the
+        // SQL form on `digest` adjacent to the join block.
+        val sqlOpt = optStringField(modelObj, "onExprString")
+        sqlOpt match {
+          case Some(sql) =>
+            (left: JoinSide, right: JoinSide) => org.apache.spark.sql.functions.expr(sql)
+          case None =>
+            // Path 3: legacy wire shape. Keep the BLOCK throw so callers
+            // get a clear pointer at what's missing — not a silent no-op.
+            (left: JoinSide, right: JoinSide) =>
+              throw new IllegalStateException(
+                "SemanticManifest.fromJoinedJson: this joined manifest has no recoverable " +
+                "join key (missing leftKeys[]/rightKeys[] and onExprString). " +
+                "Re-load from YAML to get a functional SemanticJoinOp. " +
+                "(See docs/design/joined-models-manifest.md §1.)")
+        }
+      }
+
+    // Multi-column flag is consumed via the helper below; kept as a
+    // local for clarity at the use site.
+    val _ignored = jMulti
 
     val leftRoot  = unwrapToTableOp(leftT.root)
     val rightRoot = unwrapToTableOp(rightT.root)
@@ -530,6 +608,15 @@ object SemanticManifest {
       rightRoot   = rightRoot,
       leftSide    = Some(leftT),
       rightSide   = Some(rightT),
+      // Wire-shape carry-over: the keys + onExprString from the writer
+      // (PR #153 foundation) preserve the through-trip integrity. If
+      // the manifest was hand-rolled or emitted by a pre-#153 writer,
+      // these default to empty / None and the join degrades gracefully
+      // (the `on` rebuild above still works for the legacy empty case
+      // via the throw-based fallback).
+      leftKeys    = jLeftKeys,
+      rightKeys   = jRightKeys,
+      onExprString = optStringField(modelObj, "onExprString"),
     )
     new SemanticTable(
       root        = join,

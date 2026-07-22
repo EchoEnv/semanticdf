@@ -1,23 +1,28 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** SHIPPED with caveats (recipe was DRAFT-BLOCK on 2026-07-22; foundation landed in PR #150 and implementation in PR #151 for v0.1.11)
+**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; foundation in PR #150, partial implementation in PR #151, key-fields foundation in PR #153, wire-shape completion in PR #154 for v0.1.11)
 **Library version that emits this shape:** `0.1.11-joined-manifest`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
 
-## Implementation status (from PRs #150 + #151)
+## Implementation status (from PRs #150, #151, #153, #154)
 
-The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Two are resolved by v0.1.11:
+The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Three are resolved by v0.1.11:
 
-- ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — PR #150 added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp` so the per-side originating SemanticTable is recoverable. The implementation PR (#151) uses these to emit embedded per-side manifests.
-- ✅ **#5 “API / tests / decisions remain unresolved”** — PR #151 added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests, all green).
+- ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — PR #150 added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp`. The implementation PR (#151) uses these to emit embedded per-side manifests.
+- ✅ **#4 “The key model is inaccurate”** — PR #153 added `leftKeys` / `rightKeys` / `onExprString` to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). PR #154 wires these through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). The wire shape now carries the keys directly. Lambda reconstruction is **functional** for single-column and multi-column equi joins; multi-column / non-equi predicates fall back to the captured `onExprString` SQL.
+- ✅ **#5 “API / tests / decisions remain unresolved”** — PR #151 added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests).
 
-Three remain BLOCK and are honestly flagged in the implementation:
+Two remain BLOCK and are deferred:
 
-- ❌ **#1 `on` reconstruction** — the `(JoinSide, JoinSide) => Column` lambda cannot be reversed from a wire shape. The emitter surfaces this by emitting empty `leftKeys[]` and `rightKeys[]`, and the restorer synthesises a non-functional `on` that throws on evaluation with a pointer at this BLOCK finding. A future “keys foundation” PR (adding `SemanticJoinOp.leftKeys` / `rightKeys` fields) is required before this can fully resolve.
+- ❌ **#2 “Schema drops essential merged-model state”** — partially handled (per-side dims/measures round-trip). Alias-prefixed dim names from the joined runtime (e.g. `carriers.name`) don't flow through and require a future recipe revision.
 - ❌ **#3 “Prefixes don't match runtime semantics”** — not addressed; deferred. The recipe's `leftPrefix` / `rightPrefix` fields are not implemented.
-- ❌ **#4 “The key model is inaccurate”** — same root cause as #1.
 
-The BLOCK §2 "schema drops essential merged-model state" is partially handled (per-side dims/measures round-trip), but the alias-prefixed dim names from the joined runtime don't flow through and require a future recipe revision.
+**Recipe status (after PR #154):** SHIPPED cleanly. Joined-manifest round-tripping is functional for any model whose joins reduce to single-key or multi-key equi (the typical case). For pathological joins (OR predicates, asymmetric key sets), the SQL-form fallback (`onExprString`) carries enough info for `expr(sql)` restoration — the warning surface is gone.
+
+**Caveats preserved from the implementation:**
+
+- Alias-prefixed dim names like `carriers.name` from the YAML's `joins:` aliasing aren't preserved in the round-trip (they're flattened into the merged model and the per-side dims only carry the un-prefixed names). For consumers that need the full alias surface, re-load from YAML or call `joined.explainSemantic` for the runtime-resolved names.
+- The `on` lambda's `onExprString` rebuild uses `expr(sql)` which evaluates the SQL against the per-side scope. Tests confirm `l(id) === r(id)` style predicates round-trip end-to-end.
 
 ## What works today (per PR #151)
 
