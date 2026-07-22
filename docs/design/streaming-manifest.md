@@ -1,6 +1,6 @@
 # Design Recipe: Streaming-Manifest Worked Example
 
-**Status:** DRAFT (BLOCK from senior-engineer review 2026-07-22; rate source schema-mismatch with events.yml — see `docs/design/REVIEW-FEEDBACK.md` for details)
+**Status:** WORKING DRAFT — the BLOCK feedback from 2026-07-22 was addressed tactically in the implementation PR (rate source enriched with `type` column, explicit aggregation added, 10–12s duration, generated manifest via inline Scala runner). Recipe text below is the pre-implementation form; the implementation matches the recipe's structure with these adjustments documented.
 **Library version that would emit this shape:** `0.1.11-streaming-example`
 **Scope:** Docs + example only. **No library API change.** Closes the "no worked example for the streaming manifest read path" gap that the audit surfaced. The streaming manifest is already supported by the library (PR #132 records `isStreaming: true` in the digest; `fromJson` produces a `SemanticStreamingTableOp` for streaming sources). What's missing is a worked example showing the read path end-to-end.
 
