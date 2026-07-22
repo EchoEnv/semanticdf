@@ -88,6 +88,18 @@
     },
     "joins":     { "type": "array" },
     "filters":   { "type": "array" },
+    "transforms": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "expr"],
+        "properties": {
+          "name":        { "type": "string" },
+          "expr":        { "type": "string" },
+          "description": { "type": ["string", "null"] }
+        }
+      }
+    },
     "digest":    { "type": "object" },
     "warnings":  { "type": "array", "items": { "type": "string" } }
   }

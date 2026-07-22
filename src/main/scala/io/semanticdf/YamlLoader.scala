@@ -585,7 +585,7 @@ object YamlLoader {
   ): (Transform, Set[String]) = {
     val (exprStr, description, _) = parseMetricConfig(cfg, "transform", name)
     ExpressionValidator.validate(exprStr, visibleColumns, "transform", modelName, name)
-    (Transform(name, _ => expr(exprStr), description), visibleColumns + name)
+    (Transform(name, _ => expr(exprStr), description, exprString = Some(exprStr)), visibleColumns + name)
   }
 
   /** Build a base [[Measure]] from the `measures:` section.
