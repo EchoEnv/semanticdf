@@ -104,6 +104,15 @@ object SemanticManifest {
       rightKeys:        Seq[String],    // or when the wire shape came from a pre-#153 producer
       multiColumn:      Boolean,        // true if either key array has length > 1
       onExprString:     Option[String], // SQL-form capture from PR #153; non-equi fallback
+      // Path C: prefix fields (recipe §3.6, caveat §1.3). Optional;
+      // empty string when not set (= canonical post-v0.1.11 producer case).
+      leftPrefix:       String = "",
+      rightPrefix:      String = "",
+      // Path C: extra dims/measures from the joined runtime
+      // (recipe §1.2 caveat). Mirrors the writer's extra_dimensions[] /
+      // extra_measures[] blocks. Defaults to zero for legacy manifests.
+      extraDimensions:  Int = 0,
+      extraMeasures:    Int = 0,
       leftDimensions:   Int,
       rightDimensions:  Int,
       mergedDimensions: Int,
@@ -313,6 +322,15 @@ object SemanticManifest {
       rightMeasures    = optIntField(dig, "rightMeasures").getOrElse(0),
       mergedMeasures   = optIntField(dig, "mergedMeasures").getOrElse(0),
       isStreaming      = optBoolField(dig, "isStreaming"),
+      // Path C caveat §1.3: optional prefix fields.
+      leftPrefix       = optStringField(jn, "leftPrefix").getOrElse(""),
+      rightPrefix      = optStringField(jn, "rightPrefix").getOrElse(""),
+      // Path C caveat §1.2: optional extra dims/measures counts.
+      // Derived from the actual `model.extra_dimensions[]` /
+      // `model.extra_measures[]` arrays in the wire shape (not from
+      // the digest). Falls back to 0 for legacy manifests.
+      extraDimensions  = readStringArray(mod.path("extra_dimensions")).length,
+      extraMeasures    = readStringArray(mod.path("extra_measures")).length,
     )
   }
 
@@ -433,6 +451,14 @@ object SemanticManifest {
 
     val joinObj = modelObj.putObject("join")
     joinObj.put("cardinality", cardinality)
+    // Path C: optional join-side prefix fields (recipe §3.6, caveat §1.3).
+    // When set, the consumer is expected to qualify the right/left side
+    // columns accordingly. The reconstructed `on` lambda at restore time
+    // applies them so the predicate reads
+    // `l("<leftPrefix>k1") === r("<rightPrefix>k1")` when set. Omitted when
+    // both are empty (the canonical post-v0.1.11 producer case).
+    if (op.leftPrefix.nonEmpty)  joinObj.put("leftPrefix",  op.leftPrefix)
+    if (op.rightPrefix.nonEmpty) joinObj.put("rightPrefix", op.rightPrefix)
     // leftKeys / rightKeys are populated from `SemanticJoinOp.leftKeys`
     // / `rightKeys` (added in PR #153). They carry the equi-join key
     // column names whether the user typed them via `join_on(...)` /
@@ -464,6 +490,33 @@ object SemanticManifest {
     // single-column model — consumers that need the actual semantics
     // should re-load from YAML.
     joinObj.put("multiColumn", op.leftKeys.length > 1 || op.rightKeys.length > 1)
+
+    // Path C: emit `extra_dimensions` and `extra_measures` blocks for
+    // the alias-prefixed dimensions and measures that YamlLoader adds at
+    // runtime (e.g. `carriers.name` from a `joins: [customers]`
+    // aliasing). These live on `SemanticJoinOp.extraDimensions` /
+    // `extraMeasures` and are otherwise dropped on the wire. Skipped
+    // when empty (legacy manifests don't carry the field).
+    if (op.extraDimensions.nonEmpty) {
+      val arr = modelObj.putArray("extra_dimensions")
+      op.extraDimensions.values.foreach { d =>
+        val obj = arr.addObject()
+        obj.put("name", d.name)
+        obj.put("kind", dimKind(d))
+        obj.put("expr", d.exprString.getOrElse(LambdaSentinel))
+        putOptString(obj, "description", d.description)
+      }
+    }
+    if (op.extraMeasures.nonEmpty) {
+      val arr = modelObj.putArray("extra_measures")
+      op.extraMeasures.values.foreach { m =>
+        val obj = arr.addObject()
+        obj.put("name", m.name)
+        obj.put("kind", "base")
+        obj.put("expr", m.exprString.getOrElse(LambdaSentinel))
+        putOptString(obj, "description", m.description)
+      }
+    }
 
     // Digest (left/right/merged counts).
     val dig = root.putObject("digest")
@@ -559,19 +612,33 @@ object SemanticManifest {
     //   - Else (legacy wire shape from before this PR): non-functional
     //     throw, BLOCK reference. Modern producers always emit keys OR
     //     SQL, so this branch fires only on hand-rolled wire shapes.
-    val jLeftKeys  = readStringArray(joinObj.path("leftKeys"))
-    val jRightKeys = readStringArray(joinObj.path("rightKeys"))
+    val jLeftKeys   = readStringArray(joinObj.path("leftKeys"))
+    val jRightKeys  = readStringArray(joinObj.path("rightKeys"))
     val jMulti      = optBoolField(joinObj, "multiColumn")
+    // Path C: prefix fields (recipe §3.6, caveat §1.3). Optional;
+    // default empty (= no prefix, canonical post-v0.1.11 producer case).
+    val jLeftPrefix  = optStringField(joinObj, "leftPrefix").getOrElse("")
+    val jRightPrefix = optStringField(joinObj, "rightPrefix").getOrElse("")
     val on: (JoinSide, JoinSide) => Column =
       if (jLeftKeys.length == jRightKeys.length && jLeftKeys.nonEmpty) {
         // Path 1: keys present, multi-column or single. AND over pairs.
+        // Apply the per-side prefix when reconstructing the predicate
+        // (Path C caveat §1.3): the predicate becomes
+        //   l("<leftPrefix>k1") === r("<rightPrefix>k1")
+        // so joined DataFrames with overlapping column names resolve
+        // correctly. Empty prefix = bare column name (default).
         if (jLeftKeys.length == 1) {
-          val l = jLeftKeys.head; val r = jRightKeys.head
-          (left: JoinSide, right: JoinSide) => left(l) === right(r)
+          val l = jLeftKeys.head
+          val r = jRightKeys.head
+          val lP = jLeftPrefix
+          val rP = jRightPrefix
+          (left: JoinSide, right: JoinSide) => left(s"$lP$l") === right(s"$rP$r")
         } else {
+          val lP = jLeftPrefix
+          val rP = jRightPrefix
           (left: JoinSide, right: JoinSide) =>
             jLeftKeys.zip(jRightKeys)
-              .map { case (lk, rk) => left(lk) === right(rk) }
+              .map { case (lk, rk) => left(s"$lP$lk") === right(s"$rP$rk") }
               .reduce(_ && _)
         }
       } else {
@@ -599,7 +666,17 @@ object SemanticManifest {
 
     val leftRoot  = unwrapToTableOp(leftT.root)
     val rightRoot = unwrapToTableOp(rightT.root)
-    val join = SemanticJoinOp(
+
+    // Read Path C: extra_dimensions[] and extra_measures[] from the
+    // wire shape (Path C closes the alias-prefixed dim caveat §1.2).
+    // These are the alias-prefixed dimensions/measures that YamlLoader
+    // adds at runtime (e.g. `carriers.name` from a `joins: [customers]`
+    // aliasing). We attach them via a `SemanticTransformsOp` wrapper
+    // around the base join, matching the runtime's exact wiring.
+    val jExtraDims = readArr(modelObj, "extra_dimensions").flatMap(readDimension).toMap
+    val jExtraMeasures = readArr(modelObj, "extra_measures").flatMap(readMeasure).toMap
+
+    val baseJoin = SemanticJoinOp(
       left   = leftRoot,
       right  = rightRoot,
       on     = on,
@@ -617,9 +694,48 @@ object SemanticManifest {
       leftKeys    = jLeftKeys,
       rightKeys   = jRightKeys,
       onExprString = optStringField(modelObj, "onExprString"),
+      // Path C: also carry the extra dims/measures so the runtime
+      // identity (alias-prefixed dims, etc.) is preserved.
+      extraDimensions = jExtraDims,
+      extraMeasures   = jExtraMeasures,
+      // Path C: prefix fields carry through (caveat §1.3).
+      leftPrefix      = jLeftPrefix,
+      rightPrefix     = jRightPrefix,
     )
+
+    // If the writer emitted extra dims/measures, attach them via a
+    // SemanticTransformsOp wrapper. Each Dimension/Measure becomes a
+    // Transform that resolves its column at runtime against the joined
+    // DataFrame's scope — the same shape YamlLoader produces.
+    val finalRoot: SemanticOp =
+      if (jExtraDims.nonEmpty || jExtraMeasures.nonEmpty) {
+        val transforms: Seq[Transform] =
+          jExtraDims.values.toSeq.map { d =>
+            val t: Transform = d.exprString match {
+              case Some(expr) =>
+                Transform(d.name, _ => org.apache.spark.sql.functions.expr(expr),
+                          d.description, exprString = Some(expr))
+              case None =>
+                Transform(d.name, scope => scope(d.name),
+                          d.description, exprString = Some(d.name))
+            }
+            t
+          } ++ jExtraMeasures.values.toSeq.map { m =>
+            val t: Transform = m.exprString match {
+              case Some(expr) =>
+                Transform(m.name, _ => org.apache.spark.sql.functions.expr(expr),
+                          m.description, exprString = Some(expr))
+              case None =>
+                Transform(m.name, scope => scope(m.name),
+                          m.description, exprString = Some(m.name))
+            }
+            t
+          }
+        SemanticTransformsOp(baseJoin, transforms)
+      } else baseJoin
+
     new SemanticTable(
-      root        = join,
+      root        = finalRoot,
       version     = version,
       sourceTable = None,
       status      = ModelStatus.fromString(joinedStatus).getOrElse(ModelStatus.Published),

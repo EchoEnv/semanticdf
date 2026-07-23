@@ -437,7 +437,26 @@ final case class SemanticJoinOp(
       * implementation PR #154 (`SemanticManifest.toJoinedJson`).
       */
     leftKeys: Seq[String] = Seq.empty,
-    /** Right-side counterpart of [[leftKeys]]. */
+    /** Optional prefix applied to LEFT-side columns in the `on` predicate
+      * when reconstructing from the wire shape. Default empty (= no prefix).
+      *
+      * The recipe's wire shape §3 carries `leftPrefix` / `rightPrefix` to
+      * disambiguate columns when the joined DataFrame has overlapping names.
+      * Path C closes caveat §1.3: the fields round-trip end-to-end, and
+      * the reconstructed `on` lambda at restore time applies them so the
+      * predicate reads `l("prefix_k1") === r("otherPrefix_k1")` when set. */
+    leftPrefix: String = "",
+    /** Right-side counterpart of [[leftPrefix]]. */
+    rightPrefix: String = "",
+    /** Names of the columns on the RIGHT side that participate in the
+      * equi-join predicate. See [[leftKeys]] for the population
+      * contract; positional pairing with `leftKeys` for `length`-paired
+      * equality in multi-key joins.
+      *
+      * Path C: with [[leftPrefix]] / [[rightPrefix]] set, the
+      * reconstructed `on` lambda reads
+      * `l("<leftPrefix>k1") === r("<rightPrefix>k1")` to handle
+      * column-name collisions in the joined DataFrame. */
     rightKeys: Seq[String] = Seq.empty,
     /** SQL-form capture of the join predicate for round-trip fallback.
       * Populated at construction by the lambda-decomposition probe

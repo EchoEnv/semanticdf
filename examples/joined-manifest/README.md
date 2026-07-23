@@ -52,9 +52,12 @@ via `SemanticManifest.fromJoinedJson`:
 - non-equi / asymmetric: falls back to the captured `onExprString`
   SQL form (only present when the writer captured one)
 
-The `joined-keys` foundation (PR-style cross-version work, completed
-in the v0.1.11 release) made this possible. The reconstructed model
-carries the per-side metadata + keys faithfully; for the typical
-equi-join case, `restored.execute(spark)` works end-to-end. The
-"re-load from YAML for non-equi joins" caveat remains, and is the
-next recipe revision item.
+The `joined-keys` foundation (PRs #153 + #154, completed in v0.1.11)
+and the Path C caveat closure (v0.1.12 — `extra_dimensions[]` /
+`extra_measures[]` for alias-prefixed dims, `leftPrefix` / `rightPrefix`
+on the `join` block) make this possible end-to-end. The reconstructed
+model carries the per-side metadata + keys faithfully; for typical
+equi-joins `restored.execute(spark)` works without re-loading from
+YAML. The only remaining narrow caveat is non-equi / OR predicates,
+which fall back to the captured `onExprString` SQL form — usable but
+not equivalent to a re-loaded YAML.

@@ -921,6 +921,9 @@ final class SemanticTable private[semanticdf] (
           leftKeys = j.leftKeys,
           rightKeys = j.rightKeys,
           onExprString = j.onExprString,
+          // Path C: prefix fields (recipe §3.6, caveat §1.3).
+          leftPrefix = j.leftPrefix,
+          rightPrefix = j.rightPrefix,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
@@ -1023,6 +1026,9 @@ final class SemanticTable private[semanticdf] (
           leftKeys = j.leftKeys,
           rightKeys = j.rightKeys,
           onExprString = j.onExprString,
+          // Path C: prefix fields (recipe §3.6, caveat §1.3).
+          leftPrefix = j.leftPrefix,
+          rightPrefix = j.rightPrefix,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status)
 
