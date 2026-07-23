@@ -11,15 +11,12 @@ manifests from a joined YAML model** in semanticdf v0.1.11.
 
 ## What this is
 
-Pre-v0.1.11 (and still useful as a reference), the `SemanticManifest.toJson` writer rejects
-joined-rooted models (anti-scope per
-[`docs/design/manifest-artifact.md`](../../docs/design/manifest-artifact.md)
-§10). The
-[`joined-models-manifest`](../../docs/design/joined-models-manifest.md)
-recipe is BLOCKed on `SemanticJoinOp` not carrying enough side
-metadata. Until that lands, operators who want a portable record of
-a joined model emit one single-table manifest per side and
-hand-compose the joined envelope themselves.
+**As of v0.1.11 the canonical path is `SemanticManifest.toJoinedJson`** (see [`examples/joined-manifest/`](../joined-manifest/)). This split example is kept for two reasons:
+
+1. Consumers pinned to pre-v0.1.11 versions need the hand-rolled approach.
+2. The hand-rolled pattern (per-side single-table manifests + a manually-composed joined envelope) is still useful documentation for users who want custom wire shapes that the library doesn't cover out of the box.
+
+At the time v0.1.11 cycle started, the v0.1.10 `SemanticManifest.toJson` writer rejected joined-rooted models (anti-scope per [`docs/design/manifest-artifact.md`](../../docs/design/manifest-artifact.md) §10) and the [`joined-models-manifest`](../../docs/design/joined-models-manifest.md) recipe was BLOCKed on `SemanticJoinOp` not carrying enough side metadata. The workaround was: emit one single-table manifest per side and hand-compose the joined envelope. This example walks through that pattern, which still works against any v0.1.x version.
 
 This example walks through that pattern, end-to-end:
 

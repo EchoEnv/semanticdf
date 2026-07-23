@@ -198,14 +198,17 @@ message that no longer surfaces in v0.1.11; the rebuilt `on` is functional for t
 If you still want to hand-roll a joined envelope (rare — for a custom
 shape that doesn't match the library's), see §5.5 below.
 
-## 5.5. Hand-rolling the joined envelope (rare; pre-v0.1.11 era)
+## 5.5. Hand-rolling the joined envelope (rare; legacy / pre-v0.1.11)
 
 If you need a custom envelope shape that the library doesn't cover
-(e.g. a joined manifest in a v0.1.9 / v0.1.10 toolchain), you can still
-compose a "joined bundle" of your own (legacy path; the canonical path is `SemanticManifest.toJoinedJson`). Use the wire shape —
-recipe's §3 proposes — that way, when the recipe unblocks and you
-replace your hand-roll with `SemanticManifest.toJoinedJson(...)`, your
-downstream tools' parsing code stays the same.
+(e.g. a joined manifest in a v0.1.9 / v0.1.10 toolchain, or a
+bespoke wire shape that includes more than the canonical `toJoinedJson`
+emits), the per-side single-table manifest pattern is still
+available. Compose a "joined bundle" of your own by hand; use the
+recipe's §3 wire shape so your downstream tools' parsing code stays
+the same as the canonical path. The hand-rolled approach is also
+demonstrated end-to-end in `examples/joined-manifest-split/`. The
+canonical path for v0.1.11 is `SemanticManifest.toJoinedJson` (see §5).
 
 ```json
 {

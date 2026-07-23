@@ -5,13 +5,10 @@ using the v0.1.11 library API**.
 
 ## What this is
 
-In v0.1.11 the `joined-models-manifest` recipe became implementable (per-side metadata + keys)
-in a narrow form (per-side metadata round-trips, but the `on` join key
-(older: was previously BLOCKed at v0.1.10; now resolved — see "Implementation notes" below)). The example walks through:
+In v0.1.11 the `joined-models-manifest` recipe is fully implemented — per-side metadata round-trips **and** the `on` join key is reconstructed functionally from the wire shape (typed `join_on` entry / multi-key AND / SQL-form `onExprString` fallback). The example walks through:
 
 1. Loading YAML model(s), driving a programmatic join via
-   `SemanticTable.join_one` (which populates `SemanticJoinOp.leftSide`
-   / `rightSide` thanks to the foundation in PR #150).
+   `SemanticTable.join_one` (which populates `SemanticJoinOp.leftSide` / `rightSide` for the per-side metadata).
 2. Emitting `kind: "semanticdf-joined-manifest"` JSON via
    `SemanticManifest.toJoinedJson`.
 3. Source-free header inspection via `SemanticManifest.parseJoinedMeta`.
@@ -47,10 +44,17 @@ wire shape.
 ## Note
 
 
-The `on` join key cannot be reconstructed from the wire — neither
-`leftKeys[]` nor `rightKeys[]` are populated (the wire shape is
-documented in the recipe, but the lambda shape of `SemanticJoinOp.on`
-prevents automatic extraction). The restored model carries the
-metadata side correctly; running `restored.execute(spark)` will throw
-a clear pointer at the recipe's BLOCK §1 (legacy hand-rolled manifest, no keys — only legacy hand-rolled manifests hit this path).
-Re-load from YAML to get a fully functional join.
+The `on` join key **reconstructs functionally** from the wire in v0.1.11
+via `SemanticManifest.fromJoinedJson`:
+
+- single-column: `l(k)=r(k)`
+- multi-key: `AND` over the per-side key pairs
+- non-equi / asymmetric: falls back to the captured `onExprString`
+  SQL form (only present when the writer captured one)
+
+The `joined-keys` foundation (PR-style cross-version work, completed
+in the v0.1.11 release) made this possible. The reconstructed model
+carries the per-side metadata + keys faithfully; for the typical
+equi-join case, `restored.execute(spark)` works end-to-end. The
+"re-load from YAML for non-equi joins" caveat remains, and is the
+next recipe revision item.
