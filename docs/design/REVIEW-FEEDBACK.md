@@ -15,7 +15,7 @@ still BLOCK, ⚠️ partial).
 | Recipe | Original BLOCK | Resolved in | Status |
 |---|---|---|---|
 | `manifest-transforms.md` | "Transform lacks `exprString`" | PR #149 | ✅ Shipped |
-| `joined-models-manifest.md` | 5 fatal issues | PRs #150 + #151 | ⚠️ Partially shipped (BLOCK #1 `on` reconstruction deferred) |
+| `joined-models-manifest.md` | 5 fatal issues | PRs #150 + #151 + #153 + #154 + Path C | ✅ Shipped cleanly (all 5 BLOCK findings closed) |
 | `streaming-manifest.md` | 3 tactical issues | PR #143 | ✅ Shipped (working draft resolved tactically) |
 
 See the implementation notes in each recipe's status block for details.

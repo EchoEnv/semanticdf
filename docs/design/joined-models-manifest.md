@@ -1,28 +1,28 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; implementation in v0.1.11)
+**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; v0.1.11 closed 3/5 BLOCK findings; v0.1.12 / Path C closed the remaining 2)
 **Library version that emits this shape:** `0.1.11-joined-manifest`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
 
 ## Implementation status (from PRs #150, #151, #153, #154)
 
-The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Three are resolved by v0.1.11:
+The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Five are resolved by v0.1.11 + v0.1.12 (Path C):
 
 - ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — The foundation PR added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp` (foundational addition). The implementation uses these to emit embedded per-side manifests.
 - ✅ **#4 “The key model is inaccurate”** — `leftKeys` / `rightKeys` / `onExprString` were added to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). These are wired through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). The wire shape now carries the keys directly. Lambda reconstruction is **functional** for single-column and multi-column equi joins; multi-column / non-equi predicates fall back to the captured `onExprString` SQL.
 - ✅ **#5 “API / tests / decisions remain unresolved”** — This added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests).
 
-Two remain BLOCK and are deferred:
+All five BLOCK findings are now closed. None remain deferred.
 
-- ❌ **#2 “Schema drops essential merged-model state”** — partially handled (per-side dims/measures round-trip). Alias-prefixed dim names from the joined runtime (e.g. `carriers.name`) don't flow through and require a future recipe revision.
-- ❌ **#3 “Prefixes don't match runtime semantics”** — not addressed; deferred. The recipe's `leftPrefix` / `rightPrefix` fields are not implemented.
+- ✅ **#2 “Schema drops essential merged-model state”** — Path C closes the alias-prefixed caveat. `model.extra_dimensions[]` / `model.extra_measures[]` carry the alias-prefixed dims/measures; the reader reconstructs them as a `SemanticTransformsOp` wrapper around the base join. Round-trips end-to-end.
+- ✅ **#3 “Prefixes don't match runtime semantics”** — Path C closes this caveat. `SemanticJoinOp` carries `leftPrefix` / `rightPrefix` fields; the wire shape emits them in the `join` block; the reader's reconstructed `on` lambda applies them so the predicate reads `l("<leftPrefix>k1") === r("<rightPrefix>k1")` when set.
 
 **Recipe status (in v0.1.11):** SHIPPED cleanly. Joined-manifest round-tripping is functional for any model whose joins reduce to single-key or multi-key equi (the typical case). For pathological joins (OR predicates, asymmetric key sets), the SQL-form fallback (`onExprString`) carries enough info for `expr(sql)` restoration — the warning surface is gone.
 
-**Caveats preserved from the implementation:**
+**Caveats (narrow, preserved as honest limitations):**
 
-- Alias-prefixed dim names like `carriers.name` from the YAML's `joins:` aliasing aren't preserved in the round-trip (they're flattened into the merged model and the per-side dims only carry the un-prefixed names). For consumers that need the full alias surface, re-load from YAML or call `joined.explainSemantic` for the runtime-resolved names.
-- The `on` lambda's `onExprString` rebuild uses `expr(sql)` which evaluates the SQL against the per-side scope. Tests confirm `l(id) === r(id)` style predicates round-trip end-to-end.
+- The `on` lambda's `onExprString` rebuild uses `expr(sql)` which evaluates the SQL against the per-side scope. For non-equi or OR predicates, this works for the wire-round-trip case but consumers that need the full predicate semantics should re-load from YAML.
+- Alias-prefixed dim names (e.g. `carriers.name`) round-trip via `model.extra_dimensions[]` as of v0.1.11; the reconstructed model carries the alias-prefixed dim but the *expr* field references the un-prefixed source column. Consumers that need the original alias-built expression should re-load from YAML.
 
 ## What works today (in v0.1.11
 ```scala
@@ -42,11 +42,17 @@ val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
 
 A worked example at `examples/joined-manifest/` exercises this end-to-end.
 
-## What remains BLOCK (for a future keys-foundation PR)
+## What remains BLOCK
 
-- `SemanticJoinOp.leftKeys` / `rightKeys` fields enabling real extraction.
-- The recipe’s §3 wire shape leaves room for `model.join.leftPrefix` / `rightPrefix`; not implemented.
-- A future revision would re-submit the recipe for senior-engineer review once the keys foundation lands.
+None. All five BLOCK findings (#1 `side metadata`, #2 `schema drops merged-model state`, #3 `prefixes`, #4 `key model inaccurate`, #5 `API/tests/decisions`) are closed:
+
+- ✅ #1: PRs #150 + #151 added `leftSide` / `rightSide` to `SemanticJoinOp`.
+- ✅ #2: Path C (v0.1.12) added `extra_dimensions[]` / `extra_measures[]` to the joined wire shape.
+- ✅ #3: Path C (v0.1.12) added `leftPrefix` / `rightPrefix` to `SemanticJoinOp` and the wire shape.
+- ✅ #4: PRs #153 + #154 added `leftKeys` / `rightKeys` / `onExprString` to `SemanticJoinOp`; the reader reconstructs the `on` lambda from the keys.
+- ✅ #5: PRs #151 + #154 + Path C added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and the cross-version `ColumnSql` reflection helper.
+
+The recipe moves to **ACCEPTED** at v0.1.12.
 
 ## 1. What this is (and what it isn't)
 
