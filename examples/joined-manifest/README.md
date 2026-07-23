@@ -1,7 +1,7 @@
 # joined-manifest
 
 Worked example showing **emitting and consuming a joined-manifest
-using the v0.1.11 library API**.
+using the v0.1.12 library API**.
 
 ## What this is
 
