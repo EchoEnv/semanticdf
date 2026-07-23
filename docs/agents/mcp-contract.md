@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 72 MCP tests. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule. Lifecycle warnings on `Deprecated`/`Draft` models were added in v0.1.10 (`warnings` field on every successful envelope).
+**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 90 MCP tests (grew in v0.1.10 alongside lifecycle warnings). The v0.1.11 release didn't change the MCP wire contract — `describe_model.data.status` / `warnings` surface the manifest identity / lifecycle fields unchanged, and joined-manifest round-trip is library-only. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule. Lifecycle warnings on `Deprecated`/`Draft` models were added in v0.1.10 (`warnings` field on every successful envelope).
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing

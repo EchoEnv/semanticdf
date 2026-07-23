@@ -1,6 +1,6 @@
 # Current scope & guardrails
 
-This document explains what SemanticDF **does today** (v0.1.10) and the
+This document explains what SemanticDF **does today** (v0.1.11) and the
 guardrails worth knowing before you adopt it. Each item pairs the
 *current behavior* with a *workaround* and a *roadmap hint* — so you
 can plan around what's here now and what's coming.
@@ -58,6 +58,41 @@ Not yet supported in streaming:
 **Workaround:** Drop back to the batch terminal (`.toDataFrame(spark)`)
 for unsupported patterns, or run the streaming query per-batch in
 `foreachBatch` against a batch-compiled slice.
+
+### Manifest `transforms[]` round-trip — now fully supported
+
+The `SemanticManifest` writer emits a `transforms[]` block for models
+that declare `withTransforms(...)` (e.g. `operations-analytics/orders`
+with its `ship_days` and `on_time_flag`). Each transform carries the
+source `exprString` (e.g. `datediff(shipped_at, order_date)`) plus
+its description. `fromJson` rebuilds a `SemanticTransformsOp` around
+the source. A hand-built transform with no `exprString` hint records
+the `<lambda>` sentinel and throws a loud runtime error on first
+query — so a missing-source-string is a hard failure, not a silent
+wrong-answer.
+
+The legacy-only `<lambda>` path is preserved for hand-written
+manifests; nothing in v0.1.11 silently produces a non-runnable
+artifact. Worked example: `examples/manifest-transforms-load/`.
+
+### Joined-manifest wire shape — `kind: "semanticdf-joined-manifest"`
+
+Joined models (a `SemanticTable` rooted at `SemanticJoinOp`) emit a
+joined wire shape via `SemanticManifest.toJoinedJson`. The envelope
+carries two embedded per-side single-table manifests under
+`model.left` / `model.right`, a `join` block (cardinality + keys),
+and per-side / merged dimension+measure counts in `digest`. The
+`on` lambda is reconstructed from the wire keys by
+`fromJoinedJson` — single-column: `l(k)=r(k)`; multi-key: `AND over
+pairs`; non-equi predicates fall back to the captured `onExprString`
+SQL form.
+
+The reader works for any model whose join reduces to equi-joins
+(the typical case). Worked example: `examples/joined-manifest/`.
+
+The historical hand-rolled envelope path remains valid for
+consumers pinned to pre-v0.1.11 versions — see
+`examples/joined-manifest-split/`.
 
 ### Per-session security model
 
@@ -286,4 +321,4 @@ For the architectural decisions behind these deferrals, see
 
 ---
 
-*This document is updated each release. Last updated: v0.1.10.*
+*This document is updated each release. Last updated: v0.1.11.*
