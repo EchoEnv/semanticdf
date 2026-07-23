@@ -1,5 +1,49 @@
 # Release notes
 
+## v0.1.12 — joined-manifest caveats closed (Path C)
+
+A **joined-manifest-completion** release. The `joined-models-manifest` recipe's last two BLOCK caveats are now closed: the wire shape carries `model.extra_dimensions[]` / `model.extra_measures[]` (caveat §1.2 — alias-prefixed dims round-trip) and the `join` block's `leftPrefix` / `rightPrefix` (caveat §1.3). After this release, the recipe is **ACCEPTED**; the only remaining narrow caveat is non-equi / OR predicates, which fall back to the captured `onExprString` SQL form.
+
+Library, MCP server, and CLI consumer are at
+
+```
+io.semanticdf:semanticdf_2.13:0.1.12
+io.semanticdf:semanticdf-mcp_2.13:0.1.12
+com.example:semanticdf-cli_2.13:0.1.12
+```
+
+Test count: 519 library + 90 MCP + 18 CLI (627 total), green on Spark 3.5.8 and 4.1.1.
+
+### Library — features (Path C)
+
+- **`SemanticManifest.toJoinedJson` emits alias-prefixed dims/measures** —
+  the joined wire shape now carries `model.extra_dimensions[]` and
+  `model.extra_measures[]` blocks for the alias-prefixed dimensions and
+  measures that YamlLoader adds at runtime (e.g. `carriers.name`).
+  Omitted when empty (canonical post-v0.1.11 producer case).
+- **`SemanticManifest.fromJoinedJson` reconstructs them** — wraps the
+  base join in a `SemanticTransformsOp` carrying the alias-prefixed
+  dims/measures, matching the runtime's exact wiring. The round-trip is
+  functional for the typical aliased-join case.
+- **`SemanticJoinOp.leftPrefix` / `rightPrefix`** — new optional fields
+  on the case class. The wire shape emits them in the `join` block
+  (omitted when empty); the reader's reconstructed `on` lambda applies
+  them so the predicate reads `l("<leftPrefix>k1") === r("<rightPrefix>k1")`
+  when set, with bare column names when empty.
+- **`JoinedManifestMeta` gains 4 fields** — `leftPrefix: String`,
+  `rightPrefix: String`, `extraDimensions: Int`, `extraMeasures: Int`.
+  All default to empty / 0 for legacy manifests.
+
+### Anti-scope (preserved as honest caveats)
+
+- Non-equi / OR predicates — fall back to the captured `onExprString`
+  SQL form, which is functional for the wire-round-trip case but
+  consumers that need the full predicate semantics should re-load from
+  YAML.
+
+See [`RELEASE.md`](https://github.com/EchoEnv/semanticdf/blob/v0.1.12/RELEASE.md)
+for the full changelog.
+
 ## v0.1.11 — manifest keys, joined-manifest wire shape, recipe denoise
 
 A **joined-manifest + manifest-keys + denoise** release. The library closes both BLOCKed recipes from the v0.1.11 review cycle (`manifest-transforms` and `joined-models-manifest`): `SemanticManifest` now round-trips joined models with embedded per-side single-table manifests, the join key is recovered from the wire shape (typed `join_on` entry / multi-key AND / SQL-form `onExprString` fallback), and `Model.status` carries five new identity fields (`id`, `manifestVersion`, `$schema`, `namespace`, `metadata`) through every surface. The `Transform.exprString` field round-trips through the manifest. Two new typed entry points (`join_on`, `join_many_on`) carry the join key as the source of truth at construction; the legacy lambda overload is preserved for back-compat via a probe that decomposes the AST. Cross-version: the AST probe walks `Column.expr` on Spark 3.5.x and `ColumnNode` on Spark 4.1.x via reflection.
