@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache added in a follow-up. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -424,6 +424,53 @@ t.query(measures = ..., dimensions = ..., where = ...).toDataFrame(spark)
 - `orderBy` / `limit` / `timeGrain` / `timeRange` in the key — a follow-up if false cache hits show up in practice.
 
 **Interaction with the audit log:** the two features share `auditRequest`. On a cache hit, the audit event's `rowCount` is the cached row count and `elapsedMs` is small (no compile, no collect). An `mcp audit_log` consumer can detect "this was a cache hit" by `elapsedMs < 1ms` and `rowCount > 0`.
+
+---
+
+### 1.12 Performance baseline + leak tests
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16)
+
+**Problem:** The post-v0.1.16 wave shipped three features with new resource ownership semantics (audit buffer, cache buffer, audit-event flow). Without tests, the "no overhead, no leak, best performance" contract is unverified — leaks in particular can sit for months before users notice.
+
+**Solution:** Two new test packages — `io.semanticdf.leak` (gates: real failures mean real bugs) and `io.semanticdf.perf` (observational: published numbers, not gates).
+
+**Leak tests (8 tests, gates):**
+- `InMemoryAuditSink` buffer bounded by `maxEvents` — emit 10k events, assert the buffer holds at the cap
+- `InMemoryResultCache` buffer bounded by `maxEntries` (LRU eviction) — insert 200 entries with cap=100, assert 100 keys
+- `clear()` empties the buffer
+- `PredicateHasher` is stateless under concurrent access — 8 threads × 1k hashes
+- `toDataFrame` chain survives 100 calls without plan accumulation
+- Cache under load: 100 distinct queries with cap=4 → exactly 4 keys retained
+
+**Perf tests (6 tests, observational):**
+- `toDataFrame` on a 30-row table (the basic terminal)
+- Cache miss vs cache hit (validates "best performance")
+- Cache hit + audit sink (realistic LLM-agent path)
+- Predicate hashing throughput (small/medium/large)
+- Full cache hit end-to-end (key compute + lookup + rebuild)
+- 200 puts with eviction (LRU throughput under load)
+
+Each test publishes a median via `info(...)`; numbers land in `target/surefire-reports/semanticdf-test-suite.txt` with the `[perf]` prefix for trend-watching.
+
+**v0.1.17 baseline** (Spark 3.5.8, JDK 17, single-machine local mode):
+- `toDataFrame`: 62ms median
+- Cache hit: 26ms (vs 62ms miss — **2.4× faster**)
+- Cache hit + audit: 28ms (audit is sub-millisecond)
+- Predicate hash: 20µs small, 22µs large (1k iterations)
+- LRU puts: sub-millisecond
+
+**Why this is the right time:** the audit log + result cache are the most likely places to leak (in-memory buffers, thread-safety, plan retention). Baselining them now means future T2 features can be measured against this anchor. The user-facing requirement is "no overhead, no leak, best performance" — these tests make that contract testable.
+
+**What we DON'T do:** perf tests are **not gates**. A slow CI day doesn't block a PR. The value is trend-spotting, not per-PR enforcement. Leak tests are gates (real bugs deserve real failures).
+
+**Files:**
+- `src/test/scala/io/semanticdf/leak/LeakSpec.scala` (new, 8 tests)
+- `src/test/scala/io/semanticdf/perf/PerfBaselineSpec.scala` (new, 6 tests)
+- `src/main/scala/io/semanticdf/cache/ResultCache.scala` (added `keys()` + `clear()` to the trait with default impl)
+- `docs/design/perf-baseline.md` (new design doc with the v0.1.17 numbers)
+
+**Library: 631/631 pass** (was 617, +14 tests; no regressions).
 
 ---
 

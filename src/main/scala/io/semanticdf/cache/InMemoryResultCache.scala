@@ -43,12 +43,12 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   /** Drop every retained entry. Exposed for tests. */
-  def clear(): Unit = lock.synchronized {
+  override def clear(): Unit = lock.synchronized {
     map.clear()
   }
 
   /** Snapshot the keys in LRU order (oldest first). */
-  def keys(): Seq[String] = lock.synchronized {
+  override def keys(): Seq[String] = lock.synchronized {
     import scala.jdk.CollectionConverters._
     map.keySet.asScala.toSeq
   }
