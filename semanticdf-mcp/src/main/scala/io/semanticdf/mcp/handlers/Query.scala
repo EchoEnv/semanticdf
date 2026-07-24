@@ -50,8 +50,8 @@ final class Query(
       t.query(
         measures   = request.measures,
         dimensions = request.dimensions.getOrElse(Nil),
-        where      = request.where.flatMap(JsonPredicates.parseAll),
-        having     = request.having.flatMap(JsonPredicates.parseAll),
+        where      = Query.mergedWhere(request),
+        having     = Query.mergedHaving(request),
         orderBy    = request.order_by.map(Query.toSortKey),
         limit      = request.limit,
         timeGrain  = request.time_grain,
@@ -102,8 +102,8 @@ final class Query(
       t.query(
         measures   = request.measures,
         dimensions = request.dimensions.getOrElse(Nil),
-        where      = request.where.flatMap(JsonPredicates.parseAll),
-        having     = request.having.flatMap(JsonPredicates.parseAll),
+        where      = Query.mergedWhere(request),
+        having     = Query.mergedHaving(request),
         orderBy    = request.order_by.map(Query.toSortKey),
         limit      = request.limit,
         timeGrain  = request.time_grain,
@@ -150,6 +150,47 @@ object Query {
       .flatMap(v => scala.util.Try(v.toLong).toOption)
       .filter(_ >= 0)
       .getOrElse(DefaultTimeoutMs)
+
+  /** Merge the two predicate sources into one [[io.semanticdf.Predicate]]
+    * for the library's `where` parameter. The structured `ast_where`
+    * field (if present) takes precedence over the flat `where` array; if
+    * both are present, they are AND-combined (and a `nil` AST plus an
+    * empty array → `None`). Exposed `private[handlers]` so the
+    * [[QuerySpec]] can verify the merge logic without a full request
+    * round-trip.
+    *
+    * Shape precedence:
+    *   1. ast_where present  -> it's the primary predicate.
+    *   2. where  array present -> AND-combined into the AST (or alone
+    *                              if the AST is absent).
+    *   3. Neither present    -> None.
+    *
+    * Symmetric for `having`. */
+  private[handlers] def mergedWhere(req: QueryRequest): Option[io.semanticdf.Predicate] =
+    Query.mergePredicates(
+      ast  = req.ast_where,
+      flat = req.where,
+    )
+
+  private[handlers] def mergedHaving(req: QueryRequest): Option[io.semanticdf.Predicate] =
+    Query.mergePredicates(
+      ast  = req.ast_having,
+      flat = req.having,
+    )
+
+  private def mergePredicates(
+      ast:  Option[Any],
+      flat: Option[Seq[Any]],
+  ): Option[io.semanticdf.Predicate] = {
+    val astPred  = ast.map(AstPredicates.parse)
+    val flatPred = flat.flatMap(JsonPredicates.parseAll)
+    (astPred, flatPred) match {
+      case (None,    None)    => None
+      case (Some(a), None)    => Some(a)
+      case (None,    Some(f)) => Some(f)
+      case (Some(a), Some(f)) => Some(io.semanticdf.Predicate.And(a, f))
+    }
+  }
 
   /** Detect AMBIGUOUS_DIMENSION / AMBIGUOUS_MEASURE before the library
     * silently resolves a name. For each requested dimension/measure name,
@@ -275,25 +316,29 @@ object Query {
   /** JSON Schema for the `query` / `explain` tool input. The SDK validates
     * the agent's request against this shape; extra properties are allowed
     * (we ignore what we don't need). */
-  val queryToolSchema: io.modelcontextprotocol.spec.McpSchema.JsonSchema =
+  val queryToolSchema: io.modelcontextprotocol.spec.McpSchema.JsonSchema = {
+    val props = new java.util.LinkedHashMap[String, Object]()
+    def strProp(t: String) = java.util.Map.of[String, Object]("type", t): java.util.Map[String, Object]
+    props.put("model",      strProp("string"))
+    props.put("measures",   strProp("array"))
+    props.put("dimensions", strProp("array"))
+    props.put("where",      strProp("array"))
+    props.put("having",     strProp("array"))
+    props.put("ast_where",  strProp("object"))
+    props.put("ast_having", strProp("object"))
+    props.put("order_by",   strProp("array"))
+    props.put("limit",      strProp("integer"))
+    props.put("time_grain", strProp("string"))
+    props.put("time_range", strProp("array"))
     new io.modelcontextprotocol.spec.McpSchema.JsonSchema(
       "object",
-      java.util.Map.of(
-        "model",      java.util.Map.of("type", "string"),
-        "measures",   java.util.Map.of("type", "array"),
-        "dimensions", java.util.Map.of("type", "array"),
-        "where",      java.util.Map.of("type", "array"),
-        "having",     java.util.Map.of("type", "array"),
-        "order_by",   java.util.Map.of("type", "array"),
-        "limit",      java.util.Map.of("type", "integer"),
-        "time_grain", java.util.Map.of("type", "string"),
-        "time_range", java.util.Map.of("type", "array"),
-      ),
+      props,
       JList.of("model", "measures"),
       java.lang.Boolean.TRUE,
       java.util.Map.of(),
       java.util.Map.of(),
     )
+  }
 
   /** Register the `query` tool with the MCP server. */
   def registerQuerySpec(
@@ -467,6 +512,8 @@ object Query {
       dimensions = Some(asSeq("dimensions").map { case s: String => s }),
       where      = Some(asSeq("where")),
       having     = Some(asSeq("having")),
+      ast_where  = map.get("ast_where"),
+      ast_having = map.get("ast_having"),
       order_by   = asSeq("order_by").map(OrderByParser.parse),
       limit      = asOpt[java.lang.Integer]("limit").map(_.intValue),
       time_grain = asOpt[String]("time_grain"),
@@ -489,6 +536,8 @@ final case class QueryRequest(
     dimensions: Option[Seq[String]] = None,
     where: Option[Seq[Any]] = None,
     having: Option[Seq[Any]] = None,
+    ast_where: Option[Any] = None,
+    ast_having: Option[Any] = None,
     order_by: Seq[OrderBy] = Seq.empty,
     limit: Option[Int] = None,
     time_grain: Option[String] = None,

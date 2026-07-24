@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v3 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 90 MCP tests (grew in v0.1.10 alongside lifecycle warnings). The v0.1.11 release didn't change the MCP wire contract — `describe_model.data.status` / `warnings` surface the manifest identity / lifecycle fields unchanged, and joined-manifest round-trip is library-only. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule. Lifecycle warnings on `Deprecated`/`Draft` models were added in v0.1.10 (`warnings` field on every successful envelope).
+**Status:** v4 — current contract. All five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) shipped in v0.1.4 with 90 MCP tests (grew in v0.1.10 alongside lifecycle warnings). The v0.1.11 release didn't change the MCP wire contract — `describe_model.data.status` / `warnings` surface the manifest identity / lifecycle fields unchanged, and joined-manifest round-trip is library-only. Resolves the three v1 open questions using library accessors for joins / measureKind / sourceTable, filters, and version. Adds `okf_markdown` field + join-prefix one-liner rule. Lifecycle warnings on `Deprecated`/`Draft` models were added in v0.1.10 (`warnings` field on every successful envelope). The v0.1.16 release adds `ast_where` / `ast_having` as an alternative structured predicate shape on the `query` and `explain` tools — see the [Tool 3: query](#tool-3-query) section.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -244,7 +244,7 @@ Error codes — keep this list closed:
 | `AMBIGUOUS_MEASURE` / `AMBIGUOUS_DIMENSION` | name matches multiple fields across joined models (e.g. `flights.carrier` vs `carriers.carrier`) |
 | `UNKNOWN_FIELD` | measure/dimension name not on the resolved model |
 | `INVALID_PREDICATE` | JSON predicate shape is malformed (missing `op`, bad `type`, etc.) |
-| `UNSUPPORTED_OP` | predicate op not in {`eq`,`ne`,`lt`,`le`,`gt`,`ge`,`in`,`not_in`,`is_null`,`is_not_null`} |
+| `UNSUPPORTED_OP` | predicate op not in {`eq`,`ne`,`lt`,`le`,`gt`,`ge`,`in`,`not_in`,`is_null`,`is_not_null`} for flat predicates; for `ast_where` the closed set is {`eq`,`neq`,`lt`,`lte`,`gt`,`gte`,`and`,`or`} |
 | `QUERY_TIMEOUT` | query exceeded `MCP_QUERY_TIMEOUT_MS` (env, default 30s) |
 | `EXECUTION_ERROR` | Spark execution failure — bubbles up `e.getClass.getSimpleName` + `e.getMessage` |
 | `RESULT_TOO_LARGE` | rows after `toDataFrame` exceed `MCP_MAX_ROWS` (default 10000) and request omitted `limit` |
@@ -422,6 +422,8 @@ that omit the (potentially large) `okf_markdown` field.
 | `measures` (required, ≥1) | `measures = Iterable[String]` |
 | `where` | JSON list → `Option[List[Predicate]]` via `Predicate.And(...)` |
 | `having` | same shape → same construction |
+| `ast_where` | Optional structured predicate (single tree). See [Alternative shape](#alternative-ast_where--ast_having-structured-predicate) below. |
+| `ast_having` | Same shape as `ast_where`, applied as a post-aggregation filter. |
 | `order_by` | `Iterable[SortKey]` — `"direction": "asc"/"desc"` → `SortKey.asc(...)`/`desc(...)` |
 | `limit` | `Option[Int]` |
 | `time_grain` | `Option[String]` |
@@ -453,6 +455,60 @@ Allowed `type` values for leaf predicates: `eq`, `ne`, `lt`, `le`, `gt`, `ge`,
 **Construction:** `where` is a *flat list* of predicates that the server
 combines with `Predicate.And(...)` before passing to `.query(where = ...)`. Same
 for `having`. The agent never writes `And` wrappers manually.
+
+#### Alternative: `ast_where` / `ast_having` (structured predicate)
+
+For agents that prefer to author a single composable predicate tree instead of
+a flat list, the request may also include `ast_where` (or `ast_having`) with
+a structured shape:
+
+```json
+{
+  "model": "flights",
+  "measures": ["flight_count"],
+  "ast_where": {
+    "op": "and",
+    "left":  {"op": "gt",  "left": "distance", "right": 500},
+    "right": {
+      "op": "or",
+      "left":  {"op": "eq", "left": "carrier", "right": "AA"},
+      "right": {"op": "eq", "left": "carrier", "right": "UA"}
+    }
+  }
+}
+```
+
+**Wire shape** (one node):
+
+```json
+// Leaf (compare)
+{"op": "eq",  "left": "carrier",  "right": "AA"}
+{"op": "neq", "left": "distance", "right": 500}
+{"op": "lt",  "left": "rate",     "right": 0.5}
+
+// Compound
+{"op": "and", "left": <node>, "right": <node>}
+{"op": "or",  "left": <node>, "right": <node>}
+```
+
+**Rules:**
+
+- A node is any object with an `op` key. Anything else is a literal value.
+- For compare nodes, `left` is a field name (string) and `right` is a value
+  (string / int / double / boolean).
+- For `and` / `or` nodes, `left` and `right` are themselves nodes.
+- Allowed `op` values: `eq`, `neq`, `lt`, `lte`, `gt`, `gte`, `and`, `or`.
+  Any other value → `UNSUPPORTED_OP`.
+
+**Merge behavior:** If both `where` (flat) and `ast_where` (structured) are
+present in the same request, the server AND-combines them. Either can be
+omitted; if both are empty, no `where` filter is applied. Symmetric for
+`having` / `ast_having`.
+
+**Why a closed set:** the AST op set mirrors the library's `PredicateAst`
+op list exactly (the wire shape used by the joined-manifest recipe in
+v0.1.13). Agents that need richer predicates (`in`, `not_in`, `is_null`)
+should use the flat `where` shape.
 
 ```scala
 // Server-side adapter (sketch — not the implementation)
