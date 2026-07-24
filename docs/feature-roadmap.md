@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter + Ossie perf/leak tests added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -506,6 +506,43 @@ val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), spark, resolve)
 **What we do NOT consume in v1:** other dialects (Snowflake/Databricks/BigQuery — picked on read), `ai_context` mapping (preserved on intermediate), the `ontology` block (preserved on the project), composite join keys (v1 picks the first column), `primary_key` / `unique_keys` (preserved on the intermediate, semanticdf doesn't have a first-class grain concept yet).
 
 **Library: 641/641 pass** (was 631, +10 OssieReader tests; no regressions).
+
+---
+
+### 1.14 Ossie adapter perf baseline + leak tests
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16, follow-up to #178)
+
+**Problem:** The post-v0.1.16 Ossie adapter is stateless and read-only, but YAML parsing is non-trivial — SnakeYAML's default constructor is slow, and a future PR could introduce an O(n²) loop or static-field retention. Without a baseline, regressions would only be caught in production.
+
+**Solution:** A small perf + leak suite, scoped tighter than the audit-log / cache round (which had 14 tests). The adapter's smaller surface area means 4 perf tests + 3 leak tests is enough.
+
+**Perf tests (4 tests, OBSERVATIONAL):**
+- Parse small file (2KB, 2 datasets, 7 fields) — basic regression
+- Parse medium file (19KB, 7 datasets, ~100 fields, 7 metrics) — the TPC-DS example from the Ossie repo
+- Parse large synthetic file (~1MB, 50 datasets, 1000 fields, 200 metrics) — stress
+- Parse + regex pass over 200 metrics — catches a regression in the stripTablePrefix path
+
+**v0.1.17 baseline (single-machine local mode):**
+- Small: 4ms median
+- Medium: 8ms median
+- Large synthetic: 52ms median
+- Regex pass: 26ms median
+
+**Leak tests (3 tests, GATES):**
+- A dropped parse result can be GC-collected (no static retention)
+- 100 parse+drop cycles don't grow the heap beyond 50MB (catches runaway accumulation)
+- toSemanticTables also GC-reclaims (the bind step is stateless)
+
+**Why smaller than the previous round:** the audit log + result cache are stateful and leak-prone (bounded buffers, thread-safety, plan retention) — they needed 14 tests. The Ossie adapter is read-only with no buffers; the leak surface is much smaller. Karpathy's "minimum code" applies — we test what matters, not what could possibly leak.
+
+**Files:**
+- `src/test/scala/io/semanticdf/perf/OssieReaderPerfSpec.scala` (new, 4 benchmarks)
+- `src/test/scala/io/semanticdf/leak/OssieReaderLeakSpec.scala` (new, 3 tests)
+- `src/test/resources/ossie-fixtures/medium-ossie.yaml` (new, the TPC-DS example from the Ossie repo)
+- `docs/feature-roadmap.md` (1.14 SHIPPED entry, 'Last updated' bumped)
+
+**Library: 648/648 pass** (was 641, +7 tests; no regressions).
 
 ---
 

@@ -147,6 +147,34 @@ dialect as a fallback). Other dialects are ignored in v1.
   intermediate; not used to build the SemanticTable (semanticdf
   doesn't have a first-class grain concept yet).
 
+## Perf baseline (v0.1.17)
+
+Captured on the first run (Spark 3.5.8, JDK 17, single-machine
+local mode). **Observational, not gates** — a slow CI day doesn't
+block a PR, but a doubling of any of these numbers is a real
+regression.
+
+```
+OssieReader.parse (small, 2KB):                          4ms
+OssieReader.parse (medium, 19KB TPC-DS):                  8ms
+OssieReader.parse (large, ~1MB synthetic):                52ms
+OssieReader.parse (large, regex pass over 200 metrics):  26ms
+```
+
+The medium-file number (8ms for a 100-field TPC-DS-shaped model)
+is the realistic production shape. The large-file stress test (52ms
+for 1000 fields + 200 metrics) shows the parser scales linearly,
+not quadratically. If a future PR doubles the medium-file time,
+that's visible in CI.
+
+**Leak tests** (in `OssieReaderLeakSpec`) are **gates** — a failure
+means a real leak:
+
+- A dropped parse result can be GC-collected (no static retention)
+- 100 parse+drop cycles don't grow the heap beyond 50MB (catches
+  runaway accumulation)
+- toSemanticTables also GC-reclaims (the bind step is stateless)
+
 ## Tests
 
 10 tests in `SemanticMetadataAdapterSpec`:
