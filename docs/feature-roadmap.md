@@ -351,6 +351,40 @@ t.query(measures = ..., dimensions = ..., where = ...).toDataFrame(spark)
 
 ---
 
+### 1.10 MCP `audit_log` retrieval tool (follow-up to 1.9)
+
+**Status:** ✅ **SHIPPED** (v0.1.17, follow-up to v0.1.16 audit log)
+
+**Problem:** The v0.1.16 audit log emitted events into a sink, but agents had no way to read them back. Self-introspection ("what did I just query?") and run-diffs required a separate observability stack.
+
+**Solution:** A sixth MCP tool `audit_log` that reads the in-memory audit buffer and returns the recent events in arrival order.
+
+```json
+{ "limit": 100 }     // optional, default 100, capped at 1000
+```
+
+Response:
+```json
+{
+  "events": [ /* AuditEvent JSON, oldest first */ ],
+  "count": <int>, "total": <int>, "truncated": <bool>
+}
+```
+
+**What shipped:**
+- `AuditSink.snapshot()` — default `Seq.empty`; `InMemoryAuditSink` overrides to return the buffer. Non-breaking (default impl).
+- `handlers/AuditLog.scala` — ~150 LOC handler + wire schema. Reads from a shared `InMemoryAuditSink` (1024-event ring buffer).
+- `Query` handler — new `auditSink: Option[AuditSink]` constructor param. When set, calls `t.withAuditSink(sink)` on the resolved model before `query()`.
+- `Server.scala` — wires one shared `InMemoryAuditSink` to both the `Query` handler (writer) and the new `AuditLog` handler (reader). Registered as the sixth tool.
+- 12 new tests in `AuditLogSpec` (10 unit, 2 integration with `Query`).
+- `docs/agents/mcp-contract.md` — status bumped to v5, new "Tool 6: `audit_log`" section.
+
+**Privacy:** events carry the request shape but **not** the filter's literal values. `where_hash` is a stable SHA-256 of the canonicalized `Predicate` tree; equivalent filters hash to the same value.
+
+**Why this is the right tight-loop:** The audit sink was built in v0.1.16 specifically to support a retrieval tool. One small PR closes the loop; nothing in v0.1.16 needs to change. The T2 cache work (#1.11 candidate) can now use `whereHash` as the cache key.
+
+---
+
 ## Tier 2: Ship when consumer needs it
 
 These are valuable but require real consumer pain to justify.

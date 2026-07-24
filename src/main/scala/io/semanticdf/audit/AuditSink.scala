@@ -18,6 +18,17 @@ trait AuditSink {
 
   /** Record one event. Must not throw. */
   def emit(event: AuditEvent): Unit
+
+  /** Return a snapshot of the events retained by this sink, in
+    * arrival order, newest last. Default: empty (most sinks don't
+    * retain history). Override in sinks that do — currently
+    * [[InMemoryAuditSink]]. The MCP `audit_log` tool reads through
+    * this method.
+    *
+    * The contract is intentionally narrow: a snapshot is a
+    * point-in-time copy. Subsequent emits may or may not appear in
+    * a later snapshot; sinks need not be live. */
+  def snapshot(): Seq[AuditEvent] = Seq.empty
 }
 
 object AuditSink {

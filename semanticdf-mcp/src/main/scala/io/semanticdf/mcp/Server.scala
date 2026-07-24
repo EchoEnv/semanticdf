@@ -7,7 +7,7 @@ import io.modelcontextprotocol.server.McpSyncServer
 import io.modelcontextprotocol.server.transport.StdioServerTransportProvider
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities
 import io.modelcontextprotocol.spec.McpSchema.Tool
-import io.semanticdf.mcp.handlers.{DescribeModel, Introspect, ListModels, OrderByParser, Query, QueryRequest}
+import io.semanticdf.mcp.handlers.{AuditLog, DescribeModel, Introspect, ListModels, OrderByParser, Query, QueryRequest}
 
 import java.util.{List => JList}
 import org.apache.spark.sql.SparkSession
@@ -39,7 +39,12 @@ object Server {
       mapper: McpJsonMapper,
   ): McpSyncServer = {
     val transport = new StdioServerTransportProvider(mapper)
-    val queryHandler = new Query(spark)
+    // Shared in-memory audit sink — every `query` / `explain` call
+    // emits into it, and the `audit_log` tool reads from it. The
+    // shared instance is the only coupling between the two handlers.
+    val auditSink: io.semanticdf.audit.AuditSink =
+      io.semanticdf.audit.AuditSink.inMemory(maxEvents = 1024)
+    val queryHandler = new Query(spark, auditSink = Some(auditSink))
 
     McpServer.sync(transport)
       .serverInfo("semanticdf-mcp", "0.1.8")
@@ -55,6 +60,7 @@ object Server {
         Query.registerQuerySpec(models, queryHandler, mapper),
         Query.registerExplainSpec(models, queryHandler, mapper),
         Introspect.registerSpec(models, new Introspect(spark), mapper),
+        AuditLog.registerSpec(auditSink, mapper),
       ))
       .build()
   }
