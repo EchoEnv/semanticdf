@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log added in a follow-up. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -309,6 +309,45 @@ The reader checks for `meta.kind == "measure"` AND a non-empty `meta.expr`. Anyt
 - **Sources / metrics / streaming.** Sources are preserved in `DbtProject.sources` for v2; metrics in `rawNodes`; streaming isn't a dbt concept.
 
 **Why T1:** Closes a real adoption gap. Every dbt user with a manifest is a potential SemanticDF consumer.
+
+---
+
+### 1.9 Audit log
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16)
+
+**Problem:** LLM agents running on top of the semantic layer make queries that humans don't review line by line. Without an audit trail, you can't answer: what did my agent just query? Is the same query being run repeatedly (cache candidate)? Did the last run hit a timeout? How long did the query take, and how many rows came back?
+
+**Solution:** A minimal, pluggable audit primitive in `io.semanticdf.audit.*` — an `AuditEvent` case class, an `AuditSink` trait, a `PredicateHasher` for stable filter fingerprints, and `SemanticTable.withAuditSink(...)` to opt in.
+
+```scala
+val t = toSemanticTable(df, name = Some("flights"))
+  .withDimensions(...)
+  .withMeasures(...)
+  .withAuditSink(AuditSink.JsonlStdout)  // opt-in
+
+t.query(measures = ..., dimensions = ..., where = ...).toDataFrame(spark)
+// emits: {"ts":"...","model":"flights","measures":[...],"dimensions":[...],
+//         "where_hash":"<sha256>","having_hash":null,"row_count":0,
+//         "elapsed_ms":42,"status":"ok"}
+```
+
+**What shipped:**
+- `audit/AuditEvent.scala` — the case class (12 fields, all optional/defaulted)
+- `audit/AuditSink.scala` — the trait + 3 default impls: `NoOp`, `JsonlStdout`, `inMemory(maxEvents)`
+- `audit/PredicateHasher.scala` — stable SHA-256 of a `Predicate` tree. Commutative for And/Or. Independent of construction order. Same canonical form for the library `Predicate` and the v0.1.16 MCP `PredicateAst`.
+- `audit/QueryRequest.scala` — the captured request shape (model, measures, dimensions, where, having)
+- `SemanticTable` — two new constructor fields (`auditSink`, `auditRequest`), one fluent setter (`withAuditSink`), one internal `copyAuditRequest`. The audit fields are preserved across the chainable methods (where, having, orderBy, limit, groupBy, aggregate, join_*).
+- `toDataFrame()` — emits the event on success or failure. No-op fast path when no sink is set (zero overhead).
+- 19 tests in `AuditSpec`: hasher (10), sink (4), end-to-end (5).
+- `docs/design/audit-log.md` — design notes.
+
+**Why this is the right T2 anchor:** Every other T2 item benefits from it. Cache invalidation reads the audit stream. Tracing hooks off it. Debugging uses it. The `whereHash` / `havingHash` are the seed for cache-key equivalence by AST shape — the natural follow-up to v0.1.16's predicate AST work.
+
+**What's NOT in v1 (deliberate):**
+- Eager row count — would force `df.count()` (re-run the plan). The field is reserved (default `0`); consumers extend.
+- MCP `audit_log` retrieval tool — the sink is in place; the tool is a separate PR.
+- Async / queue-based sinks — premature for the current call rate.
 
 ---
 
