@@ -1,15 +1,15 @@
 # Design Recipe: Joined Models in `SemanticManifest`
 
-**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; v0.1.11 closed 3/5 BLOCK findings; v0.1.12 / Path C closed the remaining 2)
-**Library version that emits this shape:** `0.1.11-joined-manifest`
+**Status:** SHIPPED cleanly (recipe was DRAFT-BLOCK on 2026-07-22; v0.1.11 closed 3/5 BLOCK findings; v0.1.12 Path C closed the remaining 2; v0.1.13 closed the last narrow caveat — non-equi / OR predicates now carry a structured AST).
+**Library version that emits this shape:** `0.1.13`
 **Scope:** Single, additive feature. Extends the manifest schema with a new `kind: "semanticdf-joined-manifest"`. No library API changes for single-table models. No breaking wire changes (existing manifests parse unchanged).
 
 ## Implementation status (from PRs #150, #151, #153, #154)
 
-The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). Five are resolved by v0.1.11 + v0.1.12 (Path C):
+The BLOCK on this recipe had 5 fatal issues (see `docs/design/REVIEW-FEEDBACK.md` §1). All 5 are resolved, plus the narrow non-equi / OR caveat closed at v0.1.13:
 
 - ✅ **#1 “SemanticJoinOp doesn't carry side metadata”** — The foundation PR added `leftSide` / `rightSide: Option[SemanticTable]` to `SemanticJoinOp` (foundational addition). The implementation uses these to emit embedded per-side manifests.
-- ✅ **#4 “The key model is inaccurate”** — `leftKeys` / `rightKeys` / `onExprString` were added to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). These are wired through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). The wire shape now carries the keys directly. Lambda reconstruction is **functional** for single-column and multi-column equi joins; multi-column / non-equi predicates fall back to the captured `onExprString` SQL.
+- ✅ **#4 “The key model is inaccurate”** — `leftKeys` / `rightKeys` / `onExprString` were added to `SemanticJoinOp` (with typed entry points and a lambda-decomposition probe). These are wired through `toJoinedJson` (emits keys, `multiColumn`, `onExprString`) and `fromJoinedJson` (rebuilds the `on` lambda from the keys for a functional round-trip). v0.1.13 added a structured `predicate_ast` on the join block; the reader uses it as the primary source for rebuilding `on` when the keys lattice alone doesn't capture the structure (non-equi / OR / compound). The wire shape now carries the keys AND the structured predicate directly. Lambda reconstruction is **functional** for any predicate the library can express.
 - ✅ **#5 “API / tests / decisions remain unresolved”** — This added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and a `ManifestJoinedSpec` (9 tests).
 
 All five BLOCK findings are now closed. None remain deferred.
@@ -17,14 +17,14 @@ All five BLOCK findings are now closed. None remain deferred.
 - ✅ **#2 “Schema drops essential merged-model state”** — Path C closes the alias-prefixed caveat. `model.extra_dimensions[]` / `model.extra_measures[]` carry the alias-prefixed dims/measures; the reader reconstructs them as a `SemanticTransformsOp` wrapper around the base join. Round-trips end-to-end.
 - ✅ **#3 “Prefixes don't match runtime semantics”** — Path C closes this caveat. `SemanticJoinOp` carries `leftPrefix` / `rightPrefix` fields; the wire shape emits them in the `join` block; the reader's reconstructed `on` lambda applies them so the predicate reads `l("<leftPrefix>k1") === r("<rightPrefix>k1")` when set.
 
-**Recipe status (in v0.1.11):** SHIPPED cleanly. Joined-manifest round-tripping is functional for any model whose joins reduce to single-key or multi-key equi (the typical case). For pathological joins (OR predicates, asymmetric key sets), the SQL-form fallback (`onExprString`) carries enough info for `expr(sql)` restoration — the warning surface is gone.
+**Recipe status:** SHIPPED cleanly as of v0.1.13. Joined-manifest round-tripping is functional for any predicate the library can express: equi (single + multi-key), non-equi, OR, AND-compound, prefixed. The structured `predicate_ast` carries the predicate shape on the wire; `onExprString` is the legacy fallback.
 
-**Caveats (narrow, preserved as honest limitations):**
+**Caveats (preserved as honest limitations):**
 
-- The `on` lambda's `onExprString` rebuild uses `expr(sql)` which evaluates the SQL against the per-side scope. For non-equi or OR predicates, this works for the wire-round-trip case but consumers that need the full predicate semantics should re-load from YAML.
+- `onExprString` is still emitted on the wire as the legacy fallback. Readers that don't know about `predicate_ast` continue to work via the SQL form. v0.1.13+ readers prefer the structured AST when present.
 - Alias-prefixed dim names (e.g. `carriers.name`) round-trip via `model.extra_dimensions[]` as of v0.1.11; the reconstructed model carries the alias-prefixed dim but the *expr* field references the un-prefixed source column. Consumers that need the original alias-built expression should re-load from YAML.
 
-## What works today (in v0.1.11
+## What works today (as of v0.1.13
 ```scala
 import io.semanticdf._
 import io.semanticdf.SemanticManifest
@@ -37,7 +37,8 @@ val joined = toSemanticTable(leftDf,  name = Some("customers"))
 val json = SemanticManifest.toJoinedJson(joined, Identity(...))
 val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
 // Per-side dims/measures round-trip cleanly. Restored model's metadata is
-// faithful. Executing the restored join throws with the BLOCK #1 reference.
+// faithful. Executing the restored join is fully functional — the `on` lambda
+// is rebuilt from the wire (keys lattice for equi, predicate_ast otherwise).
 ```
 
 A worked example at `examples/joined-manifest/` exercises this end-to-end.
@@ -52,7 +53,7 @@ None. All five BLOCK findings (#1 `side metadata`, #2 `schema drops merged-model
 - ✅ #4: PRs #153 + #154 added `leftKeys` / `rightKeys` / `onExprString` to `SemanticJoinOp`; the reader reconstructs the `on` lambda from the keys.
 - ✅ #5: PRs #151 + #154 + Path C added `toJoinedJson` / `fromJoinedJson` / `parseJoinedMeta`, the `JoinedManifestMeta` case class, the CLI `validate-joined-manifest` subcommand, and the cross-version `ColumnSql` reflection helper.
 
-The recipe moves to **ACCEPTED** at v0.1.12.
+The recipe is **ACCEPTED** as of v0.1.13 (with the non-equi / OR caveat closed).
 
 ## 1. What this is (and what it isn't)
 

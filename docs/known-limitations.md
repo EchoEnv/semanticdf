@@ -87,8 +87,12 @@ and per-side / merged dimension+measure counts in `digest`. The
 pairs`; non-equi predicates fall back to the captured `onExprString`
 SQL form.
 
-The reader works for any model whose join reduces to equi-joins
-(the typical case). Worked example: `examples/joined-manifest/`.
+The reader works for any predicate the library can express: equi
+(single + multi-key), non-equi (e.g. `l.date < r.valid_to`), OR,
+AND-compound. The structured `predicate_ast` on the join block is
+the primary source for rebuilding `on`; `onExprString` is the legacy
+fallback. Worked example: `examples/joined-manifest/` (demonstrates
+equi + non-equi + prefixed end-to-end).
 
 The historical hand-rolled envelope path remains valid for
 consumers pinned to pre-v0.1.11 versions — see

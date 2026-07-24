@@ -189,7 +189,7 @@ val meta = SemanticManifest.parseJoinedMeta(json)
 The worked example `examples/joined-manifest/` walks through this flow
 end-to-end.
 
-**Caveat (resolved in v0.1.12 Path C):** the joined manifest wire shape now carries the full set of fields needed for end-to-end reconstruction. `extra_dimensions[]` / `extra_measures[]` preserve alias-prefixed dims, and `leftPrefix` / `rightPrefix` on the `join` block let the reconstructed `on` lambda qualify columns correctly. The remaining narrow caveat is non-equi / OR predicates, which fall back to the captured `onExprString` SQL form — usable but not equivalent to a re-loaded YAML.
+**Predicate shape:** the joined wire shape carries `model.join.predicate_ast` for structured predicates (equi / non-equi / OR / compound) alongside `leftKeys` / `rightKeys` / `onExprString`. The reader uses the AST when present (zero overhead for the equi case) and falls back to the keys lattice or `onExprString` for legacy manifests.
 
 If you still want to hand-roll a joined envelope (rare — for a custom
 shape that doesn't match the library's), see §5.5 below.
