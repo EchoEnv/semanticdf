@@ -2,7 +2,14 @@
 
 A focused example showing the **full artifact workflow** for joined
 manifests: source YAML → `toJoinedJson` → JSON artifact on disk →
-`fromJoinedJson` → `SemanticTable` → analytics queries.
+`loadSemanticTables` (via the `SDFAdapter` typeclass instance) →
+`SemanticTable` → analytics queries.
+
+This is the same shape as `dbt` and `Ossie` use: one
+`loadSemanticTables(source, resolve)` entry point works for all
+three formats. The `SDFAdapter._` import brings the matching adapter
+into implicit scope; the `resolve` function turns each `sourceTable`
+string in the manifest into a `DataFrame`.
 
 ## What this is
 
@@ -20,10 +27,10 @@ represent the CI / deploy step and the runtime app:
    YAMLs + CSVs                   artifact JSON on disk
         │                                  │
         ▼                                  ▼
-   SemanticManifest.              SemanticManifest.
-     toJoinedJson                   fromJoinedJson
-        │                                  │
-        ▼                                  ▼
+   SemanticManifest.              loadSemanticTables(...)
+     toJoinedJson                   │  (via SDFAdapter)
+        │                          │  resolve(source) → DataFrame
+        ▼                          ▼
    target/clinical_                SemanticTable
    encounters.joined-              (restored joined model)
    manifest.json                            │

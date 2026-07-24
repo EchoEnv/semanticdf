@@ -2,6 +2,8 @@ package com.example.joinedmanifeste2e
 
 import io.semanticdf._
 import io.semanticdf.SemanticManifest
+import io.semanticdf.adapters.SDFAdapter
+import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
@@ -10,11 +12,17 @@ import org.apache.spark.sql.functions._
   *
   * Represents the runtime app in the artifact workflow:
   *
-  *   JSON on disk  →  fromJoinedJson  →  SemanticTable  →  queries
+  *   JSON on disk  →  loadSemanticTables (via SDFAdapter)  →  SemanticTable  →  queries
   *
   * Notice this phase does NOT load any YAML. The artifact carries
   * everything: dims, measures, joins, predicate shape, side metadata.
-  * The app only needs the artifact + the source DataFrames.
+  * The app only needs the artifact + a resolve function for each
+  * source table name.
+  *
+  * The `loadSemanticTables` entry point is the unified typeclass
+  * interface (post-v0.1.16). For just the SDF (manifest) format,
+  * `SDFAdapter` is the matching instance. Dbt and Apache Ossie use
+  * `DbtAdapter` and `OssieReader` against the same entry point.
   *
   * Run:
   *   mvn -o scala:run -DmainClass=com.example.joinedmanifeste2e.Query
@@ -52,23 +60,23 @@ object Query {
     Logger.info(s"artifact identity: ${meta.id.getOrElse("(none)")}")
     Logger.info(s"artifact joined predicateAst: ${meta.predicateAst}")
 
-    // Reload the source DataFrames (the runtime app would do this from
-    // its own data layer — Spark catalog, Delta, Parquet, etc.).
-    val encountersDf = spark.read.option("header", "true").csv("data/encounters_clean.csv")
-    val diagnosesDf  = spark.read.option("header", "true").csv("data/diagnoses.csv")
-
-    // Reconstruct the joined model. This is where the artifact's value
-    // shows: no YAML loader, no schema validator, no YamlLoader config
-    // — just JSON in, SemanticTable out.
+    // Reconstruct the joined model via the typeclass entry point
+    // (post-v0.1.16). The `SDFAdapter._` import brings the matching
+    // adapter into implicit scope; `loadSemanticTables` picks it up.
+    // The resolve function maps each `sourceTable` string from the
+    // manifest to a DataFrame — same pattern as dbt / Ossie.
     //
     // The join is asymmetric: encounters.primary_diagnosis (left side)
     // joined to diagnoses.icd_code (right side). Different column
     // names — supported as of v0.1.14.
-    val restored = SemanticManifest.fromJoinedJson(
-      json,
-      encountersDf.as("encounters"),
-      diagnosesDf.as("diagnoses"),
-    )
+    import SDFAdapter._
+    val tables = loadSemanticTables(artifact.toPath, source => source match {
+      case "encounters_clean_csv" => spark.read.option("header", "true").csv("data/encounters_clean.csv")
+      case "diagnoses_csv"        => spark.read.option("header", "true").csv("data/diagnoses.csv")
+      case other => throw new IllegalArgumentException(
+        s"unexpected source in manifest: $other")
+    })
+    val restored = tables.values.head
     Logger.info(s"restored model joined=${restored.isJoined}, joins=${restored.joins.size}")
 
     // ── Analytics ─────────────────────────────────────────────────

@@ -1,9 +1,9 @@
 <p align="center"><img width="381" height="256" alt="ChatGPT Image Jul 24, 2026, 10_32_36 PM" src="https://github.com/user-attachments/assets/a2c7e4d3-aa5e-4b17-b305-0b6676f3304d" /></p>
 
-# SemanticDF
+# SemanticDF (SDF)
 
-A **semantic layer for Apache Spark** (JVM/Scala), adapted from the
-[Boring Semantic Layer](https://github.com/boringdata/boring-semantic-layer) (Python/Ibis).
+A **semantic layer for Apache Spark** (JVM/Scala), inspired by
+the [Boring Semantic Layer](https://github.com/boringdata/boring-semantic-layer) (Python/Ibis).
 
 A `SemanticTable` is a deferred, source-agnostic definition that compiles to a Spark
 `DataFrame` at a batch terminal (`.toDataFrame(spark)` / `.execute(spark)`) or a
@@ -26,8 +26,8 @@ guarantee that they're asking for the right thing.
 
 - **Define a metric once, query it everywhere.** A `SemanticTable` is an immutable
   description. Use it from `flights.query(...)` in code, from a YAML model in
-  `models/flights.yml`, or from an MCP agent that calls `query` / `describe_model`
-  over JSON.
+  `models/flights.yml`, from a dbt `manifest.json`, from an Apache Ossie
+  YAML, or from an MCP agent that calls `query` / `describe_model` over JSON.
 - **Calc + percent-of-total measures with no expression-tree surgery.** A measure that
   references other measures (`t.total / t.flight_count`) resolves by name against the
   aggregated DataFrame; a percent-of-total (`t.total / t.all(t.total)`) cross-joins a
@@ -41,7 +41,25 @@ guarantee that they're asking for the right thing.
   `.toStreamingQuery(...)` for Structured Streaming).
 - **A models → agents bridge.** `okfgen` produces OKF markdown an LLM can read;
   the MCP server exposes the tools (`list_models`, `describe_model`, `query`,
-  `introspect`) over stdio or REST.
+  `explain`, `introspect`, `audit_log`) over stdio or REST.
+- **Result cache for repeated LLM-agent queries.** Opt in with
+  `.withResultCache(ResultCache.inMemory(256))`; the second identical
+  `query()` returns from cache without re-executing the Spark plan.
+  Cache keys are stable SHA-256s of the request shape
+  (model + measures + dimensions + where + having + orderBy + limit),
+  so semantically-equivalent queries share a cache entry.
+- **Per-query audit log for LLM-agent observability.** Opt in with
+  `.withAuditSink(AuditSink.inMemory())`; every `query()` emits an
+  `AuditEvent` recording the model, request shape, elapsed time, row
+  count, and status. The MCP `audit_log` tool exposes the recent
+  event stream back to the agent for self-introspection
+  ("what did I just query?" / "did my last query timeout?").
+- **A typeclass for interchange formats.** `SemanticMetadataAdapter[Source, P]`
+  is the unified entry point. Today there are three instances:
+  `DbtAdapter` (dbt `manifest.json`), `OssieReader` (Apache Ossie YAML),
+  and `SDFAdapter` (the cross-process `SemanticManifest` JSON).
+  Future formats plug in as a new `object` and inherit the
+  `loadSemanticTables(source, resolve)` entry point.
 
 ## When (and when not) to use it
 
@@ -155,8 +173,8 @@ okfgen to a tempdir and `diff -ru`'s the result against the committed bundle.
 
 The `semanticdf-mcp/` sibling module is a Model Context Protocol server that
 exposes semanticdf to any MCP-compatible client (Claude Desktop, Cursor, Continue)
-over **stdio**. All five tools from [`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md)
-ship in v0.1:
+over **stdio**. The six tools from
+[`docs/agents/mcp-contract.md`](docs/agents/mcp-contract.md) v5:
 
 | Tool | Purpose |
 |---|---|
@@ -165,6 +183,7 @@ ship in v0.1:
 | `query`          | Runs a query, returns rows + columns |
 | `explain`        | Same request shape, no execution — emits the semantic plan |
 | `introspect`     | Auto-generate starter YAML from a DataFrame |
+| `audit_log`      | Returns the recent `AuditEvent` stream — what the agent has queried, when, and whether it succeeded |
 
 ### Run the server
 
@@ -194,7 +213,7 @@ All three flags are required:
       "command": "java",
       "args": [
         "-jar",
-        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-0.1.6.jar",
+        "/path/to/semanticdf-mcp/target/semanticdf-mcp_2.13-<version>.jar",
         "--models",
         "/path/to/your/models",
         "--data",
@@ -547,6 +566,8 @@ for the worked example with sample output.
 | `.toDataFrame(spark)` / `.execute(spark)` | Batch terminal (compile to `DataFrame`). With `implicit val spark: SparkSession` in scope, both can be called without the argument (`.toDataFrame` / `.execute`). |
 | `.previewSchema(spark)` | Output schema (compile to `StructType`, no rows). |
 | `.withHint(strategy, params*)` | Apply a Spark planner hint (e.g. `"broadcast"`, `"repartition", n`). |
+| `.withAuditSink(sink: AuditSink)` | Install an `io.semanticdf.audit.AuditSink` — every `query()` / `execute()` / `toDataFrame()` emits an `AuditEvent` (model, request shape, elapsed, status). Default `NoOp` (no overhead). |
+| `.withResultCache(cache: ResultCache)` | Install an `io.semanticdf.cache.ResultCache` — identical `query()` calls return from cache without re-executing the Spark plan. Default `NoOp`. Cache keys are stable SHA-256s of the request shape. |
 | `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
 | `.joins: Seq[JoinInfo]` | All join edges in the model (left/right keys, cardinality: one/one_to_many/many_to_many/cross). Captures join keys at construction time (no compile required). |
 | `.measureKind(name): MeasureKind` | Classify a measure as `Base` / `Calc` / `Window` — useful for tooling that needs to know which measures have a known-name calc dependency chain. |
@@ -603,6 +624,8 @@ parent first).
 | [`examples/operations-analytics`](examples/operations-analytics/README.md) | Order fulfillment time, on-time rate, anomaly detection (z-score) |
 | [`examples/telco-analytics`](examples/telco-analytics/README.md) | Telco: monthly ARPU per plan, promotion effectiveness, roaming revenue |
 | [`examples/hospital`](examples/hospital/README.md) | Hospital: data cleansing workflow (dedup, normalize, fill), ALOS, 30-day readmission rate |
+| [`examples/dbt-reader`](examples/dbt-reader/README.md) | Load a dbt `manifest.json` as a semantic model — the adapter pattern for a third-party interchange format |
+| [`examples/joined-manifest-e2e`](examples/joined-manifest-e2e/README.md) | Cross-process joined-manifest workflow: write → JSON artifact → read via `SDFAdapter` |
 
 Run any of them:
 
@@ -613,8 +636,7 @@ mvn scala:run -DmainClass=com.example.windowanalytics.Main
 
 ## Cross-version compatibility
 
-Verified green on both Spark lines (442 library + 90 MCP + 18 CLI = 550 total,
-on each):
+Verified green on both Spark lines (Spark 3.5.8 default + Spark 4.1.1 via `-Pspark4`). All library and MCP tests pass on each JDK 17. The total test count grows with each release; see the surefire reports for the current number.
 
 | Spark | Scala | Status |
 |---|---|---|
