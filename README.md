@@ -47,7 +47,8 @@ guarantee that they're asking for the right thing.
   `query()` returns from cache without re-executing the Spark plan.
   Cache keys are stable SHA-256s of the request shape
   (model + measures + dimensions + where + having + orderBy + limit),
-  so semantically-equivalent queries share a cache entry.
+  so semantically-equivalent queries share a cache entry. Drop all
+  entries for a model in one call via `cache.invalidateModel("orders")`.
 - **Per-query audit log for LLM-agent observability.** Opt in with
   `.withAuditSink(AuditSink.inMemory())`; every `query()` emits an
   `AuditEvent` recording the model, request shape, elapsed time, row

@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter + Ossie perf/leak tests + SDFAdapter added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter + Ossie perf/leak tests + SDFAdapter + cache invalidation hooks added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -582,6 +582,44 @@ val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), resolve)
 - The trait instances for dbt and Ossie got the implicit-spark signature change (small breaking change at the trait level), but their public APIs (`DbtAdapter`, `OssieReader`) are preserved.
 
 **Library: 665/665 pass** (was 648, +17 tests: 11 spec + 3 leak + 3 perf; no regressions).
+
+---
+
+### 1.16 Cache invalidation hooks (`invalidateModel`)
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16)
+
+**Problem:** The v0.1.16 result cache had no invalidation story. If the source data for a cached query changed, the cache silently went stale — the next identical query returned the old result. No way to evict selectively. After a model rebuild or schema change, the only option was `clear()` (drop everything) and re-cache.
+
+**Solution:** A third method on the `ResultCache` trait: `invalidateModel(name: String): Int`. The user opts in by calling `putWithModel(key, value, model)` instead of `put(key, value)`. The cache maintains a sidecar index from model name to keys for O(1) lookup. Default impl: 0 (no-op for caches that don't track models). The 2-arg `put` is preserved for back-compat; entries stored without a model tag are invisible to `invalidateModel`.
+
+```scala
+val removed = cache.invalidateModel("orders")  // returns count dropped
+// After a model rebuild or schema change, drop everything for the model.
+// Repeat as needed across the model graph.
+```
+
+**What shipped:**
+- `ResultCache.putWithModel(key, value, model)` — the new opt-in entry path. The 2-arg `put(key, value)` is preserved as a default that calls `putWithModel(k, v, "")` (no model tag → invisible to invalidation).
+- `ResultCache.invalidateModel(name): Int` — default impl returns 0; `InMemoryResultCache` overrides with the sidecar index.
+- `InMemoryResultCache` adds an internal `byModel: HashMap[String, Set[String]]` sidecar. The lookup is O(k) where k is the number of entries for the model (typical: 1-5).
+- `SemanticTable.toDataFrame` uses `putWithModel` with the captured request's `model` field. Existing call sites that use the 2-arg `put` keep working.
+- 5 new unit tests in `ResultCacheSpec` (drops matching, no match, untagged entries, overwrite sync, NoOp).
+- 1 new leak test in `LeakSpec` (50-cycle populate-and-invalidate; sidecar stays bounded).
+- 1 new perf test in `PerfBaselineSpec` (256-entry cache; `invalidateModel` = 0ms median).
+- `docs/design/result-cache.md` updated with the new "Invalidation by model name" section.
+- README bullet updated with the one-liner.
+
+**v0.1.17 baseline (real, captured):**
+- `invalidateModel` on 256 entries: **0ms median** (O(1) lookup + O(k) drops, all sub-ms)
+
+**Why lightweight, no degradation, no leak:**
+- The trait change is 2 default-implemented methods (no behavior change for caches that don't track).
+- The `InMemoryResultCache` change is a sidecar `HashMap` updated at `put` and `invalidateModel` time. Bounded by distinct-model count, not entry count.
+- The `get` and `put` hot paths are unchanged — the sidecar update is one `HashMap.put` per `putWithModel` call (sub-µs).
+- Leak test: 50 populate-and-invalidate cycles keep the cache at the expected size; the sidecar drops entries as their models do.
+
+**Library: 672/672 pass** (was 665, +7 tests: 5 unit + 1 leak + 1 perf; no regressions).
 
 ---
 

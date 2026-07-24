@@ -136,6 +136,57 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   // ----------------------------------------------------------------
+  // invalidateModel — opt-in invalidation by model name
+  // ----------------------------------------------------------------
+
+  test("invalidateModel: drops all entries tagged with the model; returns the count") {
+    val c = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    c.putWithModel("a", CachedResult(Array.empty[Row], schema), "orders")
+    c.putWithModel("b", CachedResult(Array.empty[Row], schema), "orders")
+    c.putWithModel("c", CachedResult(Array.empty[Row], schema), "customers")
+    val removed = c.invalidateModel("orders")
+    assert(removed == 2, s"expected 2, got $removed")
+    assert(c.get("a").isEmpty, "a should be gone")
+    assert(c.get("b").isEmpty, "b should be gone")
+    assert(c.get("c").isDefined, "c (different model) should remain")
+  }
+
+  test("invalidateModel: no match returns 0 and is a no-op") {
+    val c = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    c.putWithModel("a", CachedResult(Array.empty[Row], schema), "orders")
+    assert(c.invalidateModel("nonexistent") == 0)
+    assert(c.get("a").isDefined, "unrelated entry should remain")
+  }
+
+  test("invalidateModel: single-arg put (no model tag) is invisible to invalidation") {
+    val c = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    // 2-arg put: stored without a model tag.
+    c.put("untagged", CachedResult(Array.empty[Row], schema))
+    // invalidateModel with anything shouldn't see it.
+    assert(c.invalidateModel("anything") == 0)
+    assert(c.get("untagged").isDefined)
+  }
+
+  test("invalidateModel: sidecar index stays in sync when an entry is overwritten") {
+    val c = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    c.putWithModel("k", CachedResult(Array.empty[Row], schema), "orders")
+    // Overwrite the same key under a different model.
+    c.putWithModel("k", CachedResult(Array.empty[Row], schema), "customers")
+    // The "orders" set should no longer contain "k".
+    assert(c.invalidateModel("orders") == 0)
+    assert(c.invalidateModel("customers") == 1)
+  }
+
+  test("NoOp: invalidateModel is a no-op (returns 0)") {
+    val removed = ResultCache.NoOp.invalidateModel("anything")
+    assert(removed == 0)
+  }
+
+  // ----------------------------------------------------------------
   // SemanticTable + cache: end-to-end
   // ----------------------------------------------------------------
 

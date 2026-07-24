@@ -217,9 +217,9 @@ final class SemanticTable private[semanticdf] (
             cacheKeyOpt.foreach { key =>
               try {
                 val rows = fresh.collect()
-                resultCache.get.put(key,
-                  io.semanticdf.cache.CachedResult(rows, fresh.schema))
-                System.err.println(s"[DBG] cache.put: key=${key.take(8)}..., rows=${rows.length}")
+                resultCache.get.putWithModel(key,
+                  io.semanticdf.cache.CachedResult(rows, fresh.schema),
+                  model)
               } catch { case _: Throwable => () /* cache failures must not break the query */ }
             }
             (fresh, 0L)

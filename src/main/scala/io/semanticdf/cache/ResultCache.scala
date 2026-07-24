@@ -36,8 +36,31 @@ trait ResultCache {
   def get(key: String): Option[CachedResult]
 
   /** Record a cached result. May evict a prior entry if the cache
-    * is bounded. Must not throw. */
-  def put(key: String, value: CachedResult): Unit
+    * is bounded. Must not throw.
+    *
+    * The single-arg overload stores the result without a model
+    * association — [[invalidateModel]] won't see these entries.
+    * Use the three-arg overload (or call `putWithModel`) when you
+    * want invalidation by model. */
+  def put(key: String, value: CachedResult): Unit = putWithModel(key, value, "")
+
+  /** Record a cached result tagged with a model name. The model tag
+    * enables [[invalidateModel]] to drop all entries for a given
+    * model in one call. Pass `""` if the entry has no model
+    * association; the single-arg [[put]] does that for you.
+    *
+    * Default implementation just calls [[put]] with the model
+    * ignored — caches that don't track model can ignore the
+    * argument. Overriding implementations (like
+    * [[InMemoryResultCache]]) maintain a sidecar map from model
+    * name to keys for O(1) lookup. */
+  def putWithModel(key: String, value: CachedResult, model: String): Unit = put(key, value)
+
+  /** Drop every entry tagged with the given model name. Returns
+    * the number of entries actually removed. Default: 0 (no-op
+    * for caches that don't track models). The lookup is O(1) for
+    * caches that maintain a model→keys sidecar; O(n) otherwise. */
+  def invalidateModel(name: String): Int = 0
 
   /** Return the keys currently held by this cache, in LRU order
     * (oldest first). Default: empty (non-retentive caches have no
@@ -57,8 +80,8 @@ object ResultCache {
     * The default. Opt-in by passing a real cache to
     * [[io.semanticdf.SemanticTable.withResultCache]]. */
   val NoOp: ResultCache = new ResultCache {
-    def get(key: String): Option[CachedResult] = None
-    def put(key: String, value: CachedResult): Unit = ()
+    override def get(key: String): Option[CachedResult] = None
+    override def put(key: String, value: CachedResult): Unit = ()
   }
 
   /** A bounded in-memory LRU cache. `maxEntries` (default 256)
