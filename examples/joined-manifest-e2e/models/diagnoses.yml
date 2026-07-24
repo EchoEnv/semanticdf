@@ -1,0 +1,22 @@
+# semanticdf model: diagnoses
+#
+# Light per-side manifest for the joined-manifest-e2e example.
+# The full hospital/diagnoses lookups table; this one only needs
+# the three columns the joined model references.
+
+diagnoses:
+    status: published
+    version: 1
+    table: diagnoses_csv
+    description: "ICD-10 diagnosis reference table"
+
+    dimensions:
+        icd_code:
+            expr: icd_code
+            description: "ICD-10 code (primary key)"
+        description:
+            expr: description
+            description: "Plain-text diagnosis description"
+        category:
+            expr: category
+            description: "Broad clinical category"
