@@ -1,0 +1,66 @@
+# semanticdf model: clinical_encounters (joined, 2 tables)
+#
+# This model joins two of the hospital fixtures into one joined view:
+#
+#   encounters  ──(primary_diagnosis  =  icd_code  )──→ diagnoses
+#                       ↑ asymmetric key
+#
+# The column names differ on each side of the join (encounters uses
+# `primary_diagnosis`, diagnoses uses `icd_code`). This exercises the
+# asymmetric-key support added in v0.1.14 — the predicate
+# `l("primary_diagnosis") === r("icd_code")` would have been rejected
+# by `fromJoinedJson`'s runtime in v0.1.13.
+#
+# Source CSVs live in examples/joined-manifest-e2e/data/.
+
+clinical_encounters:
+    status: published
+    version: 1
+    table: encounters_clean_csv
+    description: "Patient encounters enriched with ICD-10 descriptions and categories"
+
+    dimensions:
+        encounter_id:
+            expr: encounter_id
+            description: "Encounter ID (primary key)"
+        department:
+            expr: department
+            description: "Hospital department"
+        discharge_status:
+            expr: discharge_status
+            description: "How the patient left the hospital"
+        primary_diagnosis:
+            expr: primary_diagnosis
+            description: "ICD-10 code of the primary diagnosis (join key to diagnoses.icd_code)"
+        admission_year:
+            expr: year(admission_date)
+            description: "Year of admission (derived time dimension)"
+            is_time_dimension: true
+            smallest_time_grain: year
+
+        # Joined-side dims (diagnoses.description, diagnoses.category)
+        # surface automatically after the join via the alias prefix.
+
+    measures:
+        encounter_count:
+            expr: "count(1)"
+            description: "Number of encounters in the group"
+        total_los:
+            expr: "sum(datediff(discharge_date, admission_date))"
+            description: "Sum of length-of-stay days across encounters in the group"
+        expired_count:
+            expr: "sum(case when discharge_status = 'expired' then 1 else 0 end)"
+            description: "Number of encounters that ended in mortality"
+
+    calculated_measures:
+        avg_los:
+            expr: "total_los / encounter_count"
+            description: "Average length of stay in days"
+
+    joins:
+        diagnoses:
+            model: diagnoses
+            type: one
+            # Asymmetric key — left side uses `primary_diagnosis`, right uses `icd_code`.
+            left_on: primary_diagnosis
+            right_on: icd_code

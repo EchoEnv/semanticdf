@@ -53,8 +53,9 @@ self-contained once you've done `starter/`.
 
 ### "I'm wiring joined-manifest into a build/load pipeline"
 1. `starter/`
-2. [`joined-manifest/`](joined-manifest/) — the canonical joined-manifest wire shape. Run end-to-end: load joined YAML, emit via `toJoinedJson`, round-trip via `fromJoinedJson`. Demonstrates equi (keys lattice, symmetric or asymmetric column names), non-equi / OR (structured `predicate_ast`), and prefixed (`leftPrefix` / `rightPrefix`) cases.
-3. [`joined-manifest-split/`](joined-manifest-split/) — historical / pre-v0.1.11 reference. Kept for legacy consumers; new code should use `joined-manifest/`.
+2. [`joined-manifest/`](joined-manifest/) — the canonical joined-manifest wire shape. Round-trips a joined manifest in a single process.
+3. [`joined-manifest-e2e/`](joined-manifest-e2e/) — the **artifact-on-disk** workflow for joined manifests. Build phase emits the JSON; Query phase loads from disk and runs analytics. Demonstrates the asymmetric-key (v0.1.14) path with real clinical data. The gap that no other example closes: prove a joined manifest survives across process boundaries.
+4. [`joined-manifest-split/`](joined-manifest-split/) — historical / pre-v0.1.11 reference. Kept for legacy consumers; new code should use `joined-manifest/`.
 
 ## What each example shows
 
@@ -71,6 +72,7 @@ self-contained once you've done `starter/`.
 | [`manifest-load/`](manifest-load/) | Load a pre-built `SemanticManifest` JSON artifact and reconstruct a `SemanticTable`. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md) |
 | [`streaming-manifest-load/`](streaming-manifest-load/) | Load a pre-built streaming `SemanticManifest` and run a streaming query. Companion to the [streaming-manifest recipe](../docs/design/streaming-manifest.md) |
 | [`joined-manifest/`](joined-manifest/) | Emit a joined-manifest via `SemanticManifest.toJoinedJson` (per-side metadata + alias-prefixed dims via `extra_dimensions[]`, `leftPrefix` / `rightPrefix` on the join block, structured `predicate_ast` for non-equi / OR, asymmetric-key support) and round-trip via `fromJoinedJson`. The canonical example for the joined-manifest wire shape. |
+| [`joined-manifest-e2e/`](joined-manifest-e2e/) | End-to-end artifact workflow on real data. Phase 1 (`Build`) emits a joined manifest to `target/*.json`; phase 2 (`Query`) loads from disk and runs analytics. Demonstrates the asymmetric-key (v0.1.14) path with clinical data. |
 | [`joined-manifest-split/`](joined-manifest-split/) | Legacy / pre-v0.1.11 reference: the hand-rolled per-side emit + manually-composed joined envelope pattern. Kept for consumers on pre-v0.1.11 versions; use [`joined-manifest/`](joined-manifest/) for new code. |
 
 ## Prerequisites
