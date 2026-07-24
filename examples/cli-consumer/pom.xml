@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>semanticdf-cli_2.13</artifactId>
-    <version>0.1.13</version>
+    <version>0.1.14</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-cli</name>
@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
-        <semanticdf.version>0.1.13</semanticdf.version>
+        <semanticdf.version>0.1.14</semanticdf.version>
     </properties>
 
     <dependencies>

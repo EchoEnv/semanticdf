@@ -686,8 +686,10 @@ object YamlLoader {
     * so they are groupable by their aliased name (e.g. `carriers.name`) - mirroring what
     * a Scala consumer writes explicitly as Dimension("carriers.name", t => t("name")).
     *
-    * Join keys must share the same column name on both sides (left_on == right_on),
-    * matching semanticdf's equi-join engine. Asymmetric keys are a future enhancement. */
+    * Join keys may be asymmetric — `left_on` and `right_on` may
+    * name different columns on each side. The typed entry points
+    * ([[SemanticTable.join_on]] / [[SemanticTable.join_many_on]])
+    * zip the keys independently. */
   private def applyJoins(
       model: SemanticTable,
       joins: Map[String, Map[String, Any]],
@@ -717,16 +719,15 @@ object YamlLoader {
           val rightOn = jCfg.get("right_on").map(_.toString).getOrElse(
             throw new IllegalArgumentException(
               s"Join '$alias' (type $joinType) must specify 'right_on'."))
-          if (leftOn != rightOn)
-            throw new IllegalArgumentException(
-              s"Join '$alias': left_on ('$leftOn') and right_on ('$rightOn') must match. " +
-                s"semanticdf's equi-join requires the same key column name on both tables. " +
-                s"Rename the column in one table so both use '$leftOn'.")
-          val on: (JoinSide, JoinSide) => org.apache.spark.sql.Column =
-            (l, r) => l(leftOn) === r(rightOn)
+          // v0.1.14: route through the typed entry points
+          // (join_on / join_many_on). They zip the keys independently,
+          // so left_on and right_on may name different columns on each
+          // side (e.g. flights.carrier joined to carriers.code). The
+          // probe + AST + manifest wire format are all asymmetric-safe
+          // — only this entry-point guard was blocking the case.
           joinType match {
-            case "one"  => result = result.join_one(right, on)
-            case "many" => result = result.join_many(right, on)
+            case "one"  => result = result.join_on(right,    leftOn -> rightOn)
+            case "many" => result = result.join_many_on(right, leftOn -> rightOn)
           }
           // Re-expose the joined model's dimensions under the alias prefix so consumers
           // can groupBy("carriers.name") etc. The expr still references the bare column

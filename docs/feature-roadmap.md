@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.13 shipped (structured predicate AST for joined-manifest wire shape — closes the last narrow caveat of the joined-models-manifest recipe). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.13 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.14 shipped (asymmetric join keys — `flights.carrier` joined to `carriers.code` now works end-to-end). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.13 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
