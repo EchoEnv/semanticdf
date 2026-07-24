@@ -1,5 +1,37 @@
 # Release notes
 
+## v0.1.14 — asymmetric join keys
+
+A **asymmetric-key** release. `SemanticTable.join_one` / `join_many` / YamlLoader `joins:` now accept different column names on each side of the join (e.g. `flights.carrier` joined to `carriers.code`). The wire format and runtime already supported the asymmetric shape; only the entry-point guards were blocking the case. No breaking change — existing symmetric joins work unchanged.
+
+Library, MCP server, and CLI consumer are at
+
+```
+io.semanticdf:semanticdf_2.13:0.1.14
+io.semanticdf:semanticdf-mcp_2.13:0.1.14
+com.example:semanticdf-cli_2.13:0.1.14
+```
+
+Test count: 544 library + 90 MCP + 18 CLI (652 total), green on Spark 3.5.8 and 4.1.1.
+
+### Library — features
+
+- **`SemanticTable.join_one` / `join_many` accept asymmetric keys** — the typed entries (`join_on(leftKey -> rightKey)`) were already asymmetric-safe; the lambda overloads (`(l, r) => l("x") === r("y")`) now round-trip the asymmetric pair through `SemanticJoinOp.leftKeys` / `rightKeys` correctly.
+- **`YamlLoader` accepts asymmetric `left_on` / `right_on`** — `joins: { carriers: { left_on: carrier, right_on: code } }` now parses and executes end-to-end. Previously rejected with a "left_on == right_on" guard.
+- **`compileEquiJoin` trusts the constructor's captured keys** — no longer re-probes the lambda at compile time. The probe at construction (via `extractJoinKeys` + AST walker) is the single source of truth for both `leftKeys` and `rightKeys`.
+
+### Performance
+
+Strictly **less work** than v0.1.13:
+
+- Eliminated one re-probe per `toDataFrame` call (the lambda no longer runs against the joined DataFrames at compile time just to discover keys already known from construction).
+- The probe at construction runs once and its result is reused across all `toDataFrame` invocations on the same `SemanticTable`.
+
+### Anti-scope (preserved as honest caveats)
+
+- `onExprString` is still emitted as the legacy fallback for non-equi / OR / subquery predicates that don't fit the AST.
+- `preAggregateAtGrain` (Many-cardinality fan-out prevention) probes each dimension against the side's DataFrame; user-supplied lambda dims that bypass the scope (`_ => col("x")`) are not filtered by name. Use scope-respecting dims (`t => t("x")`) for fan-out pre-aggregation to work correctly with cross-side dims.
+
 ## v0.1.13 — structured predicate AST for joined-manifest
 
 A **predicate-AST** release. The `joined-models-manifest` recipe's last narrow caveat is closed: the joined wire shape now carries predicates as a structured AST (`model.join.predicate_ast`) alongside the legacy opaque `onExprString` SQL form. Tools get a typed view of the join condition; the reader's reconstructed `on` lambda uses the AST when present (zero overhead for the equi case, where the keys lattice already captures the structure).

@@ -24,7 +24,7 @@ specifically, see [`docs/calc-author-guide.md`](calc-author-guide.md).
 | **Join chains** | `join_one` / `join_many` / `join_cross`, tested up to 2 tables | Multi-hop join testing + collision policy |
 | **Time dimensions** | `atTimeGrain()` truncation, or `derive = Seq("year", "month", "day")` for sibling dims | — (correct as-is) |
 | **NULL semantics** | SQL-correct (null-propagating); `safeDivide` for dashboard zeros | — (correct as-is) |
-| **YAML joins** | Symmetric keys (same name both sides) | Asymmetric-key support |
+| **YAML joins** | Asymmetric keys supported (`left_on` / `right_on` may differ) | — (correct as-is) |
 | **YAML calc measures** | Arithmetic + `all()` | Function calls (`abs`, `round`, …) |
 
 ---
@@ -242,29 +242,6 @@ joined.withMeasures(Measure("total_orders", t => sum(t("order_amount"))))  // OK
 ---
 
 ## YAML authoring notes
-
-### Join keys must be symmetric (same column name on both sides)
-
-The YAML loader requires `left_on == right_on` — the join key must
-have the same column name on both tables. This matches SemanticDF's
-equi-join engine.
-
-```yaml
-# DON'T — different names on each side → error
-joins:
-  carriers:
-    left_on: carrier   # flights.carrier
-    right_on: code      # carriers.code — DIFFERENT name
-
-# DO — rename the column in one table so both use the same key name
-carriers:
-  table: carriers_tbl
-  dimensions:
-    carrier: carrier   # renamed from 'code' to 'carrier' to match flights
-```
-
-**Roadmap:** Asymmetric-key support (either by relaxing the join
-engine's symmetric-key constraint or via column-rename preprocessing).
 
 ### Base measures are Spark SQL expressions
 

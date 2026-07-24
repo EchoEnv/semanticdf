@@ -723,33 +723,44 @@ final case class SemanticJoinOp(
     df.select(all: _*)
   }
 
-  /** Equi-join with fan-out prevention for `Many` cardinality. */
+  /** Equi-join with fan-out prevention for `Many` cardinality.
+    *
+    * v0.1.14: keys are read from the constructor (`this.leftKeys` /
+    * `this.rightKeys`) instead of being re-probed at compile time. The
+    * probe at construction captures the asymmetric keys once and the
+    * AST + manifest wire + DSL all carry them. Re-probing here used
+    * to enforce `leftKeys == rightKeys` (the probe names the captured
+    * columns after their bare names on each side, so asymmetric names
+    * produced different sets) — that gate is now gone. */
   private def compileEquiJoin(leftDf: DataFrame, rightDf: DataFrame): DataFrame = {
 
-    // --- Extract join key column names from the predicate ---
-    val lCaptured = scala.collection.mutable.Map.empty[String, Boolean]
-    val rCaptured = scala.collection.mutable.Map.empty[String, Boolean]
-    val lSide = new JoinSide("left",  leftDf,  leftRoot.dimensions,  lCaptured)
-    val rSide = new JoinSide("right", rightDf, rightRoot.dimensions, rCaptured)
-    val sparkPred: Column = on(lSide, rSide)
+    // Trust the constructor: leftKeys / rightKeys were captured at
+    // construction (typed entry points populate them directly; the
+    // lambda path uses extractJoinKeys which uses the AST walker).
+    val leftKeys  = this.leftKeys
+    val rightKeys = this.rightKeys
 
-    val leftKeys  = lCaptured.keys.toSeq.sorted
-    val rightKeys = rCaptured.keys.toSeq.sorted
-
-    if (leftKeys.size != rightKeys.size || leftKeys != rightKeys)
+    if (leftKeys.length != rightKeys.length)
       throw new IllegalArgumentException(
-        s"Join predicate must compare equal column names on both sides. " +
-          s"Left keys: $leftKeys, right keys: $rightKeys"
-      )
+        s"Join has mismatched key counts: leftKeys=${leftKeys.length}, " +
+          s"rightKeys=${rightKeys.length}. (leftKeys=$leftKeys, rightKeys=$rightKeys)")
+    if (leftKeys.isEmpty)
+      throw new IllegalArgumentException(
+        s"Join has no recoverable keys (leftKeys / rightKeys both empty). " +
+          s"Provide explicit keys via join_on / join_many_on, or use a " +
+          s"predicate that the AST can decompose (eq / range / and / or).")
 
     // --- Dimension name collision detection (ambiguous-reference guard) ---
     // Both sides may declare dimensions with the same name. Join-key columns are
     // allowed to collide by necessity; other collisions would surface at Spark
     // execution time as `[AMBIGUOUS_REFERENCE] Reference 'x' is ambiguous, could
     // be: ['x', 'x']` — a confusing error. Detect early with a clear message.
+    // For asymmetric joins, BOTH side's key names are exempt (e.g. left side
+    // has "carrier" and right side has "code"; both may collide with non-key
+    // dims on their own side).
     val leftDims  = leftRoot.dimensions.keys.toSet
     val rightDims = rightRoot.dimensions.keys.toSet
-    val keySet    = leftKeys.toSet
+    val keySet    = leftKeys.toSet ++ rightKeys.toSet
     val collisions = (leftDims intersect rightDims) -- keySet
     if (collisions.nonEmpty) {
       val sorted = collisions.toSeq.sorted
@@ -785,7 +796,11 @@ final case class SemanticJoinOp(
     SemanticLogger.logJoinCompiled(cardinality.toString, leftKeys, cardinality == JoinCardinality.Many)
 
     // --- Build Spark equi-join condition ---
-    val cond: Column = leftKeys.map(k => leftAgg(k) === rightAgg(k)).reduce(_ && _)
+    // Asymmetric keys: zip instead of sort-compare. Each pair is one
+    // (leftCol, rightCol) that the user (or the AST walker) named.
+    val cond: Column = leftKeys.zip(rightKeys).map { case (lk, rk) =>
+      leftAgg(lk) === rightAgg(rk)
+    }.reduce(_ && _)
 
     // --- Execute left-outer join ---
     // For Many: pre-agg prevents fact inflation. For One: no fan-out risk.
@@ -796,6 +811,10 @@ final case class SemanticJoinOp(
     // same key name (e.g. "customer_id"), the joined DF has two `customer_id` columns.
     // We can't select by bare name (ambiguous) — must use QUALIFIED references
     // (leftAgg("customer_id") vs rightAgg("name")) that carry their source-DF scoping.
+    // For asymmetric keys (e.g. "carrier" vs "code"), there is no name collision to
+    // dedup — both columns survive the join naturally. The dedup uses the LEFT
+    // side's keys for "should I drop this right-side column?" because the left side
+    // is the kept source.
     val dupKeySet = leftKeys.toSet
     val leftRefs       = leftAgg.columns.map(c => leftAgg(c))
     val rightOnlyRefs  = rightAgg.columns.filterNot(dupKeySet.contains).map(c => rightAgg(c))
