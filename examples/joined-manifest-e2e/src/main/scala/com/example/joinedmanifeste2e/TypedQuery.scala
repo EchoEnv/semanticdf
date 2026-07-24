@@ -1,6 +1,8 @@
 package com.example.joinedmanifeste2e
 
 import io.semanticdf._
+import io.semanticdf.adapters.SDFAdapter
+import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
 
 import org.apache.spark.sql.SparkSession
 
@@ -12,9 +14,10 @@ import org.apache.spark.sql.SparkSession
   *   - Query.scala       uses string names: `.query(dimensions = Seq("department"), ...)`
   *   - TypedQuery.scala  uses typed refs:  `.query(groupByDimensions(department), ...)`
   *
-  * Both run against the same JSON artifact (loaded from disk, same
-  * `SemanticManifest.fromJoinedJson` call). The only difference is the
-  * caller-side API style.
+  * Both run against the same JSON artifact, loaded via the
+  * `loadSemanticTables` typeclass entry point (post-v0.1.16
+  * SDFAdapter). The only difference between them is the caller-side
+  * API style.
   *
   * The typed ref pattern:
   *   1. Declare one phantom-typed carrier per field name (e.g. `Department`).
@@ -75,14 +78,19 @@ object TypedQuery {
     val json = scala.io.Source.fromFile(artifact, "UTF-8").mkString
     Logger.info(s"loaded artifact: ${artifact.getAbsolutePath} (${json.length} bytes)")
 
-    val encountersDf = spark.read.option("header", "true").csv("data/encounters_clean.csv")
-    val diagnosesDf  = spark.read.option("header", "true").csv("data/diagnoses.csv")
-
-    val restored = SemanticManifest.fromJoinedJson(
-      json,
-      encountersDf.as("encounters"),
-      diagnosesDf.as("diagnoses"),
-    )
+    // Reconstruct via the typeclass entry point (post-v0.1.16).
+    // The `SDFAdapter._` import brings the matching adapter into
+    // implicit scope; `loadSemanticTables` picks it up. The resolve
+    // function maps each `sourceTable` string from the manifest to
+    // a DataFrame — same pattern as dbt / Ossie.
+    import SDFAdapter._
+    val tables = loadSemanticTables(artifact.toPath, source => source match {
+      case "encounters_clean_csv" => spark.read.option("header", "true").csv("data/encounters_clean.csv")
+      case "diagnoses_csv"        => spark.read.option("header", "true").csv("data/diagnoses.csv")
+      case other => throw new IllegalArgumentException(
+        s"unexpected source in manifest: $other")
+    })
+    val restored = tables.values.head
     Logger.info(s"restored model joined=${restored.isJoined}, joins=${restored.joins.size}")
 
     // ── Analytics with typed DSL ────────────────────────────────────
