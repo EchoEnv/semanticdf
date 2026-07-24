@@ -74,11 +74,8 @@ The `on` join key **reconstructs functionally** from the wire:
 - **Prefixed producer:** the `leftPrefix` / `rightPrefix` fields on the
   join block qualify columns in the reconstructed `on`.
 
-The `joined-keys` foundation (PRs #153 + #154, completed in v0.1.11)
-and the Path C caveat closure (`extra_dimensions[]` /
-`extra_measures[]` for alias-prefixed dims, `leftPrefix` /
-`rightPrefix` on the `join` block) make this possible end-to-end. The
-structured `predicate_ast` covers the last remaining case: non-equi /
-OR predicates get a typed wire representation rather than opaque SQL.
-For typical equi-joins `restored.execute(spark)` works without
-re-loading from YAML.
+The library supports four reconstruction paths from the wire (equi
+keys lattice, structured `predicate_ast` for non-equi / OR, prefix
+fields for aliased producers, asymmetric keys for differently-named
+join columns). For typical models `restored.execute(spark)` works
+without re-loading from YAML.

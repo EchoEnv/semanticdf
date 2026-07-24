@@ -288,8 +288,7 @@ The items above marked "Roadmap" are the active deferral list. They
 share two characteristics:
 
 1. **The interface is shaped for them.** Streaming has an ADR; calc
-   function calls have a parser extension point; asymmetric joins have
-   a documented engine constraint. None of these require API breaks.
+   function calls have a parser extension point; asymmetric joins shipped at v0.1.14. None of these require API breaks.
 2. **They're gated on consumer signal.** SemanticDF ships
    production-shaped workarounds for each, so adoption isn't blocked.
    If you hit one of these and the workaround doesn't fit, file an

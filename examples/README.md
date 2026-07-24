@@ -53,7 +53,7 @@ self-contained once you've done `starter/`.
 
 ### "I'm wiring joined-manifest into a build/load pipeline"
 1. `starter/`
-2. [`joined-manifest/`](joined-manifest/) — the canonical joined-manifest wire shape. Run end-to-end: load joined YAML, emit via `toJoinedJson`, round-trip via `fromJoinedJson`. Demonstrates equi (keys lattice), non-equi / OR (structured `predicate_ast`), and prefixed (`leftPrefix` / `rightPrefix`) cases.
+2. [`joined-manifest/`](joined-manifest/) — the canonical joined-manifest wire shape. Run end-to-end: load joined YAML, emit via `toJoinedJson`, round-trip via `fromJoinedJson`. Demonstrates equi (keys lattice, symmetric or asymmetric column names), non-equi / OR (structured `predicate_ast`), and prefixed (`leftPrefix` / `rightPrefix`) cases.
 3. [`joined-manifest-split/`](joined-manifest-split/) — historical / pre-v0.1.11 reference. Kept for legacy consumers; new code should use `joined-manifest/`.
 
 ## What each example shows
@@ -70,7 +70,7 @@ self-contained once you've done `starter/`.
 | [`cli-consumer/`](cli-consumer/) | Standalone CLI client (`sdf`) for the REST API — uses no Spark, no SemanticDF dep |
 | [`manifest-load/`](manifest-load/) | Load a pre-built `SemanticManifest` JSON artifact and reconstruct a `SemanticTable`. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md) |
 | [`streaming-manifest-load/`](streaming-manifest-load/) | Load a pre-built streaming `SemanticManifest` and run a streaming query. Companion to the [streaming-manifest recipe](../docs/design/streaming-manifest.md) |
-| [`joined-manifest/`](joined-manifest/) | Emit a joined-manifest via `SemanticManifest.toJoinedJson` (per-side metadata + alias-prefixed dims via `extra_dimensions[]`, `leftPrefix` / `rightPrefix` on the join block, structured `predicate_ast` for non-equi / OR) and round-trip via `fromJoinedJson`. The canonical example for the joined-manifest wire shape. |
+| [`joined-manifest/`](joined-manifest/) | Emit a joined-manifest via `SemanticManifest.toJoinedJson` (per-side metadata + alias-prefixed dims via `extra_dimensions[]`, `leftPrefix` / `rightPrefix` on the join block, structured `predicate_ast` for non-equi / OR, asymmetric-key support) and round-trip via `fromJoinedJson`. The canonical example for the joined-manifest wire shape. |
 | [`joined-manifest-split/`](joined-manifest-split/) | Legacy / pre-v0.1.11 reference: the hand-rolled per-side emit + manually-composed joined envelope pattern. Kept for consumers on pre-v0.1.11 versions; use [`joined-manifest/`](joined-manifest/) for new code. |
 
 ## Prerequisites
