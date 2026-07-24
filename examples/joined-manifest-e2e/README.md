@@ -40,9 +40,28 @@ cd examples/joined-manifest-e2e
 # Phase 1: emit the joined manifest artifact
 mvn -o scala:run -DmainClass=com.example.joinedmanifeste2e.Build
 
-# Phase 2: load the artifact from disk and run analytics
-mvn -o scala:run -DmainClass=com.example.joinedmanifeste2e.Query
+# Phase 2: load the artifact from disk and run analytics.
+# Two parallel entry points — same artifact, different caller-side
+# API style. Pick whichever fits your codebase.
+mvn -o scala:run -DmainClass=com.example.joinedmanifeste2e.Query       # string-based .query() API
+mvn -o scala:run -DmainClass=com.example.joinedmanifeste2e.TypedQuery # phantom-typed field refs
 ```
+
+### String-based (`Query.scala`) vs typed-DSL (`TypedQuery.scala`)
+
+Both load the same JSON artifact and run semantically identical queries.
+They differ in how the caller addresses dims + measures:
+
+| Style | Example |
+|---|---|
+| String-based (`Query.scala`) | `.query(dimensions = Seq("department"), measures = Seq("encounter_count"))` |
+| Typed DSL (`TypedQuery.scala`) | `.groupByDimensions(department).aggregateMeasures(encounterCount)` |
+
+The typed-DSL pattern (`Refs` object + phantom-typed carriers) compiles a
+typo into a compile error. The string-based pattern is terser for ad-hoc
+queries and tools (the `MCP` server uses it for the same reason). See
+`examples/telco-analytics/` for a richer typed-DSL example with calc
+measures added in Scala.
 
 ## What's interesting
 
@@ -88,7 +107,8 @@ joined-manifest-e2e/
 │   └── diagnoses.csv
 └── src/main/scala/com/example/joinedmanifeste2e/
     ├── Build.scala                 # phase 1: emit artifact
-    ├── Query.scala                 # phase 2: load + queries
+    ├── Query.scala                 # phase 2: load + queries (string-based)
+    ├── TypedQuery.scala            # phase 2: load + queries (typed DSL)
     └── Logger.scala                # template-local logger
 ```
 
