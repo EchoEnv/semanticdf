@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>joined-manifest-e2e_2.13</artifactId>
-    <version>0.1.15</version>
+    <version>0.1.16</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-joined-manifest-e2e</name>

@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>semanticdf-manifest-transforms-load_2.13</artifactId>
-    <version>0.1.15</version>
+    <version>0.1.16</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-manifest-load</name>

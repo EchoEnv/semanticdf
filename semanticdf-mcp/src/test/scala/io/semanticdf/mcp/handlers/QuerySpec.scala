@@ -1,6 +1,6 @@
 package io.semanticdf.mcp.handlers
 
-import io.semanticdf.{Dimension, Measure, toSemanticTable}
+import io.semanticdf.{Dimension, Measure, Predicate, toSemanticTable}
 import io.semanticdf.mcp.{DataConfig, ErrorDetail, ErrorEnvelope, Models}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit}
@@ -402,5 +402,112 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
       new Query(spark).handle(registry, baseRequest.copy(model = "ghost"))
     }
     ex.getMessage should include("ghost")
+  }
+
+  // ---------------------------------------------------------------------------
+  // ast_where: structured predicate on the query wire
+  // ---------------------------------------------------------------------------
+
+  test("ast_where: parses and runs a simple leaf AST") {
+    val ast: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    ast.put("op",    "eq")
+    ast.put("left",  "carrier")
+    ast.put("right", "AA")
+    val req = baseRequest.copy(
+      measures = Seq("flight_count"),
+      ast_where = Some(ast),
+    )
+    val env = new Query(spark).handle(registry, req)
+    assert(env.status == "ok", s"expected ok, got ${env.status}: ${env.data}")
+    // 2 rows of AA out of 6.
+    val data = env.data.asInstanceOf[Query.Data]
+    assert(data.row_count == 1, s"expected 1 row (1 group: AA), got ${data.row_count}")
+  }
+
+  test("ast_where: nested AND/OR produces the right row count") {
+    // distance: int; carrier: string. Build a 2-dim table to make this meaningful.
+    val table = toSemanticTable(
+      spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(
+          ("AA", 100), ("AA", 600),
+          ("UA", 200), ("UA", 800),
+          ("DL", 50),
+        ))
+      ).toDF("carrier", "distance"),
+      name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+    val reg = new Models(Map("flights" -> table), DataConfig(Map.empty))
+    // (carrier=AA OR carrier=DL) AND distance > 400
+    val ast: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    ast.put("op", "and")
+    val left: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    left.put("op", "or")
+    val a: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    a.put("op", "eq"); a.put("left", "carrier"); a.put("right", "AA")
+    val b: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    b.put("op", "eq"); b.put("left", "carrier"); b.put("right", "DL")
+    left.put("left", a); left.put("right", b)
+    val right: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    right.put("op", "gt"); right.put("left", "distance"); right.put("right", 400)
+    ast.put("left", left); ast.put("right", right)
+    val env = new Query(spark).handle(reg, baseRequest.copy(measures = Seq("flight_count"), ast_where = Some(ast)))
+    // Rows where (carrier IN [AA, DL]) AND distance > 400: only the AA row with distance 600.
+    val data = env.data.asInstanceOf[Query.Data]
+    assert(data.row_count == 1, s"expected 1, got ${data.row_count}: ${data.rows}")
+  }
+
+  test("ast_where AND flat where: both applied, AND-combined by server") {
+    // flightsDf has carrier + dummy columns. Two predicates both on `carrier`:
+    // AST says carrier=AA; flat says carrier=UA. Server must AND-combine:
+    // no row matches both, so result is 0 rows.
+    val ast: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    ast.put("op", "eq"); ast.put("left", "carrier"); ast.put("right", "AA")
+    val flat: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    flat.put("type", "eq"); flat.put("field", "carrier"); flat.put("value", "UA")
+    val req = baseRequest.copy(
+      measures = Seq("flight_count"),
+      ast_where = Some(ast),
+      where = Some(Seq(flat)),
+    )
+    val env = new Query(spark).handle(registry, req)
+    val data = env.data.asInstanceOf[Query.Data]
+    // No row matches both AA AND UA -> 0 grouped rows.
+    assert(env.status == "ok")
+    assert(data.row_count == 0, s"expected 0 rows (AA AND UA is unsatisfiable), got ${data.row_count}")
+  }
+
+  test("mergedWhere: returns None when both fields are empty") {
+    assert(Query.mergedWhere(QueryRequest("f", Seq("m"))) == None)
+  }
+
+  test("mergedWhere: returns AST when only AST is present") {
+    val ast: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    ast.put("op", "eq"); ast.put("left", "carrier"); ast.put("right", "AA")
+    val req = QueryRequest("f", Seq("m"), ast_where = Some(ast))
+    val merged = Query.mergedWhere(req)
+    assert(merged.isDefined)
+    assert(merged.get == Predicate.Compare.Eq("carrier", "AA"))
+  }
+
+  test("mergedWhere: AND-combines AST and flat when both present") {
+    val ast: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    ast.put("op", "gt"); ast.put("left", "distance"); ast.put("right", 100)
+    val flat: java.util.Map[String, Any] = new java.util.HashMap[String, Any]()
+    flat.put("type", "eq"); flat.put("field", "carrier"); flat.put("value", "AA")
+    val req = QueryRequest("f", Seq("m"), ast_where = Some(ast), where = Some(Seq(flat)))
+    val merged = Query.mergedWhere(req).get
+    assert(merged.isInstanceOf[Predicate.And])
+  }
+
+  test("parseRequest: ast_where round-trips from JSON") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"ast_where":{"op":"eq","left":"carrier","right":"AA"}}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+    val req = Query.parseRequest(args)
+    assert(req.ast_where.isDefined, s"expected ast_where to be set, got ${req.ast_where}")
+    val parsed = AstPredicates.parse(req.ast_where.get)
+    assert(parsed == Predicate.Compare.Eq("carrier", "AA"))
   }
 }

@@ -1,5 +1,48 @@
 # Release notes
 
+## v0.1.16 — structured predicate on the MCP wire
+
+The MCP `query` and `explain` tools now accept an optional `ast_where` (and `ast_having`) field with a structured predicate shape. Mirrors the library's `PredicateAst` ops (`eq` / `neq` / `lt` / `lte` / `gt` / `gte` / `and` / `or`). The flat `where` / `having` shape is unchanged.
+
+```json
+{
+  "model": "flights",
+  "measures": ["flight_count"],
+  "ast_where": {
+    "op": "and",
+    "left":  {"op": "gt",  "left": "distance", "right": 500},
+    "right": {
+      "op": "or",
+      "left":  {"op": "eq", "left": "carrier", "right": "AA"},
+      "right": {"op": "eq", "left": "carrier", "right": "UA"}
+    }
+  }
+}
+```
+
+If both `where` and `ast_where` are present, the server AND-combines them. Either can be omitted.
+
+### What's new
+
+- `AstPredicates.scala` — ~80 LOC parser for the structured AST shape. Detects nodes vs values by the presence of an `op` key.
+- `QueryRequest` DTO — new `ast_where` and `ast_having` fields (both `Option[Any]`).
+- `Query.mergedWhere` / `mergedHaving` — combine the two predicate sources. Exposed as `private[handlers]` for direct unit testing.
+- `queryToolSchema` — two new properties (`ast_where`, `ast_having`) of type `object`.
+- 16 new tests in `AstPredicatesSpec` (every op + every error path).
+- 7 new tests in `QuerySpec` (round-trip JSON, end-to-end runs, merge logic).
+
+### What's NOT new
+
+- No new ops. The AST op set is the closed subset the library's `PredicateAst` actually produces. For richer predicates (`in`, `not_in`, `is_null`), use the flat `where` shape.
+- No JSON Schema validation of nested `op`/`left`/`right` types. The SDK validates that `ast_where` is a JSON object; deeper shape is checked at parse time (rejected as `INVALID_PREDICATE` / `UNSUPPORTED_OP`).
+
+### Files
+
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/AstPredicates.scala` (new)
+- `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/Query.scala` (DTO + handler + schema)
+- `semanticdf-mcp/src/test/scala/io/semanticdf/mcp/handlers/AstPredicatesSpec.scala` (new)
+- `docs/agents/mcp-contract.md` (new §"Alternative: ast_where / ast_having", updated status to v4, updated error-codes table)
+
 ## v0.1.15 — SQL-mode CLI
 
 A **first-touch friction** release. Ad-hoc exploration of a YAML model no longer requires writing Scala. The `query` subcommand parses a SQL string and maps it to the existing `SemanticTable.query()` API.

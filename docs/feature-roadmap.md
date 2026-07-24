@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.15 shipped (SQL-mode CLI for ad-hoc exploration). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.15 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire — `ast_where` / `ast_having` fields on the `query` and `explain` tools). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -229,6 +229,42 @@ mvn exec:java \
 **Tests:** 20 new tests (16 unit + 4 e2e). 566/566 total.
 
 **Why T1:** Universal — zero-code exploration. The single biggest consumer-friction win.
+
+---
+
+### 1.7 Structured predicate on the MCP query wire
+
+**Status:** ✅ **SHIPPED** (v0.1.16)
+
+**Problem:** The MCP `query` wire shape uses a flat `where: [predicates]` array — the server has to AND-combine them with `Predicate.And(...)` on the agent's behalf. Agents that want to author a single composable tree (nested AND/OR) have to flatten their intent into a list. Plus, the wire shape doesn't match the library's `PredicateAst` (used by the joined-manifest wire in v0.1.13), so two parts of the system express the same concept in two different shapes.
+
+**Solution:** An alternative `ast_where` (and `ast_having`) field on the `query` and `explain` tools. The op set mirrors the library's `PredicateAst` exactly: `eq` / `neq` / `lt` / `lte` / `gt` / `gte` / `and` / `or`. Both fields can be present; the server AND-combines them.
+
+```json
+{
+  "model": "flights",
+  "measures": ["flight_count"],
+  "ast_where": {
+    "op": "and",
+    "left":  {"op": "gt",  "left": "distance", "right": 500},
+    "right": {
+      "op": "or",
+      "left":  {"op": "eq", "left": "carrier", "right": "AA"},
+      "right": {"op": "eq", "left": "carrier", "right": "UA"}
+    }
+  }
+}
+```
+
+**What shipped:**
+- `AstPredicates.scala` — ~80 LOC parser. Detects nodes vs values by the presence of an `op` key.
+- `QueryRequest` — new `ast_where` / `ast_having` fields (additive — `where` / `having` keep working).
+- `Query.mergedWhere` / `mergedHaving` — `private[handlers]` helpers for direct unit testing.
+- `queryToolSchema` — two new properties.
+- 16 unit tests (`AstPredicatesSpec`) + 7 integration tests (`QuerySpec`).
+- `docs/agents/mcp-contract.md` — new §"Alternative: ast_where / ast_having", updated error-codes table, status v4.
+
+**Why T1:** Closes a real ergonomics gap. Two parts of the system (library wire + MCP wire) now express predicates in the same shape.
 
 ---
 
