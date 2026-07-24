@@ -1340,8 +1340,15 @@ final class SemanticTable private[semanticdf] (
     if (leftKeysIn.isEmpty && rightKeysIn.isEmpty && onExprStringIn.isEmpty) {
       val (lk, rk, sql) = join.extractJoinKeys()
       if (lk.nonEmpty || rk.nonEmpty || sql.isDefined) {
+        // v0.1.13: also extract the structured predicate AST. Only
+        // populated when keys alone don't capture the structure
+        // (non-equi / OR) so the canonical equi-join case keeps
+        // zero AST overhead. The probe reuses the same recording
+        // stubs so the additional cost is one extra `Column` build
+        // (already discarded).
+        val ast = join.extractPredicateAst()
         return new SemanticTable(
-          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql),
+          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql, predicateAst = ast),
           postAggPredicates = Nil,
           version = 0,
           sourceTable = None,
@@ -1444,8 +1451,11 @@ final class SemanticTable private[semanticdf] (
     if (leftKeysIn.isEmpty && rightKeysIn.isEmpty && onExprStringIn.isEmpty) {
       val (lk, rk, sql) = join.extractJoinKeys()
       if (lk.nonEmpty || rk.nonEmpty || sql.isDefined) {
+        // v0.1.13: same AST extraction as the one-side path. See
+        // join_oneWithKeys for the rationale.
+        val ast = join.extractPredicateAst()
         return new SemanticTable(
-          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql),
+          join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql, predicateAst = ast),
           postAggPredicates = Nil,
           version = 0,
           sourceTable = None,

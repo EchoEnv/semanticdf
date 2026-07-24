@@ -277,4 +277,75 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       assert(rightNode.path("namespace").asText() == "prod")
     } finally spark.stop()
   }
+
+// v0.1.13: structured predicate AST round-trip
+test("v0.1.13: equi-join AST round-trips through the joined wire format") {
+  val (spark, leftDf, rightDf) = setupSpark()
+  try {
+    val leftT  = toSemanticTable(leftDf, name = Some("L")).withDimensions(Dimension("id", _ => col("id")))
+    val rightT = toSemanticTable(rightDf, name = Some("R"))
+    val joined = leftT.join_one(rightT, (l, r) => l("id") === r("id"))
+
+    val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+
+    // Wire shape carries predicate_ast.
+    val tree = mapper.readTree(json)
+    val astNode = tree.path("model").path("join").path("predicate_ast")
+    assert(!astNode.isMissingNode, "writer should emit predicate_ast for an equi join")
+    assert(astNode.path("op").asText() == "eq")
+    assert(astNode.path("left").path("side").asText() == "left")
+    assert(astNode.path("left").path("col").asText() == "id")
+    assert(astNode.path("right").path("side").asText() == "right")
+    assert(astNode.path("right").path("col").asText() == "id")
+
+    // Reader populates the AST on the restored op.
+    val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
+    val j = restored.root.asInstanceOf[SemanticJoinOp]
+    assert(j.predicateAst.isDefined, "fromJoinedJson should populate predicateAst from predicate_ast")
+    val ast = j.predicateAst.get
+    assert(ast.op == PredicateAst.Op.Eq)
+  } finally spark.stop()
+}
+
+test("v0.1.13: non-equi AST (lt) round-trips with a rebuilt `on` lambda") {
+  val (spark, leftDf, rightDf) = setupSpark()
+  try {
+    val leftT  = toSemanticTable(leftDf, name = Some("L"))
+    val rightT = toSemanticTable(rightDf, name = Some("R"))
+    // Non-equi predicate (id < id) — would not factor into keys arrays.
+    val joined = leftT.join_many(rightT, (l, r) => l("id") < r("id"))
+
+    val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+    val tree = mapper.readTree(json)
+    val astNode = tree.path("model").path("join").path("predicate_ast")
+    assert(astNode.path("op").asText() == "lt", "writer should capture the lt operator in the AST")
+
+    val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
+    val j = restored.root.asInstanceOf[SemanticJoinOp]
+    assert(j.predicateAst.isDefined, "fromJoinedJson should populate predicateAst")
+    assert(j.predicateAst.get.op == PredicateAst.Op.Lt)
+  } finally spark.stop()
+}
+
+test("v0.1.13: legacy manifests without predicate_ast still load (back-compat)") {
+  val (spark, leftDf, rightDf) = setupSpark()
+  try {
+    val leftT  = toSemanticTable(leftDf, name = Some("L"))
+    val rightT = toSemanticTable(rightDf, name = Some("R"))
+    val joined = leftT.join_one(rightT, (l, r) => l("id") === r("id"))
+
+    val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+    // Strip predicate_ast to simulate a pre-v0.1.13 producer.
+    val node = mapper.readTree(json).asInstanceOf[com.fasterxml.jackson.databind.node.ObjectNode]
+    val modelNode = node.get("model").asInstanceOf[com.fasterxml.jackson.databind.node.ObjectNode]
+    val joinNode  = modelNode.get("join").asInstanceOf[com.fasterxml.jackson.databind.node.ObjectNode]
+    joinNode.remove("predicate_ast")
+    val stripped = mapper.writeValueAsString(node)
+
+    val restored = SemanticManifest.fromJoinedJson(stripped, leftDf, rightDf)
+    val j = restored.root.asInstanceOf[SemanticJoinOp]
+    assert(j.predicateAst.isEmpty, "legacy wire shape should leave predicateAst empty")
+    assert(j.on != null, "but `on` should still rebuild via the keys lattice")
+  } finally spark.stop()
+}
 }

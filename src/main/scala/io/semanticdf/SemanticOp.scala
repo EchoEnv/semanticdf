@@ -259,23 +259,28 @@ private[semanticdf] object ColumnSql {
     * underlying Catalyst `Expression` for AST walks. Falls back to `null`
     * if the runtime version exposes neither `column.expr` nor a `node`
     * of type `ExpressionColumnNode`. */
-  def expressionOf(column: org.apache.spark.sql.Column): org.apache.spark.sql.catalyst.expressions.Expression =
+  /** Extract the underlying AST node from a Spark [[org.apache.spark.sql.Column]].
+    * Returns the highest-fidelity representation available:
+    *   - Spark 3.x: `column.expr` returns a `catalyst.Expression` directly
+    *   - Spark 4.x: `column.node` returns a `ColumnNode`. For nodes that wrap
+    *     an Expression (e.g. `ExpressionColumnNode`), call `.expression()`.
+    *     For pure-node forms (e.g. `UnresolvedFunction`), return the node
+    *     itself — the [[PredicateAstWalker]] can walk ColumnNodes too.
+    *   - If neither is reachable, return null and let the caller fall back
+    *     to SQL.
+    */
+  def expressionOf(column: org.apache.spark.sql.Column): AnyRef =
     try {
-      // Spark 3.x: column.expr is the Expression directly
-      val expr = column.getClass.getMethod("expr").invoke(column)
-      expr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Expression]
+      // Spark 3.x path.
+      column.getClass.getMethod("expr").invoke(column).asInstanceOf[AnyRef]
     } catch {
       case _: NoSuchMethodException =>
-        // Spark 4.x: column.node -> ColumnNode; for nodes that wrap
-        // an Expression (ExpressionColumnNode), call `.expression()`.
-        // For others (e.g. unresolved), return null and let the caller
-        // fall back to SQL.
-        val node = column.getClass.getMethod("node").invoke(column)
+        // Spark 4.x path.
+        val node = column.getClass.getMethod("node").invoke(column).asInstanceOf[AnyRef]
         try {
-          node.getClass.getMethod("expression").invoke(node)
-            .asInstanceOf[org.apache.spark.sql.catalyst.expressions.Expression]
+          node.getClass.getMethod("expression").invoke(node).asInstanceOf[AnyRef]
         } catch {
-          case _: NoSuchMethodException => null
+          case _: NoSuchMethodException => node
         }
     }
 }
@@ -474,6 +479,22 @@ final case class SemanticJoinOp(
       * via `functions.expr(sql)` — the same mechanism
       * `Transform.exprString` (PR #149) uses for transforms. */
     onExprString: Option[String] = None,
+    /** Structured predicate AST for round-trip (v0.1.13). Populated
+      * at construction by [[extractPredicateAst]] when the predicate
+      * structure fits the library's vocabulary (eq / neq / range /
+      * and / or with column operands).
+      *
+      * `None` when the user provided explicit keys via the typed
+      * entry point (the wire stays canonical: just `leftKeys` /
+      * `rightKeys`; no AST needed), or when the structure doesn't
+      * fit (UDFs, subqueries, etc. — the wire falls back to
+      * [[onExprString]] in that case).
+      *
+      * When both are present, the writer emits `model.predicate_ast`
+      * in the joined-manifest; the reader uses it as the primary
+      * source for rebuilding `on`, falling back to [[onExprString]]
+      * when the AST is absent (e.g. legacy manifests). */
+    predicateAst: Option[PredicateAst.Predicate] = None,
 ) extends SemanticOp {
 
   /** Extract keys + a SQL-form fallback from a `(JoinSide, JoinSide) => Column`
@@ -643,6 +664,36 @@ final case class SemanticJoinOp(
       case JoinCardinality.One | JoinCardinality.Many =>
         val result = compileEquiJoin(leftDf, rightDf)
         result
+    }
+  }
+
+  /** Extract the structured predicate AST for round-trip (v0.1.13).
+    *
+    * Reuses the same probe stub as [[extractJoinKeys]] to avoid a
+    * second round-trip call. Returns the AST when the predicate fits
+    * the library's vocabulary (eq / neq / range / and / or, column
+    * operands); `None` otherwise.
+    *
+    * Performance: only invoked for joins whose predicate is non-canonical
+    * (i.e. [[extractJoinKeys]] returns empty `leftKeys` / `rightKeys`).
+    * The constructor decides — this method is just the decomposition. */
+  private[semanticdf] def extractPredicateAst(): Option[PredicateAst.Predicate] = {
+    val leftCapture  = scala.collection.mutable.Map.empty[String, Boolean]
+    val rightCapture = scala.collection.mutable.Map.empty[String, Boolean]
+    val probeL = JoinSide.recording("left",  leftCapture)
+    val probeR = JoinSide.recording("right", rightCapture)
+    val predicateColumn: org.apache.spark.sql.Column =
+      try on(probeL, probeR)
+      catch { case _: Throwable => return None }
+    val root: Any =
+      try ColumnSql.expressionOf(predicateColumn)
+      catch { case _: Throwable =>
+        try predicateColumn.getClass.getMethod("node").invoke(predicateColumn)
+        catch { case _: Throwable => return None }
+      }
+    if (root == null) None
+    else PredicateAstWalker.walkPredicateAst(root, leftCapture, rightCapture).collect {
+      case p: PredicateAst.Predicate => p
     }
   }
 

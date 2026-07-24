@@ -104,6 +104,13 @@ object SemanticManifest {
       rightKeys:        Seq[String],    // or when the wire shape came from a pre-#153 producer
       multiColumn:      Boolean,        // true if either key array has length > 1
       onExprString:     Option[String], // SQL-form capture from PR #153; non-equi fallback
+      // v0.1.13: structured predicate AST. Closed the last caveat of
+      // the joined-models-manifest recipe. `None` when the AST wasn't
+      // available (legacy producers, or predicates whose structure
+      // doesn't fit the library's vocabulary). When present, this is
+      // the primary source for rebuilding `on` at read time; the
+      // reader falls back to [[onExprString]] only when this is absent.
+      predicateAst:     Option[PredicateAst.Predicate] = None,
       // Path C: prefix fields (recipe §3.6, caveat §1.3). Optional;
       // empty string when not set (= canonical post-v0.1.11 producer case).
       leftPrefix:       String = "",
@@ -315,6 +322,12 @@ object SemanticManifest {
       // `None` for cross joins or when the writer had no probe at
       // construction.
       onExprString     = optStringField(jn, "onExprString"),
+      // v0.1.13: structured predicate AST. When the wire carries
+      // `predicate_ast`, we parse it eagerly here so downstream
+      // consumers don't have to re-parse per call. The AST is the
+      // primary source for round-trip; [[onExprString]] is the
+      // fallback for legacy producers.
+      predicateAst     = PredicateAstJson.fromJson(jn.path("predicate_ast")),
       leftDimensions   = optIntField(dig, "leftDimensions").getOrElse(0),
       rightDimensions  = optIntField(dig, "rightDimensions").getOrElse(0),
       mergedDimensions = optIntField(dig, "mergedDimensions").getOrElse(0),
@@ -483,6 +496,13 @@ object SemanticManifest {
     // are skipped (the field is optional).
     op.onExprString.foreach { sql => joinObj.put("onExprString", sql) }
 
+    // v0.1.13: structured predicate AST. When the AST is present the
+    // reader uses it as the primary source for rebuilding `on`. The
+    // emitter always prefers the AST over the SQL fallback when both
+    // are present (the AST round-trips through `Predicate.toColumn`
+    // deterministically; the SQL string requires re-parsing).
+    op.predicateAst.foreach { ast => joinObj.put("predicate_ast", PredicateAstJson.toJson(ast)) }
+
     // multiColumn = true when the keys are populated OR when the
     // predicate was reduced to a multi-key equi (length > 1). When
     // both `leftKeys` and `onExprString` are absent (lambda couldn't
@@ -612,6 +632,15 @@ object SemanticManifest {
     //   - Else (legacy wire shape from before this PR): non-functional
     //     throw, BLOCK reference. Modern producers always emit keys OR
     //     SQL, so this branch fires only on hand-rolled wire shapes.
+    // v0.1.13: parse the structured predicate AST eagerly. When the
+    // wire carries `predicate_ast`, this is the primary source for
+    // rebuilding `on` — it round-trips through `Predicate.toColumn`
+    // deterministically and handles the non-equi / OR / compound
+    // cases that the keys lattice can't capture. Legacy producers
+    // (pre-v0.1.13) don't carry this field; we fall through to the
+    // existing lattice below.
+    val jAst = PredicateAstJson.fromJson(joinObj.path("predicate_ast"))
+
     val jLeftKeys   = readStringArray(joinObj.path("leftKeys"))
     val jRightKeys  = readStringArray(joinObj.path("rightKeys"))
     val jMulti      = optBoolField(joinObj, "multiColumn")
@@ -619,8 +648,21 @@ object SemanticManifest {
     // default empty (= no prefix, canonical post-v0.1.11 producer case).
     val jLeftPrefix  = optStringField(joinObj, "leftPrefix").getOrElse("")
     val jRightPrefix = optStringField(joinObj, "rightPrefix").getOrElse("")
+    // Build the `on` lambda. Path 0 (AST) takes precedence when
+    // present AND prefixes are not in play (the AST stores bare
+    // column names; the prefix-aware keys path below is the
+    // canonical form for prefixed producers). When prefixes are set
+    // we use the keys path so the lambda emits `l("L_id") ===
+    // r("R_id")` rather than `l("id") === r("id")`.
     val on: (JoinSide, JoinSide) => Column =
-      if (jLeftKeys.length == jRightKeys.length && jLeftKeys.nonEmpty) {
+      if (jAst.isDefined && jLeftPrefix.isEmpty && jRightPrefix.isEmpty) {
+        // Path 0 (v0.1.13): structured AST. The Predicate.toColumn
+        // call dispatches on the per-side JoinSide instances passed
+        // at compile time. The cache inside the AST makes this a
+        // O(1) lookup after the first build.
+        val ast = jAst.get
+        (left: JoinSide, right: JoinSide) => ast.toColumn(left, right)
+      } else if (jLeftKeys.length == jRightKeys.length && jLeftKeys.nonEmpty) {
         // Path 1: keys present, multi-column or single. AND over pairs.
         // Apply the per-side prefix when reconstructing the predicate
         // (Path C caveat §1.3): the predicate becomes
@@ -694,6 +736,10 @@ object SemanticManifest {
       leftKeys    = jLeftKeys,
       rightKeys   = jRightKeys,
       onExprString = optStringField(modelObj, "onExprString"),
+      // v0.1.13: pass the parsed AST through so the runtime sees the
+      // same predicate object the writer captured. The AST is
+      // already a `Predicate` (fromJson guarantees it).
+      predicateAst = jAst,
       // Path C: also carry the extra dims/measures so the runtime
       // identity (alias-prefixed dims, etc.) is preserved.
       extraDimensions = jExtraDims,
@@ -1246,6 +1292,86 @@ object SemanticManifest {
       case None => Nil
     }
   }
+}
+
+/** v0.1.13: JSON serialise / deserialise helpers for [[PredicateAst]].
+  * Lives at the file level (top of package) so it can be called from
+  * [[SemanticManifest.toJoinedJson]] / [[fromJoinedJson]] without
+  * holding a reference to the object itself.
+  *
+  * The wire shape is a tagged union:
+  * { "op": "lt",
+  *   "left":  { "side": "left", "col": "date" },
+  *   "right": { "side": "right", "col": "valid_to" } }
+  *
+  * For compound predicates:
+  * { "op": "and",
+  *   "left":  {...predicate...},
+  *   "right": {...predicate...} }
+  */
+private[semanticdf] object PredicateAstJson {
+
+  /** Render a [[PredicateAst.Predicate]] as a Jackson ObjectNode. */
+  def toJson(p: PredicateAst.Predicate): com.fasterxml.jackson.databind.node.ObjectNode = {
+    // The mapper is the same one used everywhere in this package
+    // (see SemanticManifest.mapper); we re-create here to keep the
+    // helpers decoupled from the surrounding object's state.
+    val mapper = new com.fasterxml.jackson.databind.ObjectMapper()
+    val node = mapper.createObjectNode()
+    node.put("op", p.op.code)
+    p.left match {
+      case col: PredicateAst.Operand.ColumnRef =>
+        val c = node.putObject("left")
+        c.put("side", col.side)
+        c.put("col", col.name)
+      case nested: PredicateAst.Predicate =>
+        node.set[com.fasterxml.jackson.databind.JsonNode]("left", toJson(nested))
+    }
+    p.right match {
+      case col: PredicateAst.Operand.ColumnRef =>
+        val c = node.putObject("right")
+        c.put("side", col.side)
+        c.put("col", col.name)
+      case nested: PredicateAst.Predicate =>
+        node.set[com.fasterxml.jackson.databind.JsonNode]("right", toJson(nested))
+    }
+    node
+  }
+
+  /** Parse a `predicate_ast` JSON node into a [[PredicateAst.Predicate]].
+    * Returns `None` when the structure doesn't fit the library's
+    * vocabulary (unknown op, missing operand, etc.) — the caller
+    * falls back to the SQL string. */
+  def fromJson(
+      node: com.fasterxml.jackson.databind.JsonNode
+  ): Option[PredicateAst.Predicate] = {
+    if (node == null || !node.isObject) return None
+    val op = PredicateAst.Op.fromCode(
+      Option(node.get("op")).filter(!_.isNull).map(_.asText()).getOrElse(return None)
+    )
+    val leftNode  = node.path("left")
+    val rightNode = node.path("right")
+    val left  = operand(leftNode)
+    val right = operand(rightNode)
+    for {
+      o <- op
+      l <- left
+      r <- right
+    } yield PredicateAst.Predicate(o, l, r)
+  }
+
+  private def operand(node: com.fasterxml.jackson.databind.JsonNode): Option[PredicateAst.Operand] =
+    if (node == null || node.isMissingNode || node.isNull) None
+    else if (node.isObject && node.has("op")) fromJson(node)  // nested predicate
+    else if (node.isObject) {
+      val side = Option(node.get("side")).filter(!_.isNull).map(_.asText())
+      val name = Option(node.get("col")).filter(!_.isNull).map(_.asText())
+      for {
+        s <- side
+        n <- name
+        if PredicateAst.Operand.isKnownSide(s)
+      } yield PredicateAst.Operand.ColumnRef(s, n)
+    } else None
 }
 
 /** Thrown when [[SemanticManifest.fromJson]] or [[SemanticManifest.parseMeta]]
