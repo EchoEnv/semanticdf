@@ -6,6 +6,10 @@
 # Iterate over each `examples/<name>/models` directory. The leading `@` suppresses
 # recipe echo so the output is just the work each command does.
 EXAMPLES := $(wildcard examples/*/models)
+# dbt-reader is an OKF skip: its `models/` directory holds a dbt manifest.json,
+# not a semanticdf YAML. The DbtManifestReader parses it; OkfGen has nothing
+# to do with it.
+EXAMPLES := $(filter-out examples/dbt-reader/models,$(EXAMPLES))
 
 # ---------------------------------------------------------------------------
 # okfgen-build — compile main sources so `mvn exec:java` can find classes.

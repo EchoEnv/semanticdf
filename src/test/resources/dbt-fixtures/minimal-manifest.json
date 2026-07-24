@@ -1,0 +1,108 @@
+{
+  "metadata": {
+    "dbt_schema_version": "https://schemas.getdbt.com/dbt/manifest/v12.json",
+    "dbt_version": "1.8.0",
+    "generated_at": "2026-07-24T12:00:00Z"
+  },
+  "nodes": {
+    "model.jaffle_shop.orders": {
+      "resource_type": "model",
+      "name": "orders",
+      "database": "analytics",
+      "schema": "main",
+      "alias": "orders",
+      "description": "Customer order fact table",
+      "tags": ["fact", "core"],
+      "columns": {
+        "order_id": {
+          "name": "order_id",
+          "data_type": "integer",
+          "description": "Unique order identifier"
+        },
+        "customer_id": {
+          "name": "customer_id",
+          "data_type": "integer",
+          "description": "Customer who placed the order"
+        },
+        "order_date": {
+          "name": "order_date",
+          "data_type": "timestamp",
+          "description": "When the order was placed"
+        },
+        "amount": {
+          "name": "amount",
+          "data_type": "numeric",
+          "description": "Order total in USD"
+        },
+        "total_revenue": {
+          "name": "total_revenue",
+          "data_type": "numeric",
+          "description": "Total revenue across all orders",
+          "meta": {
+            "kind": "measure",
+            "expr": "sum(amount)"
+          }
+        },
+        "order_count": {
+          "name": "order_count",
+          "data_type": "bigint",
+          "description": "Number of orders",
+          "meta": {
+            "kind": "measure",
+            "expr": "count(1)"
+          }
+        }
+      }
+    },
+    "model.jaffle_shop.customers": {
+      "resource_type": "model",
+      "name": "customers",
+      "database": "analytics",
+      "schema": "main",
+      "alias": "customers",
+      "description": "Customer dimension table",
+      "tags": ["dim"],
+      "columns": {
+        "customer_id": {
+          "name": "customer_id",
+          "data_type": "integer",
+          "description": "Unique customer id"
+        },
+        "name": {
+          "name": "name",
+          "data_type": "varchar",
+          "description": "Customer full name"
+        }
+      }
+    },
+    "seed.jaffle_shop.raw_orders": {
+      "resource_type": "seed",
+      "name": "raw_orders",
+      "database": "analytics",
+      "schema": "raw",
+      "alias": "raw_orders",
+      "columns": {}
+    },
+    "test.jaffle_shop.not_null_orders_order_id": {
+      "resource_type": "test",
+      "name": "not_null_orders_order_id"
+    }
+  },
+  "sources": {
+    "source.jaffle_shop.stripe.charges": {
+      "resource_type": "source",
+      "name": "charges",
+      "source_name": "stripe",
+      "identifier": "charges",
+      "database": "raw",
+      "schema": "stripe",
+      "source_description": "Stripe charge records"
+    }
+  },
+  "parent_map": {
+    "model.jaffle_shop.orders": ["source.jaffle_shop.stripe.charges"]
+  },
+  "child_map": {
+    "source.jaffle_shop.stripe.charges": ["model.jaffle_shop.orders"]
+  }
+}

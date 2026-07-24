@@ -74,6 +74,7 @@ self-contained once you've done `starter/`.
 | [`joined-manifest/`](joined-manifest/) | Emit a joined-manifest via `SemanticManifest.toJoinedJson` (per-side metadata + alias-prefixed dims via `extra_dimensions[]`, `leftPrefix` / `rightPrefix` on the join block, structured `predicate_ast` for non-equi / OR, asymmetric-key support) and round-trip via `fromJoinedJson`. The canonical example for the joined-manifest wire shape. |
 | [`joined-manifest-e2e/`](joined-manifest-e2e/) | End-to-end artifact workflow on real data. Phase 1 (`Build`) emits a joined manifest to `target/*.json`; phase 2 (`Query`) loads from disk and runs analytics. Demonstrates the asymmetric-key (v0.1.14) path with clinical data. |
 | [`joined-manifest-split/`](joined-manifest-split/) | Legacy / pre-v0.1.11 reference: the hand-rolled per-side emit + manually-composed joined envelope pattern. Kept for consumers on pre-v0.1.11 versions; use [`joined-manifest/`](joined-manifest/) for new code. |
+| [`dbt-reader/`](dbt-reader/) | Parse a dbt `manifest.json` (v12+, the format `dbt parse` produces) and turn it into `SemanticTable`s. A column becomes a **measure** when its dbt `meta: { kind: measure, expr: <sql> }` block is set; everything else is a dimension. Closes the gap for dbt users who don't want to hand-author a second YAML. |
 
 ## Prerequisites
 

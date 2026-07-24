@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire — `ast_where` / `ast_having` fields on the `query` and `explain` tools). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.17 shipped (dbt `manifest.json` reader — `DbtManifestReader` parses dbt's manifest and produces `SemanticTable`s, with the `meta: { kind: measure, expr: ... }` convention for marking measure columns). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.17 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -265,6 +265,50 @@ mvn exec:java \
 - `docs/agents/mcp-contract.md` — new §"Alternative: ast_where / ast_having", updated error-codes table, status v4.
 
 **Why T1:** Closes a real ergonomics gap. Two parts of the system (library wire + MCP wire) now express predicates in the same shape.
+
+---
+
+### 1.8 dbt manifest reader
+
+**Status:** ✅ **SHIPPED** (v0.1.17)
+
+**Problem:** dbt users already maintain a manifest for their warehouse. They don't want to hand-author a second YAML to expose the same models to a semantic layer. Two sources of truth, twice the maintenance, twice the drift.
+
+**Solution:** A Scala adapter (`DbtManifestReader`) that reads dbt's `manifest.json` (v12+, the format `dbt parse` produces) and turns it into a `Map[String, SemanticTable]`.
+
+```scala
+// Phase 1: read the manifest (pure, no Spark).
+val project = DbtManifestReader.read(Paths.get("target/manifest.json"))
+
+// Phase 2: bind to a Spark session via a caller-supplied resolver.
+val tables = DbtManifestReader.toSemanticTables(project, spark, sourceTable =>
+  spark.read.format("parquet").load(s"/data/$sourceTable"))
+```
+
+**Wire convention:** A column is a **dimension** by default. To mark a column as a **measure**, the user adds to their dbt `schema.yml`:
+
+```yaml
+columns:
+  - name: total_revenue
+    meta:
+      kind: measure
+      expr: "sum(amount)"
+```
+
+The reader checks for `meta.kind == "measure"` AND a non-empty `meta.expr`. Anything else stays a dimension — no `kind: dimension` marker (dimensions are the default).
+
+**What shipped:**
+- `DbtManifestReader.scala` — ~290 LOC. Two-phase API: `read(manifestPath)` / `read(manifest: Map)` for parse-only; `toSemanticTables(project, spark, resolve)` for Spark binding.
+- Source-table resolution: `<database>.<schema>.<alias>` / `<schema>.<alias>` / `<alias>`. Caller controls how to interpret the string.
+- 13 tests in `DbtManifestReaderSpec` covering manifest parsing, column partition, source-table formatting, end-to-end Spark binding, and error paths.
+- `examples/dbt-reader/` — runnable demo: hand-crafted `manifest.json` + CSVs + `Main.scala`.
+- `docs/design/dbt-manifest-reader.md` — design notes.
+
+**What's NOT in v1 (deliberate, scope-limited):**
+- **Joins.** dbt doesn't record join keys in the manifest. v1 emits the model graph without joins; users add them via the existing `join_one` / `join_many` API.
+- **Sources / metrics / streaming.** Sources are preserved in `DbtProject.sources` for v2; metrics in `rawNodes`; streaming isn't a dbt concept.
+
+**Why T1:** Closes a real adoption gap. Every dbt user with a manifest is a potential SemanticDF consumer.
 
 ---
 
