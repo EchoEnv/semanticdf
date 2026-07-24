@@ -1,5 +1,50 @@
 # Release notes
 
+## v0.1.13 — structured predicate AST for joined-manifest
+
+A **predicate-AST** release. The `joined-models-manifest` recipe's last narrow caveat is closed: the joined wire shape now carries predicates as a structured AST (`model.join.predicate_ast`) alongside the legacy opaque `onExprString` SQL form. Tools get a typed view of the join condition; the reader's reconstructed `on` lambda uses the AST when present (zero overhead for the equi case, where the keys lattice already captures the structure).
+
+Library, MCP server, and CLI consumer are at
+
+```
+io.semanticdf:semanticdf_2.13:0.1.13
+io.semanticdf:semanticdf-mcp_2.13:0.1.13
+com.example:semanticdf-cli_2.13:0.1.13
+```
+
+Test count: 538 library + 90 MCP + 18 CLI (646 total), green on Spark 3.5.8 and 4.1.1.
+
+### Library — features
+
+- **`PredicateAst` data model** — `Op` (sealed trait + 8 case objects for `eq` / `neq` / range / `and` / `or`), `Operand` (sealed trait + `ColumnRef`), `Predicate` (recursive AND/OR composition). `Predicate.toColumn(leftSide, rightSide)` builds a Spark `Column` from the AST, cached per `(leftSide, rightSide)` pair (typically 1 entry per join).
+- **`PredicateAstWalker`** — cross-version reflection walker that turns a Catalyst `Expression` (Spark 3.x) or a `ColumnNode` (Spark 4.x) into a `PredicateAst.Predicate`. Handles `EqualTo` / `LessThan` / etc. via class-name fallback AND `UnresolvedFunction("=")` via `functionName`. Handles both `Seq[_]` and `java.util.List[_]` for the children collection.
+- **`SemanticJoinOp.predicateAst: Option[PredicateAst.Predicate]`** — populated eagerly at construction when the keys lattice alone doesn't capture the structure (non-equi / OR / compound). Zero overhead for the canonical equi-join case.
+- **`SemanticManifest.toJoinedJson` emits `predicate_ast`** when present; **`fromJoinedJson` prefers the AST** for rebuilding `on` (when prefixes aren't in play) and falls back to `onExprString` for legacy wire shapes.
+- **`PredicateAstJson` helpers** — Jackson serialise/deserialise the AST.
+
+### Wire format
+
+The new `predicate_ast` field sits on the join block alongside `leftKeys` / `rightKeys` / `onExprString`:
+
+```json
+{
+  "op": "lt",
+  "left":  { "side": "left",  "col": "date" },
+  "right": { "side": "right", "col": "valid_to" }
+}
+```
+
+Compound predicates (AND / OR) recurse on `left` / `right`. See `examples/joined-manifest/` for an end-to-end demo (equi + non-equi + prefixed in one run).
+
+### Anti-scope (preserved as honest caveats)
+
+- `onExprString` is still emitted (legacy fallback). Older readers that don't know about `predicate_ast` continue to work via the SQL form.
+- The structured AST covers the operations the library actually produces in practice (`eq` / `neq` / range / `and` / `or`). Anything more complex (subqueries, UDFs, etc.) falls through to `onExprString`.
+
+### Cross-version
+
+`ColumnSql.expressionOf` now returns `AnyRef` (was `Expression`). On Spark 4.x, when the underlying `ColumnNode` doesn't expose `.expression()` (e.g. for `UnresolvedFunction`), the node itself is returned — `PredicateAstWalker` handles both `Expression` and `ColumnNode` trees via the same reflection-driven shape match.
+
 ## v0.1.12 — joined-manifest caveats closed (Path C)
 
 A **joined-manifest-completion** release. The `joined-models-manifest` recipe's last two BLOCK caveats are now closed: the wire shape carries `model.extra_dimensions[]` / `model.extra_measures[]` (caveat §1.2 — alias-prefixed dims round-trip) and the `join` block's `leftPrefix` / `rightPrefix` (caveat §1.3). After this release, the recipe is **ACCEPTED**; the only remaining narrow caveat is non-equi / OR predicates, which fall back to the captured `onExprString` SQL form.
