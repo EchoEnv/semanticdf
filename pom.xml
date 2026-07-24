@@ -7,7 +7,7 @@
 
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf_2.13</artifactId>
-  <version>0.1.14</version>
+  <version>0.1.15</version>
   <packaging>jar</packaging>
 
   <name>semanticdf</name>

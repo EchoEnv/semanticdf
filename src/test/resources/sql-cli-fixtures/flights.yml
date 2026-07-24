@@ -1,0 +1,14 @@
+flights:
+    status: published
+    version: 1
+    table: flights_csv
+
+    dimensions:
+        carrier:
+            expr: carrier
+            description: Airline code
+
+    measures:
+        total_passengers:
+            expr: "sum(passengers)"
+            description: Total passengers

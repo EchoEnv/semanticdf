@@ -1,5 +1,41 @@
 # Release notes
 
+## v0.1.15 — SQL-mode CLI
+
+A **first-touch friction** release. Ad-hoc exploration of a YAML model no longer requires writing Scala. The `query` subcommand parses a SQL string and maps it to the existing `SemanticTable.query()` API.
+
+```bash
+mvn exec:java \
+  -Dexec.args="query --models examples/starter/models/ \
+  --sql 'SELECT carrier, total_passengers FROM flights \
+  GROUP BY carrier ORDER BY total_passengers DESC LIMIT 10'"
+```
+
+### What's new
+
+- `SqlCli.scala` — ~340 LOC tokenizer + recursive-descent parser. No external SQL dependency.
+- `query` subcommand in `Main.scala` — `--models <dir-or-file> --sql '<sql>'`.
+- Supports `SELECT ... FROM ... WHERE ... AND/OR ... ORDER BY ... ASC/DESC LIMIT n`. `GROUP BY` accepted (and ignored — the model decides grouping from the SELECT items).
+- Aliases (`SELECT carrier AS c`), `*` (all dims then all measures), `WHERE` with `AND`/`OR` and parentheses, string literals with SQL `''` escapes.
+- Classification: a name that matches a model `measures` key → measure, otherwise → dimension. Unknown field names give a Clear error listing both known dims and known measures.
+- 20 new tests (16 unit + 4 end-to-end with a real Spark session). 566/566 total.
+
+### What's NOT new
+
+- No JDBC / ODBC surface. This is a batch CLI, not a server.
+- No subqueries, no JOINs, no CTEs. The grammar is intentionally narrow: one model, one SELECT, one WHERE.
+- No timezone-aware casting of string literals. Numbers are `Long` if integer, `Double` if fractional. Strings are `String`.
+
+### Files
+
+- `src/main/scala/io/semanticdf/tools/SqlCli.scala`
+- `src/main/scala/io/semanticdf/tools/Main.scala` (one new subcommand)
+- `src/test/scala/io/semanticdf/tools/SqlCliSpec.scala`
+- `src/test/scala/io/semanticdf/tools/SqlCliEndToEndSpec.scala`
+- `src/test/resources/sql-cli-fixtures/flights.yml`
+- `docs/runtime-quickstart.md` (usage example)
+- `docs/feature-roadmap.md` (1.6 SHIPPED entry)
+
 ## v0.1.14 — asymmetric join keys
 
 A **asymmetric-key** release. `SemanticTable.join_one` / `join_many` / YamlLoader `joins:` now accept different column names on each side of the join (e.g. `flights.carrier` joined to `carriers.code`). The wire format and runtime already supported the asymmetric shape; only the entry-point guards were blocking the case. No breaking change — existing symmetric joins work unchanged.

@@ -67,6 +67,10 @@ mvn exec:java \
 # Infer a starter YAML model from a data file (needs Spark)
 mvn exec:java \
   -Dexec.args="introspect --path data/orders.csv --format csv --model orders"
+
+# Run a SQL string against a YAML model (ad-hoc exploration, no Scala)
+mvn exec:java \
+  -Dexec.args="query --models examples/starter/models/ --sql 'SELECT carrier, total_passengers FROM flights GROUP BY carrier ORDER BY total_passengers DESC LIMIT 10'"
 ```
 
 Run with no args to see usage:
