@@ -1,5 +1,55 @@
 # Release notes
 
+## v0.1.17 — dbt manifest reader
+
+A dbt `manifest.json` reader that turns dbt's manifest into a `Map[String, SemanticTable]`. Closes the gap for dbt users who don't want to hand-author a second YAML.
+
+```scala
+// Phase 1: read the manifest. Pure, no Spark needed.
+val project = DbtManifestReader.read(Paths.get("target/manifest.json"))
+
+// Phase 2: bind to a Spark session.
+val tables: Map[String, SemanticTable] =
+  DbtManifestReader.toSemanticTables(project, spark, sourceTable =>
+    spark.read.format("parquet").load(s"/data/$sourceTable"))
+```
+
+### Wire convention
+
+A column is a **dimension** by default. To mark a column as a **measure**, the user adds to their dbt `schema.yml`:
+
+```yaml
+columns:
+  - name: total_revenue
+    meta:
+      kind: measure
+      expr: "sum(amount)"
+```
+
+The reader checks for `meta.kind == "measure"` AND a non-empty `meta.expr`. Anything else stays a dimension — no `kind: dimension` marker (dimensions are the default).
+
+### What's new
+
+- `DbtManifestReader.scala` — ~290 LOC. Two-phase API: `read(manifestPath)` / `read(manifest: Map)` for parse-only; `toSemanticTables(project, spark, resolve)` for Spark binding.
+- Source-table resolution: `<database>.<schema>.<alias>` / `<schema>.<alias>` / `<alias>`. Caller controls how to interpret the string.
+- 13 tests in `DbtManifestReaderSpec` covering manifest parsing, column partition, source-table formatting, end-to-end Spark binding, and error paths.
+- `examples/dbt-reader/` — runnable demo: hand-crafted `manifest.json` + CSVs + `Main.scala`.
+- `docs/design/dbt-manifest-reader.md` — design notes (problem, convention, what's NOT in v1).
+
+### What's NOT in v1 (deliberate, scope-limited)
+
+- **Joins.** dbt doesn't record join keys in the manifest. v1 emits the model graph without joins; users add them via the existing `join_one` / `join_many` API.
+- **Sources / metrics / streaming.** Sources are preserved in `DbtProject.sources` for v2; metrics in `rawNodes`; streaming isn't a dbt concept.
+
+### Files
+
+- `src/main/scala/io/semanticdf/DbtManifestReader.scala` (new)
+- `src/test/scala/io/semanticdf/DbtManifestReaderSpec.scala` (new)
+- `src/test/resources/dbt-fixtures/minimal-manifest.json` (new)
+- `examples/dbt-reader/` (new example: `models/manifest.json`, `models/orders.csv`, `models/customers.csv`, `src/main/scala/com/example/dbtreader/Main.scala`, `pom.xml`, `README.md`)
+- `docs/design/dbt-manifest-reader.md` (new design doc)
+- `examples/README.md` (new row in the examples index)
+
 ## v0.1.16 — structured predicate on the MCP wire
 
 The MCP `query` and `explain` tools now accept an optional `ast_where` (and `ast_having`) field with a structured predicate shape. Mirrors the library's `PredicateAst` ops (`eq` / `neq` / `lt` / `lte` / `gt` / `gte` / `and` / `or`). The flat `where` / `having` shape is unchanged.

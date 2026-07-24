@@ -89,6 +89,11 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
         // support was added in v0.1.11). We test it separately below.
         .filter(p => !p.endsWith("orders.joined-envelope.json"))
         .filter(p => !p.toString.contains("/target/"))   // skip build output
+        // Skip the dbt reader's example manifest — dbt's manifest.json
+        // is a dbt-core artifact, not a semanticdf manifest. It has a
+        // completely different shape (nodes, sources, parent_map) and
+        // is validated separately by the DbtManifestReaderSpec.
+        .filter(p => !p.toString.contains("/dbt-reader/"))
         .collect(Collectors.toList[Path])
         .asScala
         .toSeq
