@@ -52,9 +52,8 @@ trait SemanticMetadataAdapter[Source, Project] {
     * dataset's `source` string to get a `DataFrame`. */
   def toSemanticTables(
       projects:   Seq[Project],
-      spark:      SparkSession,
       resolve:    String => DataFrame,
-  ): Map[String, SemanticTable]
+  )(implicit spark: SparkSession): Map[String, SemanticTable]
 }
 
 object SemanticMetadataAdapter {
@@ -64,13 +63,14 @@ object SemanticMetadataAdapter {
     *
     * Usage:
     * {{{
+    *   implicit val spark: SparkSession = ...
     *   import io.semanticdf.adapters.DbtAdapter._
-    *   val tables = loadSemanticTables(Paths.get("manifest.json"), spark, resolve)
+    *   val tables = loadSemanticTables(Paths.get("manifest.json"), resolve)
     * }}} */
   def loadSemanticTables[S, P](
       source:  S,
-      spark:   SparkSession,
       resolve: String => DataFrame,
-  )(implicit adapter: SemanticMetadataAdapter[S, P]): Map[String, SemanticTable] =
-    adapter.toSemanticTables(adapter.parse(source), spark, resolve)
+  )(implicit adapter: SemanticMetadataAdapter[S, P],
+    spark:    SparkSession): Map[String, SemanticTable] =
+    adapter.toSemanticTables(adapter.parse(source), resolve)
 }

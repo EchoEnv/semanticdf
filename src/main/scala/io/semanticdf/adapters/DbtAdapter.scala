@@ -28,7 +28,8 @@ import scala.jdk.CollectionConverters._
   *
   * {{{
   *   import io.semanticdf.adapters.DbtAdapter._
-  *   val tables = loadSemanticTables(Paths.get("manifest.json"), spark, resolve)
+  *   implicit val spark: SparkSession = ...
+  *   val tables = loadSemanticTables(Paths.get("manifest.json"), resolve)
   * }}}
   *
   * The `_` import brings `DbtAdapter` into implicit scope. */
@@ -43,9 +44,8 @@ object DbtAdapter extends SemanticMetadataAdapter[java.nio.file.Path, DbtProject
     * parsed, so we just feed it through. */
   def toSemanticTables(
       projects: Seq[DbtProject],
-      spark:    SparkSession,
       resolve:  String => DataFrame,
-  ): Map[String, io.semanticdf.SemanticTable] = {
+  )(implicit spark: SparkSession): Map[String, io.semanticdf.SemanticTable] = {
     if (projects.isEmpty) Map.empty
     else if (projects.size == 1) DbtManifestReader.toSemanticTables(projects.head, spark, resolve)
     else throw new IllegalArgumentException(

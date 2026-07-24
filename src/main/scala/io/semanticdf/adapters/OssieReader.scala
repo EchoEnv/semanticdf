@@ -78,7 +78,8 @@ import scala.jdk.CollectionConverters._
   *
   * {{{
   *   import io.semanticdf.adapters.OssieReader._
-  *   val tables = loadSemanticTables(Paths.get("flights.yaml"), spark, resolve)
+  *   implicit val spark: SparkSession = ...
+  *   val tables = loadSemanticTables(Paths.get("flights.yaml"), resolve)
   * }}} */
 object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
 
@@ -112,9 +113,8 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
     * dataset's `source` string into a `DataFrame`. */
   def toSemanticTables(
       projects: Seq[OssieProject],
-      spark:    SparkSession,
       resolve:  String => DataFrame,
-  ): Map[String, SemanticTable] = {
+  )(implicit spark: SparkSession): Map[String, SemanticTable] = {
     if (projects.isEmpty) return Map.empty
 
     // Single pass: build every dataset as a SemanticTable, then

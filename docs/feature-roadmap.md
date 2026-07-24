@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter + Ossie perf/leak tests added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter + Ossie perf/leak tests + SDFAdapter added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -487,8 +487,9 @@ import io.semanticdf.adapters.DbtAdapter
 import io.semanticdf.adapters.OssieReader
 import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
 
-val dbtTables = loadSemanticTables(Paths.get("manifest.json"), spark, resolve)
-val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), spark, resolve)
+implicit val spark: SparkSession = ...
+val dbtTables = loadSemanticTables(Paths.get("manifest.json"), resolve)
+val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), resolve)
 ```
 
 **What shipped:**
@@ -543,6 +544,44 @@ val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), spark, resolve)
 - `docs/feature-roadmap.md` (1.14 SHIPPED entry, 'Last updated' bumped)
 
 **Library: 648/648 pass** (was 641, +7 tests; no regressions).
+
+---
+
+### 1.15 SDFAdapter — the third `SemanticMetadataAdapter` instance
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16, follow-up to #178)
+
+**Problem:** The cross-process workflow — build phase writes a manifest, query phase reads it — used `SemanticManifest.fromJson(text, df)` directly. This was a different API from dbt/Ossie (`loadSemanticTables(...)`), and the joined manifest path took TWO `DataFrame`s, not a resolve function. Cross-process consumers had to hand-wire the DataFrame binding.
+
+**Solution:** `SDFAdapter` — a thin wrapper over the existing `SemanticManifest.fromJson` / `fromJoinedJson`. The adapter is a delegation layer: zero new parsing logic, zero behavior change. The existing methods are preserved with an `@deprecated` annotation pointing at the typeclass entry point.
+
+**Renamed from `ManifestAdapter` to `SDFAdapter`** because `ManifestAdapter` was confusing — `manifest` is overloaded in this project (the `SemanticManifest` class, the `joined-manifest` recipe, the CLI subcommand). `SDFAdapter` matches the package abbreviation (`io.semanticdf` → `sdf`) and the project's brand (SemanticDF).
+
+**Implicit `SparkSession` on `toSemanticTables`** because spark is almost always in implicit scope in user code. The signature changed from `(projects, spark, resolve)` to `(projects, resolve)(implicit spark)`. The `loadSemanticTables` entry point also takes implicit spark.
+
+**What shipped:**
+- `SDFAdapter.scala` — ~150 LOC, the typeclass instance. Calls `fromJson` / `fromJoinedJson` directly. No new parsing logic.
+- `SDFProject.scala` — ~40 LOC, the intermediate case class. Holds the JSON text + extracted `kind` + source-table names.
+- `SDFAdapterSpec.scala` — 11 tests, including **two "result equivalence" tests** that prove the adapter produces the SAME `SemanticTable` as the direct call (no behavior change).
+- `SDFAdapterLeakSpec.scala` — 3 leak tests (GATES).
+- `SDFAdapterPerfSpec.scala` — 3 perf tests. The critical one asserts the adapter adds <5ms over a direct `Files.readString`.
+- `SemanticManifest.fromJson` and `fromJoinedJson` are now `@deprecated` pointing at `SDFAdapter`. They will not be removed in 0.1.x.
+- `SemanticMetadataAdapter.toSemanticTables` signature: `(projects, resolve)(implicit spark)`. All three instances (Dbt, Ossie, SDF) updated.
+- `loadSemanticTables` entry point: `(source, resolve)(implicit adapter, implicit spark)`. No more threading spark through every call.
+- `src/test/resources/manifest-fixtures/{single,joined}-manifest.json` — real fixtures from the existing E2E examples.
+
+**v0.1.17 baseline (real, captured):**
+- SDFAdapter.parse (single, 1.3KB): 0ms median
+- SDFAdapter.parse (joined, 4.3KB): 0ms median
+- Overhead vs direct read: 0ms (asserted <5ms; in practice at 0ms)
+
+**Why backward compatible:**
+- `SemanticManifest.fromJson` / `fromJoinedJson` are preserved (just `@deprecated`).
+- Result equivalence: the adapter produces the SAME `SemanticTable` (verified by two tests).
+- No perf overhead: the adapter adds 0ms over a direct read.
+- The trait instances for dbt and Ossie got the implicit-spark signature change (small breaking change at the trait level), but their public APIs (`DbtAdapter`, `OssieReader`) are preserved.
+
+**Library: 665/665 pass** (was 648, +17 tests: 11 spec + 3 leak + 3 perf; no regressions).
 
 ---
 

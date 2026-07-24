@@ -1,5 +1,7 @@
 package io.semanticdf.leak
 
+import io.semanticdf.{SparkSessionFixture}
+import org.apache.spark.sql.SparkSession
 import io.semanticdf.adapters.{OssieProject, OssieReader}
 import io.semanticdf.adapters.SemanticMetadataAdapter
 
@@ -33,7 +35,10 @@ import java.nio.file.{Files, Path, Paths}
   *   - File handle leaks: SnakeYAML's `Files.newBufferedReader` is
   *     used inside a try-finally by SnakeYAML itself; the reader
   *     doesn't hold file handles beyond the parse call. */
-class OssieReaderLeakSpec extends AnyFunSuite {
+class OssieReaderLeakSpec extends AnyFunSuite with SparkSessionFixture {
+
+  // See SDFAdapterSpec for the implicit-spark rationale.
+  protected implicit val _spark: SparkSession = spark
 
   test("OssieReader: a dropped parse result can be GC-collected (no static retention)") {
     // We hold a weak reference, drop the strong reference, and assert
@@ -127,7 +132,7 @@ class OssieReaderLeakSpec extends AnyFunSuite {
       var ref: WeakReference[Map[String, _]] = null
       locally {
         val project = OssieReader.parse(path)
-        val tables = OssieReader.toSemanticTables(project, spark, resolve)
+        val tables = OssieReader.toSemanticTables(project, resolve)
         ref = new WeakReference(tables)
       }
       for (_ <- 0 until 5) {

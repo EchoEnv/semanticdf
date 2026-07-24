@@ -89,6 +89,18 @@ reference points, not absolutes.
   tests are single-threaded. The next PR could add a
   concurrent benchmark if real workloads show contention.
 
+## SDFAdapter (v0.1.17 follow-up, post-v0.1.16)
+
+The third typeclass instance, added in the post-v0.1.16 release:
+
+```
+SDFAdapter.parse (single, 1.3KB):                          0ms
+SDFAdapter.parse (joined, 4.3KB):                          0ms
+SDFAdapter.parse vs direct Files.readString overhead:    0ms (asserted <5ms)
+```
+
+The "overhead" test is the critical one: the adapter adds 0ms over a direct file read. It is a thin wrapper over `SemanticManifest.fromJson` / `fromJoinedJson` — no new parsing logic, just a thin delegation layer. The two "result equivalence" tests in `SDFAdapterSpec` prove the adapter produces the SAME `SemanticTable` as the direct call.
+
 ## Leak tests (gates, not observational)
 
 `LeakSpec` is the structural counterpart: **its failures are
