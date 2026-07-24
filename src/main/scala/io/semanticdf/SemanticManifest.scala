@@ -187,6 +187,13 @@ object SemanticManifest {
     * in either a batch table op or a streaming op, both of which hold a
     * `DataFrame` reference. For query purposes `source` should match the
     * manifest's `model.sourceTable`; for meta-only inspection any source works. */
+  @deprecated(
+    "Use the [[SDFAdapter]] typeclass instance for the unified " +
+    "`loadSemanticTables` entry point. This method is preserved for " +
+    "backward compatibility; new code should use the adapter pattern " +
+    "(`import io.semanticdf.adapters.SDFAdapter._`) instead.",
+    "0.1.18"
+  )
   def fromJson(text: String, source: DataFrame): SemanticTable = {
     val tree = mapper.readTree(text)
     val obj  = requireObject(tree, "manifest root")
@@ -578,6 +585,13 @@ object SemanticManifest {
     *     cardinality) — the original complex reconstruction from the
     *     BLOCK recipe §3's "right ++ left ++ extras" pattern is
     *     approximated; full reconstruction requires the keys. */
+  @deprecated(
+    "Use the [[SDFAdapter]] typeclass instance for the unified " +
+    "`loadSemanticTables` entry point. This method is preserved for " +
+    "backward compatibility; new code should use the adapter pattern " +
+    "(`import io.semanticdf.adapters.SDFAdapter._`) instead.",
+    "0.1.18"
+  )
   def fromJoinedJson(
       text: String,
       leftSource: DataFrame,

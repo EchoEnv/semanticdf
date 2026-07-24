@@ -26,6 +26,9 @@ import java.nio.file.{Files, Path, Paths}
   */
 class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
 
+  // See SDFAdapterSpec for the implicit-spark rationale.
+  protected implicit val _spark: SparkSession = spark
+
   // ----------------------------------------------------------------
   // OssieReader — parse
   // ----------------------------------------------------------------
@@ -102,7 +105,7 @@ class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture w
       case "db.schema.customers" => spark.createDataFrame(customersRows, customersSchema)
       case other                 => throw new IllegalArgumentException(s"unexpected source: $other")
     }
-    val tables = OssieReader.toSemanticTables(project, spark, resolve)
+    val tables = OssieReader.toSemanticTables(project, resolve)
     assert(tables.keySet == Set("orders", "customers"))
   }
 
@@ -133,7 +136,7 @@ class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture w
       case "db.schema.customers" => spark.createDataFrame(customersRows, customersSchema)
       case _ => throw new IllegalArgumentException("unexpected")
     }
-    val tables = OssieReader.toSemanticTables(project, spark, resolve)
+    val tables = OssieReader.toSemanticTables(project, resolve)
     val orders = tables("orders")
 
     // Query: total_revenue by customer
@@ -176,14 +179,14 @@ class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture w
       case _ => throw new IllegalArgumentException("unexpected")
     }
     val tables = OssieReader.toSemanticTables(OssieReader.parse(Paths.get(
-      "src/test/resources/ossie-fixtures/minimal-ossie.yaml")), spark, resolve)
+      "src/test/resources/ossie-fixtures/minimal-ossie.yaml")), resolve)
     assert(tables.keySet == Set("orders", "customers"))
   }
 
   test("loadSemanticTables: works for dbt (unified entry point) — same call signature") {
     // The dbt fixture is the existing minimal-manifest.json from PR #171.
     val tables = DbtAdapter.toSemanticTables(DbtAdapter.parse(Paths.get(
-      "src/test/resources/dbt-fixtures/minimal-manifest.json")), spark, _ => emptyFlightsDf)
+      "src/test/resources/dbt-fixtures/minimal-manifest.json")), _ => emptyFlightsDf)
     // The dbt fixture has one model: "orders"
     assert(tables.keySet == Set("orders", "customers"))
   }
