@@ -22,7 +22,7 @@ private[audit] final class InMemoryAuditSink(maxEvents: Int) extends AuditSink {
   }
 
   /** Snapshot the buffer in arrival order. Newest last. */
-  def snapshot(): Seq[AuditEvent] = synchronized { buf.toList }
+  override def snapshot(): Seq[AuditEvent] = synchronized { buf.toList }
 
   /** Drop every retained event. Useful for tests. */
   def clear(): Unit = synchronized { buf.clear() }

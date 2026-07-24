@@ -124,14 +124,28 @@ the audit path.
   of the query plan) on every emit. Not minimum code; not the user's
   request. The field is reserved (default `0`); consumers extend if
   they need it.
-- **MCP `audit_log` tool.** A separate PR; the sink is in place to
-  support it.
 - **Async / queue-based sinks.** A follow-up if real-world sinks
   become a bottleneck.
 - **Predicate AST shape parity.** The library's `Predicate` and the
   MCP `PredicateAst` both hash through `PredicateHasher.canonicalize`,
   but the canonical form is library-internal. Exposing it on the
   wire is a v2 conversation.
+
+## v0.1.17 — MCP `audit_log` retrieval tool (follow-up)
+
+The `AuditSink` trait now carries a default `snapshot(): Seq[AuditEvent]`
+method (returns `Seq.empty` for non-retentive sinks). The MCP server
+wires a single `InMemoryAuditSink` to both `Query` (writer) and the
+new `AuditLog` handler (reader). Agents can call `audit_log` to
+read the recent stream back; the wire shape mirrors
+`AuditEvent` field-for-field with `where_hash` / `having_hash` as
+the canonical SHA-256.
+
+The coupling is in-process only: events live in a 1024-event ring
+buffer, no persistence, no cross-restart durability. The shared
+sink is the single point of integration — replacing it with a
+file-backed or queue-backed implementation extends the audit-log
+horizon without changing the contract.
 
 ## Tests
 

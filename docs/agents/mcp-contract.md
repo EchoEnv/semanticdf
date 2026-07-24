@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v4 — current contract. The five tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`) wrap the corresponding library methods. The `ast_where` / `ast_having` field on `query` / `explain` is the v0.1.16 addition; everything else is stable. See [RELEASE.md](../RELEASE.md) for the cumulative changelog.
+**Status:** v5 — current contract. The six tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`, `audit_log`) wrap the corresponding library methods plus the post-v0.1.16 audit-log retrieval. See [RELEASE.md](../RELEASE.md) for the cumulative changelog.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -621,6 +621,74 @@ list of strings the Introspector emits when it can't classify a field.
 
 ---
 
+### Tool 6: `audit_log`
+
+**Purpose:** read the recent audit-event stream emitted by this server's
+`query` and `explain` handlers. Designed for agent self-introspection
+("what did I just query?"), diffing across runs, and confirming a query
+actually executed.
+
+**Request:**
+```json
+{ "limit": 100 }
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `limit` | no | `100` | Max number of events to return. Capped at `1000`; values outside `[1, 1000]` are clamped. |
+
+**Response:**
+```json
+{
+  "events": [
+    {
+      "ts": "2026-07-24T10:00:00Z",
+      "model": "flights",
+      "measures": ["flight_count"],
+      "dimensions": ["carrier"],
+      "where_hash": "abc123…",
+      "having_hash": null,
+      "row_count": 0,
+      "elapsed_ms": 42,
+      "status": "ok",
+      "error": null,
+      "requester": null,
+      "request_id": null
+    }
+  ],
+  "count": 1,
+  "total": 1,
+  "truncated": false
+}
+```
+
+**Fields:**
+
+- `events` — the most recent `limit` events, oldest first. Each event is the wire rendering of an `io.semanticdf.audit.AuditEvent`.
+- `count` — number of events in this response (≤ `limit`).
+- `total` — total events in the server's audit buffer.
+- `truncated` — `true` if `total > count` (caller can re-query with a higher `limit` to see the rest).
+
+**Storage:** the server holds events in an in-memory ring buffer (default
+capacity 1024). When the buffer is full, the oldest event is dropped on
+arrival. There is no persistence, no spillover to disk, and no replay.
+For long-running servers, swap the implementation via the audit-sink
+extension point.
+
+**Coupling:** the buffer is shared between `query` / `explain` (writers)
+and `audit_log` (reader) — they're the same in-process `AuditSink`
+instance. The contract guarantees only that events are returned in
+arrival order; it makes no promise about cross-process or cross-restart
+durability.
+
+**Privacy:** events carry the request shape (model + measures +
+dimensions + filter hashes + status + error) but **not** the
+filter's literal values. The `where_hash` is a stable SHA-256 of the
+canonicalized `Predicate` tree, so two equivalent filters hash to the
+same value but the values themselves are not exposed.
+
+---
+
 ## Lifecycle warnings
 
 Every successful tool response carries an optional `warnings: List[String]`
@@ -713,7 +781,7 @@ between v1 and v2:
 
 ## Streaming models — the agent surface is intentionally model-only
 
-The streaming terminal (`SemanticTable.toStreamingQuery(spark, opts)`) is library-side, **not** an MCP-tool surface. The MCP server's relationship with streaming models is *the same five tools* as for batch models — there is no separate streaming protocol, no `start_stream` / `stop_stream` / `list_streams` tool. By design.
+The streaming terminal (`SemanticTable.toStreamingQuery(spark, opts)`) is library-side, **not** an MCP-tool surface. The MCP server's relationship with streaming models is *the same six tools* as for batch models — there is no separate streaming protocol, no `start_stream` / `stop_stream` / `list_streams` tool. By design.
 
 What that means for each tool:
 

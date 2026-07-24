@@ -28,13 +28,24 @@ final class Query(
     spark: SparkSession,
     val maxRows: Int = Query.maxRowsFromEnv(),
     val timeoutMs: Long = Query.timeoutMsFromEnv(),
+    /** Audit sink — when set, every successful and failed query
+      * emits an [[io.semanticdf.audit.AuditEvent]] through this sink
+      * (via the underlying `SemanticTable.withAuditSink(...)` path).
+      * Default `None` so the audit path is opt-in; the MCP server
+      * passes its shared `InMemoryAuditSink` to enable the
+      * `audit_log` retrieval tool. */
+    val auditSink: Option[io.semanticdf.audit.AuditSink] = None,
 ) {
 
   private val log = Query.log
 
   /** Handle `query`: run the query, return rows. */
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
-    val t = registry(request.model)
+    val raw = registry(request.model)
+    // Attach the audit sink (if any) so the underlying `query()` +
+    // `toDataFrame()` flow emits an event. `withAuditSink` is a pure
+    // copy — it does not mutate the registry.
+    val t = auditSink.fold(raw)(s => raw.withAuditSink(s))
 
     // AMBIGUOUS_MEASURE / AMBIGUOUS_DIMENSION: detect when a requested
     // name matches multiple fields in the merged model. Spark is
@@ -97,7 +108,8 @@ final class Query(
   /** Handle `explain`: same request shape, but no execution. The library
     * emits the full semantic plan via `explainSemantic(spark)`. */
   def explain(registry: Models, request: QueryRequest): Envelope[String] = {
-    val t = registry(request.model)
+    val raw = registry(request.model)
+    val t = auditSink.fold(raw)(s => raw.withAuditSink(s))
     val st =
       t.query(
         measures   = request.measures,
