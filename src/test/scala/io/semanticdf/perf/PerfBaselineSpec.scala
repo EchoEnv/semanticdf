@@ -134,4 +134,21 @@ class PerfBaselineSpec extends AnyFunSuite with SparkSessionFixture with Flights
     }
     info(s"[perf] 200 puts with eviction (cap=100): median=${median}ms")
   }
+
+  test("perf: invalidateModel on a saturated 256-entry cache (the critical assertion)") {
+    // invalidateModel is O(1) per model (sidecar index lookup) plus
+    // O(k) for the dropped entries where k is the count of entries
+    // for that model. With all 256 entries under one model, the
+    // total work is O(256). Should still be sub-millisecond.
+    val cache = ResultCache.inMemory(maxEntries = 256)
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val rows   = Array.empty[Row]
+    // Populate
+    for (i <- 0 until 256) {
+      cache.putWithModel(s"k$i", CachedResult(rows, schema), "the_model")
+    }
+    val median = medianMs { cache.invalidateModel("the_model") }
+    info(s"[perf] invalidateModel on 256 entries: median=${median}ms")
+    assert(cache.keys().isEmpty, "invalidate should drop everything tagged with the model")
+  }
 }

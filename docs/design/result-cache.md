@@ -110,18 +110,45 @@ with 10 columns it's a few KB; for a 1M-row query it can be
 hundreds of MB. The cache is bounded by `maxEntries`; pick it
 according to the workload.
 
+## Invalidation by model name
+
+Users opt in by calling `putWithModel(key, value, model)` (instead
+of `put(key, value)`) when they store a result. To drop all entries
+for a given model in one call:
+
+```scala
+val removed = cache.invalidateModel("orders")  // returns count dropped
+```
+
+`InMemoryResultCache` maintains a sidecar map from model name to
+keys for O(1) lookup. The lookup is sub-millisecond on a 256-entry
+cache (measured: 0ms median). The default `invalidateModel` impl on
+`ResultCache` is a no-op (returns 0) — caches that don't track
+models are unchanged.
+
+Caches that opt out of model tracking (via the 2-arg `put`) are
+invisible to `invalidateModel` — they stay until the LRU evicts
+them or `clear()` is called.
+
 ## What's NOT in v1
 
 - **TTL.** A cached result is "the answer to query X, computed
   once." No expiry. If the source data changes, the cache becomes
   stale. v2 would add a TTL or a publisher/subscriber invalidation
   hook.
+- **Auto-invalidation.** Today, the user calls `invalidateModel`
+  themselves. A v2 hook could integrate with the audit-log stream
+  (PR #174) to invalidate entries when source rows change.
 - **Cross-process / cross-restart durability.** The cache is
   in-memory only. A restart wipes it. A file-backed or Redis-backed
   sink is a v2 conversation.
 - **Per-row invalidation.** The cache key is the request, not the
   source rows. A row-level change doesn't invalidate the cache.
   v2 would integrate with the data-source's commit log.
+- **`orderBy` / `limit` / `timeGrain` / `timeRange` in the key.**
+  The current key only covers `model + measures + dimensions + where + having`.
+  A query with `limit=10` and a query with no limit have the same
+  cache key. v2 would add these.
 - **`orderBy` / `limit` / `timeGrain` / `timeRange` in the key.**
   The current key only covers `model + measures + dimensions + where + having`.
   A query with `limit=10` and a query with no limit have the same

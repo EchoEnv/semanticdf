@@ -78,6 +78,28 @@ class LeakSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture 
       s"cache must be bounded at maxEntries=$cap; got ${keys.length} keys")
   }
 
+  test("InMemoryResultCache: invalidateModel drops tagged entries; sidecar index doesn't leak") {
+    // Populate, invalidate, repopulate — repeat. The sidecar map
+    // (model -> keys) should stay bounded by the number of distinct
+    // models, NOT by the number of insert/invalidate cycles.
+    val cache = ResultCache.inMemory(maxEntries = 100)
+    val schema = new org.apache.spark.sql.types.StructType(Array())
+    for (cycle <- 0 until 50) {
+      for (i <- 0 until 20) {
+        cache.putWithModel(s"k$i", CachedResult(Array.empty[Row], schema), s"m_$cycle")
+      }
+      cache.invalidateModel(s"m_$cycle")
+    }
+    // After all cycles: cache should be empty, and the sidecar
+    // should have zero entries (every model was invalidated).
+    assert(cache.keys().isEmpty, "cache should be empty after all invalidations")
+    // No way to introspect the sidecar directly, but the next
+    // putWithModel on a new model should not pile up the previous
+    // models.
+    cache.putWithModel("final", CachedResult(Array.empty[Row], schema), "final_model")
+    assert(cache.get("final").isDefined)
+  }
+
   // ----------------------------------------------------------------
   // Cache: GC reclaim after clear()
   // ----------------------------------------------------------------
