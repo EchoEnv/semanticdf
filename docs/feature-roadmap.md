@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache + perf/leak tests + Ossie adapter added in follow-ups. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -471,6 +471,41 @@ Each test publishes a median via `info(...)`; numbers land in `target/surefire-r
 - `docs/design/perf-baseline.md` (new design doc with the v0.1.17 numbers)
 
 **Library: 631/631 pass** (was 617, +14 tests; no regressions).
+
+---
+
+### 1.13 Apache Ossie adapter + typeclass interface
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16)
+
+**Problem:** The semantic layer ecosystem has multiple incompatible metadata formats — dbt's `manifest.json`, Apache Ossie (formerly OSI), Cube.js, LookML, internal formats. Every new format means every tool that consumes a semantic layer has to write a new adapter. The library shouldn't have to pick a winner.
+
+**Solution:** A typeclass (`SemanticMetadataAdapter[Source, Project]`) that unifies the two-phase API (parse + bind) and provides a unified `loadSemanticTables(...)` entry point. Two instances ship: `DbtAdapter` (wraps the existing `DbtManifestReader`) and `OssieReader` (new, parses Apache Ossie YAML).
+
+```scala
+import io.semanticdf.adapters.DbtAdapter
+import io.semanticdf.adapters.OssieReader
+import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
+
+val dbtTables = loadSemanticTables(Paths.get("manifest.json"), spark, resolve)
+val ossieTables = loadSemanticTables(Paths.get("flights.yaml"), spark, resolve)
+```
+
+**What shipped:**
+- `SemanticMetadataAdapter.scala` — the trait + `loadSemanticTables` entry point. ~80 LOC.
+- `DbtAdapter.scala` — thin wrapper over `DbtManifestReader`. ~40 LOC.
+- `OssieReader.scala` — new reader for the Apache Ossie YAML format. ~330 LOC.
+- `OssieProject.scala` — case-class DTO for the parsed Ossie structure.
+- 10 new tests in `SemanticMetadataAdapterSpec` covering parse, toSemanticTables, end-to-end query, both adapters via the unified entry point, and error paths.
+- `docs/design/ossie-adapter.md` — design notes + Ossie wire shape excerpt.
+
+**Why this matters:** the existing `DbtManifestReader` works fine in isolation; the new value is **unification**. Future formats (Cube, Looker, Snowflake) plug in as new `SemanticMetadataAdapter` instances and inherit the entry point. The cost is small (~30 LOC for the trait), the win is "any future format works the same way."
+
+**Apache Ossie status check:** the project is real, recently rebranded from "Open Semantic Interchange (OSI)" to "Apache Ossie" (commit `5ca32ad`). 10 vendor converters already exist (dbt, gooddata, polaris, snowflake, databricks, omni, honeydew, salesforce, orionbelt, wisdom). The canonical spec is at `core-spec/spec.yaml` with a JSON Schema at `core-spec/osi-schema.json` (version `0.2.0.dev0`).
+
+**What we do NOT consume in v1:** other dialects (Snowflake/Databricks/BigQuery — picked on read), `ai_context` mapping (preserved on intermediate), the `ontology` block (preserved on the project), composite join keys (v1 picks the first column), `primary_key` / `unique_keys` (preserved on the intermediate, semanticdf doesn't have a first-class grain concept yet).
+
+**Library: 641/641 pass** (was 631, +10 OssieReader tests; no regressions).
 
 ---
 
