@@ -38,6 +38,17 @@ trait ResultCache {
   /** Record a cached result. May evict a prior entry if the cache
     * is bounded. Must not throw. */
   def put(key: String, value: CachedResult): Unit
+
+  /** Return the keys currently held by this cache, in LRU order
+    * (oldest first). Default: empty (non-retentive caches have no
+    * keys to report). Used by leak tests and observability tooling
+    * to assert bounded memory. */
+  def keys(): Seq[String] = Seq.empty
+
+  /** Drop every retained entry. Default: no-op (non-retentive caches
+    * have nothing to clear). Used by tests to assert GC reclaim
+    * after dropping references. */
+  def clear(): Unit = ()
 }
 
 object ResultCache {
