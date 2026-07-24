@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.17 shipped (dbt `manifest.json` reader — `DbtManifestReader` parses dbt's manifest and produces `SemanticTable`s, with the `meta: { kind: measure, expr: ... }` convention for marking measure columns). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.17 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -270,7 +270,7 @@ mvn exec:java \
 
 ### 1.8 dbt manifest reader
 
-**Status:** ✅ **SHIPPED** (v0.1.17)
+**Status:** ✅ **SHIPPED** (v0.1.16)
 
 **Problem:** dbt users already maintain a manifest for their warehouse. They don't want to hand-author a second YAML to expose the same models to a semantic layer. Two sources of truth, twice the maintenance, twice the drift.
 
