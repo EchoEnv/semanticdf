@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>semanticdf-manifest-load_2.13</artifactId>
-    <version>0.1.14</version>
+    <version>0.1.15</version>
     <packaging>jar</packaging>
 
     <name>semanticdf-manifest-load</name>
@@ -19,7 +19,7 @@
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
         <spark.version>3.5.8</spark.version>
-        <semanticdf.version>0.1.14</semanticdf.version>
+        <semanticdf.version>0.1.15</semanticdf.version>
 
         <!-- JVM flags for the forked Scala app JVM (same as the library uses for tests).
              Required for Spark 3.x on JDK 17 — without them, Spark's StorageUtils chokes on

@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.14 shipped (asymmetric join keys — `flights.carrier` joined to `carriers.code` now works end-to-end). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.14 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.15 shipped (SQL-mode CLI for ad-hoc exploration). See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.15 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -201,6 +201,34 @@ SPARK PLAN:
 
 ESTIMATED: scans 28 MB, no shuffle
 ```
+
+---
+
+### 1.6 SQL-mode CLI for ad-hoc exploration
+
+**Status:** ✅ **SHIPPED** (v0.1.15)
+
+**Problem:** The first time someone tries SemanticDF they have to read the Scala DSL, write a `Main.scala`, wire up a build, and run via `mvn scala:run`. That's the #1 onboarding friction after the first compile. SQL is the universal language every analyst knows.
+
+**Solution:** A `query` subcommand that takes a SQL string and runs it against a YAML model. No Scala code required.
+
+```bash
+mvn exec:java \
+  -Dexec.args="query --models examples/starter/models/ \
+  --sql 'SELECT carrier, total_passengers FROM flights \
+  GROUP BY carrier ORDER BY total_passengers DESC LIMIT 10'"
+```
+
+**What shipped:**
+- `SqlCli.scala` — ~340 LOC tokenizer + recursive-descent parser. Handles `SELECT [item [AS alias], ...] FROM model [WHERE cond] [ORDER BY ord] [LIMIT n]`. `WHERE` supports AND/OR/+nested parens. `ORDER BY` supports ASC/DESC. `GROUP BY` is accepted in any position (the model decides grouping from the SELECT items). Numbers, strings (`'...'` with `''` escape), and identifiers. Rejects unknown fields with the same "Dims: ... Measures: ..." error format used elsewhere.
+- `Main.scala` — `runQuery` subcommand. `--models <dir-or-file> --sql '<sql>'`. Prints result via `DataFrame.show(truncate=false)`.
+- `SqlCliSpec.scala` — 16 unit tests covering every grammar rule and error path.
+- `SqlCliEndToEndSpec.scala` — 4 end-to-end tests with a real Spark session and a YAML fixture.
+- `runtime-quickstart.md` — usage example.
+
+**Tests:** 20 new tests (16 unit + 4 e2e). 566/566 total.
+
+**Why T1:** Universal — zero-code exploration. The single biggest consumer-friction win.
 
 ---
 

@@ -14,6 +14,7 @@ import io.semanticdf.{ManifestParsingException, SemanticManifest, YamlLoader}
   *   introspect  — read a data file, infer a starter YAML model
   *   docsgen     — read YAML model files, produce browsable HTML docs
   *   okfgen      — read YAML model files, emit OKF knowledge bundle (.md)
+  *   query       — run a SQL string against a YAML model (no Scala needed)
   */
 object Main {
 
@@ -32,6 +33,8 @@ object Main {
           runValidateManifest(args.tail)
         case Some("validate-joined-manifest") =>
           runValidateJoinedManifest(args.tail)
+        case Some("query") =>
+          runQuery(args.tail)
         case Some(cmd) =>
           System.err.println(s"Unknown subcommand: $cmd")
           printUsage()
@@ -230,6 +233,40 @@ object Main {
     }
   }
 
+  /** query — run a SQL string against a YAML model. Ad-hoc exploration
+    * without writing Scala. Uses [[SqlCli]] to map the SQL string to
+    * [[SemanticTable.query]] parameters; the existing query() API handles
+    * aggregation, filtering, ordering, and limits.
+    *
+    * Required: `--models <dir-or-file>` and `--sql '<sql>'`.
+    * Optional: `--model <name>` (when --models points at a dir of multiple
+    * models, the FROM clause in the SQL can also pick the model).
+    *
+    * Output: prints the result rows as `col1\tcol2\t...` to stdout. */
+  private def runQuery(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .master("local[*]")
+      .appName("semanticdf-query")
+      .config("spark.ui.enabled", "false")
+      .config("spark.sql.shuffle.partitions", "2")
+      .getOrCreate()
+    try {
+      val parser = new CliParser(args)
+      val modelsPath = parser.require("--models", "Usage: query --models <dir-or-file> --sql '<SQL>'")
+      val sql        = parser.require("--sql",     "Usage: query --models <dir-or-file> --sql '<SQL>'")
+
+      val models = YamlLoader.loadDir(modelsPath, spark)
+      val parsed = SqlCli.parse(sql)
+      val model  = models.getOrElse(
+        parsed.model,
+        throw new IllegalArgumentException(
+          s"SQL references model '${parsed.model}' but models dir doesn't contain it. " +
+          s"Available: ${models.keys.toSeq.sorted.mkString(", ")}."))
+      val result = SqlCli(parsed, model).toDataFrame(spark)
+      result.show(truncate = false)
+    } finally spark.stop()
+  }
+
   private def printUsage(): Unit = {
     println(
       """semanticdf-tools — CLI utilities for the semanticdf semantic layer
@@ -259,10 +296,17 @@ object Main {
         |            Read a JSON manifest and print its identity + digest
         |            header. Source-free (no Spark session required).
         |
+        |  query --models <dir-or-file> --sql '<sql>'
+        |          Run a SQL string against a YAML model. Ad-hoc exploration
+        |          without writing Scala. Supports SELECT, FROM, WHERE (AND/OR),
+        |          ORDER BY (ASC/DESC), LIMIT, GROUP BY (ignored), aliases.
+        |          The model decides which fields are dims vs measures.
+        |
         |Examples:
         |  mvn exec:java -Dexec.args="docsgen --path models/ --out docs/index.html"
         |  mvn exec:java -Dexec.args="okfgen --path models/ --out agents/"
         |  mvn exec:java -Dexec.args="introspect --path data/orders.csv --format csv --model orders"
+        |  mvn exec:java -Dexec.args="query --models examples/starter/models/ --sql 'SELECT carrier, total_passengers FROM flights GROUP BY carrier ORDER BY total_passengers DESC LIMIT 10'"
         |""".stripMargin)
   }
 
