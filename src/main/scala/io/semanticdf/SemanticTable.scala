@@ -147,6 +147,18 @@ final class SemanticTable private[semanticdf] (
       * Default `None`. When `auditSink` is also `None`, this field
       * is dormant — no hashing cost. */
     val auditRequest: Option[AuditQueryRequest] = None,
+    /** Result cache — when set, every `toDataFrame` / `execute` call
+      * that traces back to a `query()` invocation checks the cache
+      * first (by a stable SHA-256 of the request shape) and returns
+      * the cached rows on hit. On miss, the result is stored before
+      * the DataFrame is returned. Default `None` (no cache) so the
+      * cache path is opt-in.
+      *
+      * The cache key is derived from `auditRequest`, so the
+      * fluent chain must capture the request via `query(...)` for
+      * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
+      * bypass the cache. */
+    val resultCache: Option[io.semanticdf.cache.ResultCache] = None,
 ) {
 
   /** Batch terminal (DESIGN §4.5).
@@ -159,41 +171,65 @@ final class SemanticTable private[semanticdf] (
     * (no argument). Explicit `.toDataFrame(spark)` is fully backward-compatible.
     */
   def toDataFrame(implicit spark: SparkSession): DataFrame = {
-    if (auditSink.isEmpty) root.compile(spark)
-    else {
-      // Audit path: time the compile, then emit on success or failure.
-      // `rowCount` is left at 0 — the audit hook runs on the lazy
-      // DataFrame materialization, before any collect. Callers that
-      // need an exact row count can call `df.count()` and emit a
-      // follow-up event via the same sink, or extend the AuditEvent
-      // with a collector hook in a follow-up.
+    if (auditSink.isEmpty && resultCache.isEmpty) {
+      // Fast path: no audit, no cache — same as the pre-#174 code.
+      root.compile(spark)
+    } else {
+      // Audit + cache path.
       val t0 = System.nanoTime()
       val model = this.name.getOrElse(sourceTable.getOrElse("unknown"))
-      val req   = auditRequest.getOrElse(
-        AuditQueryRequest(model = model))
+      val req   = auditRequest.getOrElse(AuditQueryRequest(model = model))
       val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
       val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
+
+      // Compute the cache key (no Spark work). Only attempt cache if
+      // the cache is configured AND the request is well-formed (has
+      // a model).
+      val cacheKeyOpt: Option[String] =
+        resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req))
+
+      // Cache check: on hit, rebuild a DataFrame from the cached rows
+      // and skip Spark's planner entirely. This is the "best performance"
+      // path — no Spark job, no compile, just a `parallelize` of
+      // already-materialised rows.
+      val cachedOpt: Option[io.semanticdf.cache.CachedResult] =
+        cacheKeyOpt.flatMap(key => resultCache.get.get(key))
+
       try {
-        val df = root.compile(spark)
+        val (df, rowCount) =
+          if (cachedOpt.isDefined) {
+            val c = cachedOpt.get
+            val rebuilt = if (c.rows.isEmpty) {
+              // Empty result: avoid parallelize on an empty Seq.
+              spark.createDataFrame(
+                spark.sparkContext.emptyRDD[org.apache.spark.sql.Row], c.schema)
+            } else {
+              spark.createDataFrame(
+                spark.sparkContext.parallelize(c.rows.toSeq), c.schema)
+            }
+            (rebuilt, c.rows.length.toLong)
+          } else {
+            val fresh = root.compile(spark)
+            // Store on miss. We need rows + schema; for lazy DataFrames
+            // this means materialising once via collect(). For cache
+            // hits the cost is one `parallelize`; for misses, one
+            // collect + one put.
+            cacheKeyOpt.foreach { key =>
+              try {
+                val rows = fresh.collect()
+                resultCache.get.put(key,
+                  io.semanticdf.cache.CachedResult(rows, fresh.schema))
+                System.err.println(s"[DBG] cache.put: key=${key.take(8)}..., rows=${rows.length}")
+              } catch { case _: Throwable => () /* cache failures must not break the query */ }
+            }
+            (fresh, 0L)
+          }
+
         val elapsedMs = (System.nanoTime() - t0) / 1000000L
-        // Fire-and-forget; the sink must not throw, and we must not
-        // let an emit failure break the query. The sink is documented
-        // as non-throwing; wrap defensively anyway.
-        try auditSink.get.emit(AuditEvent(
-          ts         = java.time.Instant.now(),
-          model      = model,
-          measures   = req.measures,
-          dimensions = req.dimensions,
-          whereHash  = whereHash,
-          havingHash = havingHash,
-          rowCount   = 0L,
-          elapsedMs  = elapsedMs,
-          status     = "ok",
-        )) catch { case _: Throwable => () }
-        df
-      } catch {
-        case e: Throwable =>
-          val elapsedMs = (System.nanoTime() - t0) / 1000000L
+        if (auditSink.isDefined) {
+          // Fire-and-forget; the sink is documented as non-throwing,
+          // but we wrap defensively so a misbehaving sink can't
+          // break the query.
           try auditSink.get.emit(AuditEvent(
             ts         = java.time.Instant.now(),
             model      = model,
@@ -201,11 +237,29 @@ final class SemanticTable private[semanticdf] (
             dimensions = req.dimensions,
             whereHash  = whereHash,
             havingHash = havingHash,
-            rowCount   = 0L,
+            rowCount   = rowCount,
             elapsedMs  = elapsedMs,
-            status     = "error",
-            error      = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}"),
+            status     = "ok",
           )) catch { case _: Throwable => () }
+        }
+        df
+      } catch {
+        case e: Throwable =>
+          val elapsedMs = (System.nanoTime() - t0) / 1000000L
+          if (auditSink.isDefined) {
+            try auditSink.get.emit(AuditEvent(
+              ts         = java.time.Instant.now(),
+              model      = model,
+              measures   = req.measures,
+              dimensions = req.dimensions,
+              whereHash  = whereHash,
+              havingHash = havingHash,
+              rowCount   = 0L,
+              elapsedMs  = elapsedMs,
+              status     = "error",
+              error      = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}"),
+            )) catch { case _: Throwable => () }
+          }
           throw e
       }
     }
@@ -429,7 +483,7 @@ final class SemanticTable private[semanticdf] (
               description = sourceTable.flatMap(_ => None),
             )
             val batchModel = new SemanticTable(
-              batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest)
+              batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest, resultCache)
             val result = batchModel.toDataFrame(spark)
             foreachBatchFn(result)
         }
@@ -773,7 +827,7 @@ final class SemanticTable private[semanticdf] (
       postAggPredicates,
       version,
       sourceTable,
-      status, auditSink, auditRequest)
+      status, auditSink, auditRequest, resultCache)
 
   /** Set the per-model schema version. Returns a NEW SemanticTable (immutability preserved).
     *
@@ -787,7 +841,7 @@ final class SemanticTable private[semanticdf] (
     */
   def version(v: Int): SemanticTable = {
     require(v >= 0, s"SemanticTable.version must be non-negative, got: $v")
-    new SemanticTable(root, postAggPredicates, version = v, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(root, postAggPredicates, version = v, sourceTable, status, auditSink, auditRequest, resultCache)
   }
 
   /** Set the model's lifecycle status. Returns a NEW SemanticTable (immutability
@@ -801,7 +855,7 @@ final class SemanticTable private[semanticdf] (
     * See [[ModelStatus]] for the lifecycle contract. */
   def status(s: ModelStatus): SemanticTable = {
     require(s != null, "SemanticTable.status: ModelStatus must be non-null")
-    new SemanticTable(root, postAggPredicates, version, sourceTable, s, auditSink, auditRequest)
+    new SemanticTable(root, postAggPredicates, version, sourceTable, s, auditSink, auditRequest, resultCache)
   }
 
   /** Install an [[io.semanticdf.audit.AuditSink]] on this table.
@@ -816,13 +870,27 @@ final class SemanticTable private[semanticdf] (
     * disable. For a JSONL-on-stdout sink, use
     * `Some(io.semanticdf.audit.AuditSink.JsonlStdout)`. */
   def withAuditSink(sink: AuditSink): SemanticTable =
-    new SemanticTable(root, postAggPredicates, version, sourceTable, status, Some(sink), auditRequest)
+    new SemanticTable(root, postAggPredicates, version, sourceTable, status, Some(sink), auditRequest, resultCache)
+
+  /** Install a [[io.semanticdf.cache.ResultCache]] on this table.
+    *
+    * Every subsequent `query()` + `toDataFrame()` / `execute()` round
+    * trip checks the cache first; on hit, the cached rows are
+    * returned without re-executing the Spark plan. On miss, the
+    * result is stored before the DataFrame is returned. The cache
+    * survives the fluent chain the same way [[withAuditSink]] does.
+    *
+    * Default: `None` (no cache). Pass `Some(cache)` to enable. For
+    * an LRU-bounded in-memory cache, use
+    * `Some(io.semanticdf.cache.ResultCache.inMemory(256))`. */
+  def withResultCache(cache: io.semanticdf.cache.ResultCache): SemanticTable =
+    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, Some(cache))
 
   /** Internal: stamp the captured request shape for audit emission.
     * Called by [[query]] once the chain is built. Not part of the public
     * API — callers should let [[query]] capture the request. */
   private[semanticdf] def copyAuditRequest(req: AuditQueryRequest): SemanticTable =
-    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, Some(req))
+    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, Some(req), resultCache)
 
   /** Same as [[explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:io.semanticdf.SemanticTable#Scope)]]
     * but accepts an optional SparkSession (e.g. for a static-only view). */
@@ -987,11 +1055,11 @@ final class SemanticTable private[semanticdf] (
     val extra = materialized.map(d => d.name -> d).toMap
     root match {
       case t: SemanticTableOp =>
-        new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Streaming source: dims attach to the streaming model.
       case s: SemanticStreamingTableOp =>
-        new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case j: SemanticJoinOp =>
         // Pass extra dimensions so mergedModel includes them. Preserve
@@ -1015,33 +1083,33 @@ final class SemanticTable private[semanticdf] (
           leftPrefix = j.leftPrefix,
           rightPrefix = j.rightPrefix,
         )
-        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       // Lets a user (or query()) chain withDimensions after where()/orderBy()/limit().
       case SemanticFilterOp(src, pred) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticOrderByOp(src, keys) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticLimitOp(src, n) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Transforms are applied at compile time; dims should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withDimensions(dims: _*)
-        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case _ =>
         throw new IllegalStateException(
@@ -1095,11 +1163,11 @@ final class SemanticTable private[semanticdf] (
     val extra = measures.map(m => m.name -> m).toMap
     root match {
       case t: SemanticTableOp =>
-        new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Streaming source: measures attach to the streaming model.
       case s: SemanticStreamingTableOp =>
-        new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case j: SemanticJoinOp =>
         val updatedJoin = SemanticJoinOp(
@@ -1120,32 +1188,32 @@ final class SemanticTable private[semanticdf] (
           leftPrefix = j.leftPrefix,
           rightPrefix = j.rightPrefix,
         )
-        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticOrderByOp(src, keys) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticLimitOp(src, n) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Transforms are applied at compile time; measures should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withMeasures(measures: _*)
-        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
+        new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case _ =>
         throw new IllegalStateException(
@@ -1230,7 +1298,7 @@ final class SemanticTable private[semanticdf] (
         // pattern used for joins below.
         new SemanticTable(
           SemanticTransformsOp(t, transforms),
-          postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+          postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case j: SemanticJoinOp =>
         // Joined models: wrap in a SemanticTransformsOp. CRUCIALLY, we do NOT
@@ -1240,24 +1308,24 @@ final class SemanticTable private[semanticdf] (
         // time, and the transforms are applied then too.
         new SemanticTable(
           SemanticTransformsOp(j, transforms),
-          postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+          postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withTransforms(transforms: _*)
-        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
+        new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withTransforms(transforms: _*)
-        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
+        new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticOrderByOp(src, keys) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withTransforms(transforms: _*)
-        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
+        new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticLimitOp(src, n) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withTransforms(transforms: _*)
-        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
+        new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
       case SemanticHintOp(src, strategy, params) =>
-        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).withTransforms(transforms: _*)
-        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+        val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
+        new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       // Chained transforms: append the new transforms to the existing layer.
       // Do NOT recurse — recursion would re-enter the case below and create a
@@ -1269,7 +1337,7 @@ final class SemanticTable private[semanticdf] (
       case SemanticTransformsOp(src, existing) =>
         new SemanticTable(
           SemanticTransformsOp(src, existing ++ transforms),
-          postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+          postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
       case _ =>
         throw new IllegalStateException(
@@ -1444,10 +1512,10 @@ final class SemanticTable private[semanticdf] (
           sourceTable = None,
           status = ModelStatus.Published,
           auditSink = this.auditSink,
-          auditRequest = this.auditRequest)
+          auditRequest = this.auditRequest, resultCache)
       }
     }
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest)
+    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache)
   }
 
   /** Join with a one-to-many / fan-out relationship (`join_many`).
@@ -1552,10 +1620,10 @@ final class SemanticTable private[semanticdf] (
           sourceTable = None,
           status = ModelStatus.Published,
           auditSink = this.auditSink,
-          auditRequest = this.auditRequest)
+          auditRequest = this.auditRequest, resultCache)
       }
     }
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest)
+    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache)
   }
 
   /** Cross join (Cartesian product) with another semantic table (`join_cross`).
@@ -1576,7 +1644,7 @@ final class SemanticTable private[semanticdf] (
       leftSide  = Some(this),
       rightSide = Some(other),
     )
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest)
+    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache)
   }
 
   // -------------------------------------------------------------------------
@@ -1607,7 +1675,7 @@ final class SemanticTable private[semanticdf] (
     val newRoot = pre.foldLeft(root) { (r, p) =>
       SemanticFilterOp(r, p)
     }
-    new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status, auditSink, auditRequest, resultCache)
   }
 
   /** Apply a filter predicate explicitly as post-aggregation (HAVING).
@@ -1615,7 +1683,7 @@ final class SemanticTable private[semanticdf] (
     * Use when you want a dimension filter to apply after aggregation (rare, but
     * sometimes needed when the dimension is derived from a measure). */
   def having(pred: Predicate): SemanticTable =
-    new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
   // -------------------------------------------------------------------------
   // Phase 5 completion: order_by / limit / query
@@ -1630,11 +1698,11 @@ final class SemanticTable private[semanticdf] (
     *
     * Typically chained after `aggregate()`. Composes with [[limit]]. */
   def orderBy(keys: SortKey*): SemanticTable =
-    new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
   /** Limit the result to the first `n` rows. Composes with [[orderBy]]. */
   def limit(n: Int): SemanticTable =
-    new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
   /** Add a Spark planner hint to this SemanticTable.
     *
@@ -1663,7 +1731,7 @@ final class SemanticTable private[semanticdf] (
     * @param params   optional parameters for the hint (e.g. an Int for `repartition_n`)
     * @return a new SemanticTable that emits a hinted DataFrame */
   def withHint(strategy: String, params: Any*): SemanticTable =
-    new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
   /** One-shot bundled query (Phase 5 completion).
     *
@@ -1744,7 +1812,7 @@ final class SemanticTable private[semanticdf] (
   /** Begin a group-by + aggregate. Returns a builder whose `aggregate(...)` produces
     * the aggregated [[SemanticTable]]. */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest)
+    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
   // -------------------------------------------------------------------------
   // Typed field references (SemanticField typeclass)
@@ -1833,11 +1901,11 @@ final class SemanticTable private[semanticdf] (
   private def resolveDimension(name: String): Option[Dimension] = root match {
     case t: SemanticTableOp => t.dimensions.get(name)
     case j: SemanticJoinOp  => j.mergedModel.dimensions.get(name)
-    case SemanticFilterOp(src, _)     => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveDimension(name)
-    case SemanticOrderByOp(src, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveDimension(name)
-    case SemanticLimitOp(src, _)      => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveDimension(name)
-    case SemanticHintOp(src, _, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveDimension(name)
-    case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveDimension(name)
+    case SemanticFilterOp(src, _)     => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveDimension(name)
+    case SemanticOrderByOp(src, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveDimension(name)
+    case SemanticLimitOp(src, _)      => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveDimension(name)
+    case SemanticHintOp(src, _, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveDimension(name)
+    case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveDimension(name)
     case _ => SemanticOp.rootModel(root).flatMap(_.dimensions.get(name))
   }
 
@@ -1846,13 +1914,13 @@ final class SemanticTable private[semanticdf] (
     case j: SemanticJoinOp  => j.mergedModel.measures.keySet
     case SemanticFilterOp(src, _) =>
       // Unwrap filters to find the underlying model.
-      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveAllMeasureNames
+      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveAllMeasureNames
     case SemanticHintOp(src, _, _) =>
       // Hint is a Spark planner wrapper; recurse to find the underlying model.
-      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveAllMeasureNames
+      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveAllMeasureNames
     case SemanticTransformsOp(src, _) =>
       // Transforms don't change the measure catalog; recurse to the source.
-      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveAllMeasureNames
+      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveAllMeasureNames
     case _ =>
       SemanticOp.rootModel(root).map(_.measures.keySet).getOrElse(Set.empty)
   }
@@ -1883,10 +1951,10 @@ final class SemanticTable private[semanticdf] (
         )
       // Pre-join row filters are transparent — unwrap to find the underlying table.
       case SemanticRowFilterOp(src, _, _, _, _) =>
-        new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).requireRoot(label)
+        new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).requireRoot(label)
       // Transforms are applied at compile time; unwrap to find the underlying table.
       case SemanticTransformsOp(src, _) =>
-        new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).requireRoot(label)
+        new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).requireRoot(label)
       // Query wrappers (WHERE / ORDER BY / LIMIT / HINT) layer over the model —
       // they don't expose a SemanticTableOp root, so users must join first.
       case SemanticFilterOp(_, _) | SemanticOrderByOp(_, _) |
@@ -2160,15 +2228,15 @@ final class SemanticTable private[semanticdf] (
     case s: SemanticStreamingTableOp => MergedSemanticModel(s.dimensions, s.measures, s.name, s.description)
     case j: SemanticJoinOp  => j.mergedModel
     case SemanticAggregateOp(src, _, _) =>
-      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
-    case SemanticFilterOp(src, _)  => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
+      new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
+    case SemanticFilterOp(src, _)  => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
     // Pre-join row filters do not change the declared model — unwrap transparently.
-    case SemanticRowFilterOp(src, _, _, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
-    case SemanticOrderByOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
-    case SemanticLimitOp(src, _)   => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
-    case SemanticHintOp(src, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
+    case SemanticRowFilterOp(src, _, _, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
+    case SemanticOrderByOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
+    case SemanticLimitOp(src, _)   => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
+    case SemanticHintOp(src, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
     // Transforms are transparent — they don't change the declared model.
-    case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest).resolveRootModel
+    case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).resolveRootModel
   }
 
   /** Build the streaming windowed-aggregation pipeline that the
@@ -2366,6 +2434,10 @@ final class SemanticGroupBy private[semanticdf] (
     /** Audit request — carried from the originating [[SemanticTable]] so the
       * audit event carries the user's original query shape. */
     auditRequest: Option[AuditQueryRequest] = None,
+    /** Result cache — carried from the originating [[SemanticTable]] so the
+      * cache check fires when `query()` ends in
+      * `groupBy().aggregate(...)`. See [[SemanticTable.resultCache]]. */
+    resultCache: Option[io.semanticdf.cache.ResultCache] = None,
 ) {
   /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
   def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
@@ -2405,7 +2477,7 @@ final class SemanticGroupBy private[semanticdf] (
     var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
     // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
     postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-    new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest)
+    new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache)
   }
 }
 

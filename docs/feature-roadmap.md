@@ -1,7 +1,7 @@
 # Feature Roadmap & Performance Plan
 
 **Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log added in a follow-up. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Last updated:** v0.1.16 shipped (structured predicate on the MCP wire + dbt `manifest.json` reader). Audit log + result cache added in a follow-up. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.16 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -382,6 +382,48 @@ Response:
 **Privacy:** events carry the request shape but **not** the filter's literal values. `where_hash` is a stable SHA-256 of the canonicalized `Predicate` tree; equivalent filters hash to the same value.
 
 **Why this is the right tight-loop:** The audit sink was built in v0.1.16 specifically to support a retrieval tool. One small PR closes the loop; nothing in v0.1.16 needs to change. The T2 cache work (#1.11 candidate) can now use `whereHash` as the cache key.
+
+---
+
+### 1.11 Result cache
+
+**Status:** ✅ **SHIPPED** (post-v0.1.16)
+
+**Problem:** LLM-agent loops re-ask the same question while reasoning, and several agents in the same session hit the same semantic table. Without a result cache, every query is a fresh Spark job — the second identical query costs as much as the first.
+
+**Solution:** A minimal, pluggable cache primitive in `io.semanticdf.cache.*` — a `ResultCache` trait with a default LRU `inMemory` impl, a `CachedResult` (rows + schema) value type, and a `CacheKey` (SHA-256 of the canonicalised request shape) key type. `SemanticTable.withResultCache(...)` opts in.
+
+```scala
+val t = toSemanticTable(df, name = Some("flights"))
+  .withDimensions(...).withMeasures(...)
+  .withResultCache(ResultCache.inMemory(maxEntries = 256))
+
+t.query(measures = ..., dimensions = ..., where = ...).toDataFrame(spark)
+// 1st call: executes, stores. 2nd call: cache hit, no Spark job.
+```
+
+**What shipped:**
+- `cache/ResultCache.scala` — the trait + `NoOp` and `inMemory(maxEntries)` factories.
+- `cache/InMemoryResultCache.scala` — LRU cache, ~30 LOC.
+- `cache/CachedResult.scala` — `Array[Row] + StructType` value type.
+- `cache/CacheKey.scala` — SHA-256 of `m=<model>|me=<sorted measures>|dim=<sorted dimensions>|w=<whereHash>|h=<havingHash>`.
+- `SemanticTable` — 1 new constructor field (`resultCache`), 1 fluent setter (`withResultCache`). The `toDataFrame` audit path extended to check the cache first, fall through to execute on miss, and store the result. Zero-overhead fast path when no audit sink AND no cache is set.
+- 19 tests in `ResultCacheSpec`: 8 key, 4 sink, 7 end-to-end (including the audit + cache interaction test).
+- `docs/design/result-cache.md` — design notes.
+
+**Performance:**
+- **Cache hit:** O(rows) to rebuild a DataFrame from cached rows. No Spark plan, no collect, no job. The "best performance" path.
+- **Cache miss:** at least one Spark job (collect), then one `put`. The win is on repeated queries.
+
+**Why this is the right T2 anchor:** the `whereHash` from v0.1.16's audit log is the seed for cache-key equivalence by AST shape. The cache uses the same `PredicateHasher` — so audit-log entries and cache keys are always consistent. v0.1.16 + 1.11 (this) closes the loop: log every query, then cache the repeats.
+
+**What's NOT in v1 (deliberate, per karpathy "no speculative features"):**
+- TTL / invalidation hooks — a follow-up if real workloads need it.
+- Cross-process durability — the cache is in-memory only.
+- Per-row invalidation — keyed by request, not by source rows.
+- `orderBy` / `limit` / `timeGrain` / `timeRange` in the key — a follow-up if false cache hits show up in practice.
+
+**Interaction with the audit log:** the two features share `auditRequest`. On a cache hit, the audit event's `rowCount` is the cached row count and `elapsedMs` is small (no compile, no collect). An `mcp audit_log` consumer can detect "this was a cache hit" by `elapsedMs < 1ms` and `rowCount > 0`.
 
 ---
 
