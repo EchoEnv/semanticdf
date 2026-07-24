@@ -1,4 +1,4 @@
-<p align="center"><img width="256" height="256" alt="ChatGPT Image Jul 24, 2026, 05_03_32 PM" src="https://github.com/user-attachments/assets/5949ae17-ae41-47d5-ace4-69620579f544" /></p>
+<p align="center"><img width="381" height="256" alt="ChatGPT Image Jul 24, 2026, 10_32_36 PM" src="https://github.com/user-attachments/assets/a2c7e4d3-aa5e-4b17-b305-0b6676f3304d" /></p>
 
 # SemanticDF
 
