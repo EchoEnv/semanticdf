@@ -659,8 +659,18 @@ final class SemanticTable private[semanticdf] (
     * user does not call `collect()` separately. Count it here so
     * the audit log reflects the real per-batch row count.
     *
-    * The error path is the standard `NonFatal` swallow (the audit
-    * sink is best-effort, never the cause of a query failure). */
+    * `t0` is the start of the BATCH-HANDLING work (right before
+    * this emit), not the start of the streaming batch trigger.
+    * The captured `elapsedMs` therefore measures the
+    * emit-time work, not the upstream streaming aggregation or
+    * the user's `foreachBatchFn` callback. This matches the
+    * existing `toDataFrame` audit semantics (`t0` captured right
+    * before the cache/compile work). Both streaming and batch
+    * terminals report "framework-side terminal work" time, not
+    * end-to-end query latency.
+    *
+    * The error path is `NonFatal`-swallowed — the audit sink is
+    * best-effort and must never break the streaming pipeline. */
   private def emitStreamingAudit(
       batchDf: DataFrame,
       t0: Long,

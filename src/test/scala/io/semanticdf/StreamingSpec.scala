@@ -632,39 +632,56 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     }
   }
 
-  test("toStreamingQuery: windowed path emits audit events with the actual rowCount (regression for #190)") {
+  test("toStreamingQuery: windowed path (SemanticAggregateOp root) emits audit events (regression for #190)") {
+    // PR #190 fixed two audit bugs. BUG 1 was the
+    // `case _: SemanticAggregateOp if opts.window.isDefined` branch
+    // short-circuiting to `foreachBatchFn(batchDf)` with no audit
+    // emit. To exercise that branch the model root MUST be a
+    // SemanticAggregateOp — which requires `.groupBy(...).aggregate(...)`
+    // on the model. The previous version of this test used
+    // `opts.window + groupKeys` (which routes through the
+    // SemanticStreamingTableOp branch, NOT the SemanticAggregateOp
+    // one), so it never actually covered BUG 1. Running the old test
+    // against the unfixed code passed unchanged.
     val s: SparkSession = spark
     val stream = s.readStream
       .format("rate")
-      .option("rowsPerSecond", 10)
+      .option("rowsPerSecond", 5)
       .load()
     val auditSink = new TestAuditSink()
-    // Use the windowed path via StreamingQueryOptions.window + groupKeys.
-    // The .atTimeGrain path has a separate resolveDimension bug for
-    // SemanticStreamingTableOp (out of scope for #190), so we use
-    // the options-based windowed path here.
     val model = toStreamingSemanticTable(stream, name = Some("audit_windowed"))
-      .withDimensions(Dimension("value", t => t("value")))
-      .withMeasures(Measure("c", t => count(lit(1))))
+      .withDimensions(Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")))
+      .withMeasures(Measure("count", t => count(lit(1))))
       .withAuditSink(auditSink)
+      .groupBy("timestamp")
+      .aggregate("count")
 
     val query = model.toStreamingQuery(s, StreamingQueryOptions(
       trigger = Some(Trigger.ProcessingTime("500 milliseconds")),
-      window = Some(WindowSpec("timestamp", "10 seconds")),
-      watermark = Some(WatermarkSpec("timestamp", "5 seconds")),
-      groupKeys = Seq("value"),
+      // Short window so a window can close within the test wait time.
+      window = Some(WindowSpec("timestamp", "1 second")),
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+      // Update mode emits per-micro-batch aggregates (so we don't
+      // have to wait for a window to close).
+      outputMode = "update",
     ))
-    Thread.sleep(2000)
+    Thread.sleep(5000)
     query.stop()
     query.awaitTermination()
 
     val events = auditSink.events
-    // The windowed path used to emit ZERO audit events (BUG #190).
+    // BUG 1 was that the windowed branch emitted ZERO audit events.
     // The fix emits one per micro-batch.
-    assert(events.nonEmpty, s"expected at least one audit event for windowed streaming, got 0")
+    assert(events.nonEmpty,
+      s"expected at least one audit event for windowed streaming, got 0; this is BUG #190")
+    // Tighten the assertion: a regression that always emitted
+    // rowCount=0 (the BUG #2 pattern) would silently pass `rowCount >= 0L`.
+    // Assert at least one event has a positive rowCount.
+    val nonEmpty = events.filter(_.rowCount > 0L)
+    assert(nonEmpty.nonEmpty,
+      s"expected at least one audit event with positive rowCount, got 0; events: $events")
     for (event <- events) {
-      assert(event.rowCount >= 0L,
-        s"audit event has unexpected rowCount: $event")
+      assert(event.rowCount >= 0L, s"audit event has negative rowCount: $event")
       assert(event.status == "ok", s"audit event status is not ok: $event")
     }
   }
