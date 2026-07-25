@@ -329,7 +329,34 @@ object Query {
 
   /** JSON Schema for the `query` / `explain` tool input. The SDK validates
     * the agent's request against this shape; extra properties are allowed
-    * (we ignore what we don't need). */
+    * (we ignore what we don't need).
+    *
+    * The McpSchema record's `properties` value is a `Map[String, Object]`
+    * that the SDK only supports `{"type": "<scalar>"}` shapes — no
+    * per-property `description` or `items` are surfaced to the LLM
+    * agent. The full field semantics are documented here so the
+    * server can answer schema-aware MCP clients that ask for
+    * descriptions via the `tools/list` endpoint's `description`
+    * field (handled at the tool level, not at the property level):
+    *
+    *   model        : required. The model name to query.
+    *   measures     : required. Array of measure names.
+    *   dimensions   : optional. Array of dimension names.
+    *   where        : optional. Array of flat predicates (legacy).
+    *   having       : optional. Array of flat predicates (legacy).
+    *   ast_where    : optional. Structured predicate (preferred).
+    *   ast_having   : optional. Structured predicate (preferred).
+    *   order_by     : optional. Array of {field, direction} objects.
+    *   limit        : optional. Top-N cap (integer).
+    *   time_grain   : optional. Single time grain applied to all
+    *                  time dimensions (string: "day" / "month" / etc.).
+    *   time_grains  : optional. Per-dimension time grains. Array
+    *                  of [dimension, grain] PAIRS. Malformed pairs
+    *                  (length != 2) are dropped silently. Duplicate
+    *                  keys collapse to the last value (Map
+    *                  semantics in the library).
+    *   time_range   : optional. Half-open [start, end] string pair
+    *                  (array of 2 strings). */
   val queryToolSchema: io.modelcontextprotocol.spec.McpSchema.JsonSchema = {
     val props = new java.util.LinkedHashMap[String, Object]()
     def strProp(t: String) = java.util.Map.of[String, Object]("type", t): java.util.Map[String, Object]

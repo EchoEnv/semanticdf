@@ -510,4 +510,75 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
     val parsed = AstPredicates.parse(req.ast_where.get)
     assert(parsed == Predicate.Compare.Eq("carrier", "AA"))
   }
+
+  test("parseRequest: time_grains array of pairs (REST path)") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"time_grains":[["ts","day"],["day","month"]]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.time_grains.isDefined, s"expected time_grains to be set, got ${req.time_grains}")
+    val map = req.time_grains.get.toMap
+    assert(map == Map("ts" -> "day", "day" -> "month"),
+      s"expected Map(ts -> day, day -> month), got $map")
+  }
+
+  test("parseRequest: time_grains with malformed pairs is silently dropped") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"time_grains":[["ok","day"],["only_one"],["ok2","month","extra"]]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.time_grains.isDefined)
+    val map = req.time_grains.get.toMap
+    // Only the well-formed pair survives; the 1-element and
+    // 3-element entries are dropped.
+    assert(map == Map("ok" -> "day", "ok2" -> "month"),
+      s"malformed pairs should be dropped, got $map")
+  }
+
+  test("parseRequest: time_grains with no pairs is empty map") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"time_grains":[]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.time_grains.isDefined)
+    assert(req.time_grains.get.isEmpty, s"expected empty, got ${req.time_grains.get}")
+  }
+
+  test("parseRequest: time_grains with duplicate keys keeps last value (Map semantics)") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"],"time_grains":[["ts","day"],["ts","month"]]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.time_grains.isDefined)
+    // The library takes a Map[String, String], so duplicate keys
+    // collapse to the last value. This is the documented lossy
+    // behaviour of the wire format — the library cannot
+    // represent duplicate keys in a single time dimension.
+    val map = req.time_grains.get.toMap
+    assert(map == Map("ts" -> "month"),
+      s"duplicate keys collapse to last, got $map")
+  }
+
+  test("parseRequest: time_grains absent is None") {
+    val mapper = io.semanticdf.mcp.JsonSupport.scalaMapper()
+    val body =
+      """{"model":"flights","measures":["c"]}"""
+    val args = mapper.readValue(body, classOf[java.util.Map[String, Object]])
+
+    val req = Query.parseRequest(args)
+
+    assert(req.time_grains.isEmpty, s"expected None, got ${req.time_grains}")
+  }
 }

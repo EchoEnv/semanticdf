@@ -3,6 +3,8 @@ package io.semanticdf.cache
 import io.semanticdf.SortKey
 import io.semanticdf.audit.{PredicateHasher, QueryRequest => AuditQueryRequest}
 
+import scala.util.chaining._
+
 /** Build a stable, canonical cache key from a captured query request.
   *
   * Two queries share a cache entry iff they ask for the same data:
@@ -33,36 +35,65 @@ object CacheKey {
   def forRequest(req: AuditQueryRequest): Option[String] = {
     if (req.model == null || req.model.isEmpty) None
     else {
-      val measures   = req.measures.mkString(",")
-      val dimensions = req.dimensions.mkString(",")
+      // Every field is length-prefixed. Without length prefixes,
+      // delimiter-based encoding admits collisions: `Seq("a,b")`
+      // and `Seq("a","b")` both encode as `"a,b"`, returning the
+      // wrong cached rows. PR #186 fixed this for the time
+      // fields; PR #188 extends it to the rest of the request
+      // shape.
+      val modelPart   = encodeString(req.model)
+      val measuresPart = encodeList(req.measures)
+      val dimsPart    = encodeList(req.dimensions)
+      // whereHash / havingHash are SHA-256 hex strings (64 chars,
+      // [0-9a-f]) — no delimiter or length collision possible. Keep
+      // them as-is for readability.
       val whereHash  = req.where.map(PredicateHasher.hash).getOrElse("")
       val havingHash = req.having.map(PredicateHasher.hash).getOrElse("")
-      // Order-preserving encoding: the user-requested column order is
-      // part of the result contract (esp. for positional row arrays
-      // in the MCP wire). Sorting here would conflate semantically-
-      // different requests.
-      val orderBy   = req.orderBy.map { case (name, dir) => s"$name:$dir" }.mkString(",")
-      val limitPart = req.limit.map(_.toString).getOrElse("none")
-      // Time-grain fields change the executed query (atTimeGrain
-      // truncates time dimensions, timeRange adds a range filter), so
-      // they must be in the cache key. The previous delimiter-based
-      // encoding (PR #186) admitted collisions — e.g.
-      //   `timeGrain = None` vs `Some("none")` both encoded as `none`
-      //   `Map("a" -> "b,c:d")` vs `Map("a" -> "b", "c" -> "d")` both
-      //     encoded as `a:b,c:d`
-      //   `timeRange = Some(("a..b","c"))` vs `Some(("a","b..c"))` both
-      //     encoded as `a..b..c`
-      // The fix: length-prefixed encoding makes the parser
-      // unambiguous regardless of what characters appear in values.
+      // Order-preserving: the user-requested column order is part of
+      // the result contract. Length-prefixing the pairs preserves
+      // it without ambiguity.
+      val orderByPart = encodePairList(req.orderBy)
+      val limitPart  = req.limit.map(_.toString).getOrElse("none")
       val grainPart  = encodeOptString(req.timeGrain)
       val grainsPart = encodeMap(req.timeGrains)
       val rangePart  = encodeOptPair(req.timeRange)
-      val canonical = s"m=${req.model}|me=$measures|dim=$dimensions" +
-        s"|w=$whereHash|h=$havingHash|ob=$orderBy|lim=$limitPart" +
+      val canonical = s"m=$modelPart|me=$measuresPart|dim=$dimsPart" +
+        s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart"
       Some(sha256(canonical))
     }
   }
+
+  /** Length-prefixed required string encoding.
+    *   - `"foo"` → `"S3:foo"`
+    *
+    * The `S` prefix marks the field as present. The length prefix
+    * makes the encoding unambiguous regardless of the string's
+    * contents. */
+  private def encodeString(s: String): String = s"S${s.length}:$s"
+
+  /** Length-prefixed list of strings.
+    *   - empty    → `"0:"` (zero entries)
+    *   - non-empty → `"<n>:S<l>:<s>;S<l>:<s>;..."`
+    *
+    * Entries appear in the input order (NOT sorted — the order
+    * of measures/dimensions is part of the result contract). */
+  private def encodeList(items: Seq[String]): String =
+    if (items.isEmpty) "0:"
+    else items.map(s => s"S${s.length}:$s").mkString(";").pipe(prefixSize)
+
+  /** Length-prefixed list of (name, value) pairs.
+    *   - empty    → `"0:"`
+    *   - non-empty → `"<n>:P<ln>:<n>,<lv>:<v>;P<ln>:<n>,<lv>:<v>;..."`
+    *
+    * Same shape as the time-range pair encoding; reused here so
+    * `orderBy` items are encoded the same way. */
+  private def encodePairList(items: Seq[(String, String)]): String =
+    if (items.isEmpty) "0:"
+    else items.map { case (n, v) => s"P${n.length}:$n,${v.length}:$v" }.mkString(";").pipe(prefixSize)
+
+  /** Helper: prefix a comma-joined string with its entry count. */
+  private def prefixSize(s: String): String = s"${s.count(_ == ';') + 1}:$s"
 
   /** Length-prefixed Option encoding.
     *   - `None`   → `"N"` (presence sentinel)
