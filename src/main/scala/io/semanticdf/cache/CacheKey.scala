@@ -45,16 +45,64 @@ object CacheKey {
       val limitPart = req.limit.map(_.toString).getOrElse("none")
       // Time-grain fields change the executed query (atTimeGrain
       // truncates time dimensions, timeRange adds a range filter), so
-      // they must be in the cache key. Encode the per-dimension map
-      // deterministically by sorting the keys.
-      val grainPart = req.timeGrain.getOrElse("none")
-      val grainsPart = req.timeGrains.toSeq.sortBy(_._1).map { case (k, v) => s"$k:$v" }.mkString(",")
-      val rangePart = req.timeRange.map { case (s, e) => s"$s..$e" }.getOrElse("none")
+      // they must be in the cache key. The previous delimiter-based
+      // encoding (PR #186) admitted collisions — e.g.
+      //   `timeGrain = None` vs `Some("none")` both encoded as `none`
+      //   `Map("a" -> "b,c:d")` vs `Map("a" -> "b", "c" -> "d")` both
+      //     encoded as `a:b,c:d`
+      //   `timeRange = Some(("a..b","c"))` vs `Some(("a","b..c"))` both
+      //     encoded as `a..b..c`
+      // The fix: length-prefixed encoding makes the parser
+      // unambiguous regardless of what characters appear in values.
+      val grainPart  = encodeOptString(req.timeGrain)
+      val grainsPart = encodeMap(req.timeGrains)
+      val rangePart  = encodeOptPair(req.timeRange)
       val canonical = s"m=${req.model}|me=$measures|dim=$dimensions" +
         s"|w=$whereHash|h=$havingHash|ob=$orderBy|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart"
       Some(sha256(canonical))
     }
+  }
+
+  /** Length-prefixed Option encoding.
+    *   - `None`   → `"N"` (presence sentinel)
+    *   - `Some(v)` → `"S<len>:<v>"` (presence + length + value)
+    *
+    * `None` and `Some("")` are distinct: `"N"` vs `"S0:"`. And
+    * `Some("N")` is `"S1:N"`, also distinct from `None`. */
+  private def encodeOptString(o: Option[String]): String = o match {
+    case None    => "N"
+    case Some(v) => s"S${v.length}:$v"
+  }
+
+  /** Length-prefixed Map encoding.
+    *   - empty → `"0:"` (zero entries)
+    *   - non-empty → `"<n>:k<lk>:<k>=v<lv>:<v>;k<lk>:<k>=v<lv>:<v>;..."`
+    *
+    * Each entry's key and value are length-prefixed, so the
+    * parser can recover boundaries regardless of what characters
+    * appear inside values. Entries are sorted by key for
+    * determinism. */
+  private def encodeMap(m: Map[String, String]): String =
+    if (m.isEmpty) "0:"
+    else {
+      val entries = m.toSeq.sortBy(_._1).map { case (k, v) =>
+        s"k${k.length}:$k=v${v.length}:$v"
+      }.mkString(";")
+      s"${m.size}:$entries"
+    }
+
+  /** Length-prefixed Option[(String, String)] encoding.
+    *   - `None`        → `"N"`
+    *   - `Some((s, e))` → `"P<ls>:<s>,<le>:<e>"`
+    *
+    * Uses `P` to distinguish from the Option[String] encoding
+    * (which uses `S`). The `,` inside the Some case is just a
+    * visual separator; the length prefix makes parsing
+    * unambiguous. */
+  private def encodeOptPair(p: Option[(String, String)]): String = p match {
+    case None           => "N"
+    case Some((s, e))   => s"P${s.length}:$s,${e.length}:$e"
   }
 
   /** SHA-256 of the canonical string, lowercased hex. */
