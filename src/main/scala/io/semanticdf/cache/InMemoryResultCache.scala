@@ -44,7 +44,18 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
       // after every put, defeating invalidation.
       if (shouldEvict) {
         val e = eldest.getValue
-        if (e.model.nonEmpty) byModel.get(e.model).foreach(_.remove(eldest.getKey))
+        if (e.model.nonEmpty) {
+          // Remove the key from the byModel set. If the set becomes
+          // empty, drop the model entry too — otherwise the byModel
+          // map accumulates empty sets as the cache cycles through
+          // distinct model names.
+          byModel.get(e.model) match {
+            case Some(set) =>
+              set.remove(eldest.getKey)
+              if (set.isEmpty) byModel.remove(e.model)
+            case None =>
+          }
+        }
       }
       shouldEvict
     }
@@ -68,7 +79,16 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   override def putWithModel(key: String, value: CachedResult, model: String): Unit = lock.synchronized {
     val prev = map.get(key)
     if (prev != null && prev.model.nonEmpty) {
-      byModel.get(prev.model).foreach(_.remove(key))
+      // Re-tagging: drop the key from the previous model's set, and
+      // if that set becomes empty, drop the model entry too. Without
+      // this, the byModel map accumulates empty sets as keys churn
+      // across model names.
+      byModel.get(prev.model) match {
+        case Some(set) =>
+          set.remove(key)
+          if (set.isEmpty) byModel.remove(prev.model)
+        case None =>
+      }
     }
     // `put` triggers `removeEldestEntry` (synchronous, on this thread).
     map.put(key, Entry(value, model))
