@@ -537,11 +537,16 @@ final class SemanticTable private[semanticdf] (
             emitStreamingAudit(batchDf, t0)(spark)
             foreachBatchFn(batchDf)
           case _ =>
-            // Filter-only path: walk the original op tree and substitute
-            // the streaming leaf with the batch DataFrame. This
-            // preserves the user's `.where(...)`, `.withTransforms(...)`,
-            // `.withRowFilter(...)` and similar transformations — they
-            // were silently dropped in v0.1.16 and earlier.
+            // Non-aggregated path: walk the original op tree and
+            // substitute the streaming leaf with the batch DataFrame.
+            // This catch-all also receives a `SemanticStreamingTableOp`
+            // root with no window (filter-only models), a streaming
+            // root with `window + groupKeys` (the per-micros-batch
+            // group-by path), and the static side of a static-stream
+            // join. It preserves the user's `.where(...)`,
+            // `.withTransforms(...)`, `.withRowFilter(...)` and
+            // similar transformations — they were silently dropped in
+            // v0.1.16 and earlier.
             //
             // The pre-fix code constructed a bare `SemanticTableOp(batchDf)`
             // and discarded the rest of the op tree, so filters/transforms
