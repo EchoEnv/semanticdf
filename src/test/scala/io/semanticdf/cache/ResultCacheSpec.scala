@@ -4,7 +4,7 @@ import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, t
 import io.semanticdf.audit.PredicateHasher
 
 import org.apache.spark.sql.{Row, SparkSession}
-import org.apache.spark.sql.functions.{count, lit}
+import org.apache.spark.sql.functions.{count, lit, sum}
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
@@ -115,6 +115,29 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     val a = CacheKey.forRequest(makeReq(dimensions = Seq("c1", "c2")))
     val b = CacheKey.forRequest(makeReq(dimensions = Seq("c2", "c1")))
     assert(a != b, "swapping dimension order should change the cache key")
+  }
+
+  test("forRequest: time grain, per-dimension grains, and time range change the key") {
+    val t = toSemanticTable(flightsWithTimeDf, name = Some("flights_time"))
+      .withDimensions(Dimension.time("ts", x => x("ts")))
+      .withMeasures(Measure("passengers", x => sum(x("passengers"))))
+
+    def key(
+        timeGrain: Option[String] = None,
+        timeGrains: Map[String, String] = Map.empty,
+        timeRange: Option[(String, String)] = None,
+    ) = CacheKey.forRequest(t.query(
+      measures   = Seq("passengers"),
+      dimensions = Seq("ts"),
+      timeGrain  = timeGrain,
+      timeGrains = timeGrains,
+      timeRange  = timeRange,
+    ).auditRequest.get)
+
+    assert(key(timeGrain = Some("day")) != key(timeGrain = Some("month")))
+    assert(key(timeGrains = Map("ts" -> "day")) != key(timeGrains = Map("ts" -> "month")))
+    assert(key(timeRange = Some("2024-01-01" -> "2024-01-31")) !=
+      key(timeRange = Some("2024-02-01" -> "2024-02-29")))
   }
 
   // ----------------------------------------------------------------
@@ -363,6 +386,34 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     val evs = auditSink.snapshot()
     assert(evs.length == 3, s"expected 3 audit events, got ${evs.length}")
     assert(cache.asInstanceOf[InMemoryResultCache].keys().length == 1)
+  }
+
+  test("end-to-end: cache-hit audit row count uses the cached row length") {
+    val sink = io.semanticdf.audit.AuditSink.inMemory()
+    val cache = ResultCache.inMemory()
+    val q = baseModel.withAuditSink(sink).withResultCache(cache).query(
+      measures   = Seq("flight_count"),
+      dimensions = Seq("carrier"),
+    )
+
+    q.toDataFrame(spark) // miss
+    q.toDataFrame(spark) // hit
+
+    assert(sink.snapshot().map(_.rowCount) == Seq(3L, 3L))
+  }
+
+  test("end-to-end: result-shaping chained after query bypasses the captured cache key") {
+    val cache = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val q = baseModel.withResultCache(cache).query(
+      measures   = Seq("flight_count"),
+      dimensions = Seq("carrier"),
+    )
+    assert(q.toDataFrame(spark).collect().length == 3)
+
+    val shaped = q.orderBy(io.semanticdf.SortKey.desc("flight_count")).limit(1)
+    assert(shaped.auditRequest.isEmpty, "post-query shaping must invalidate the captured request")
+    assert(shaped.toDataFrame(spark).collect().length == 1)
+    assert(cache.keys().length == 1, "the shaped query must bypass rather than populate the cache")
   }
 
   // ----------------------------------------------------------------

@@ -9,10 +9,11 @@ import io.semanticdf.Predicate
   * carries the user's original intent — not the post-chain op tree.
   *
   * Field set is intentionally minimal: only what the audit event needs.
-  * Order, limit, time grain, and time range are not in the audit event
-  * (they don't help answer "is this query the same as the last one?").
-  * If the user adds more fields here, the audit event should use them;
-  * if not, leave them out.
+  * Order, limit, time grain, and time range are NOT in the audit
+  * payload itself (the audit event records what ran, not the
+  * shape), BUT they ARE in this DTO because the cache key is
+  * derived from it. Two queries that differ only in time grain
+  * return different rows, so the cache must distinguish them.
   *
   * Lives in the `audit` package so the library core stays small.
   * The library depends on `audit`; `audit` does not depend on the
@@ -31,4 +32,13 @@ final case class QueryRequest(
     /** Top-N cap. `None` (no cap) and `Some(10)` are different
       * answers, so the key distinguishes them. */
     limit:      Option[Int] = None,
+    /** Single time-grain applied to all time dimensions. Empty when
+      * the caller didn't specify one. */
+    timeGrain:  Option[String] = None,
+    /** Per-dimension time-grain map. Empty when the caller didn't
+      * specify per-dimension grains. */
+    timeGrains: Map[String, String] = Map.empty,
+    /** Half-open `[start, end]` range filter. `None` means no
+      * range filter. */
+    timeRange:  Option[(String, String)] = None,
 )

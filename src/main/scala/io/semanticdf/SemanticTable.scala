@@ -178,15 +178,22 @@ final class SemanticTable private[semanticdf] (
       // Audit + cache path.
       val t0 = System.nanoTime()
       val model = this.name.getOrElse(sourceTable.getOrElse("unknown"))
+      // If auditRequest is None, this SemanticTable was built by a
+      // result-shaping chain AFTER query() (e.g. orderBy().limit()
+      // post-query). The cache key would be a meaningless model-only
+      // hash and the cached value would be wrong. Skip the cache
+      // entirely in this case. The cache only makes sense for
+      // repeated IDENTICAL queries.
       val req   = auditRequest.getOrElse(AuditQueryRequest(model = model))
       val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
       val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
 
       // Compute the cache key (no Spark work). Only attempt cache if
-      // the cache is configured AND the request is well-formed (has
-      // a model).
+      // auditRequest is set AND the cache is configured AND the
+      // request is well-formed (has a model).
       val cacheKeyOpt: Option[String] =
-        resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req))
+        if (auditRequest.isEmpty) None
+        else resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req))
 
       // Cache check: on hit, rebuild a DataFrame from the cached rows
       // and skip Spark's planner entirely. This is the "best performance"
@@ -275,7 +282,7 @@ final class SemanticTable private[semanticdf] (
             rowCount   = rowCount,
             elapsedMs  = elapsedMs,
             status     = "ok",
-          )) catch { case _: Throwable => () }
+          )) catch { case scala.util.control.NonFatal(_) => () }
         }
         df
       } catch {
@@ -293,7 +300,7 @@ final class SemanticTable private[semanticdf] (
               elapsedMs  = elapsedMs,
               status     = "error",
               error      = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}"),
-            )) catch { case _: Throwable => () }
+            )) catch { case scala.util.control.NonFatal(_) => () }
           }
           throw e
       }
@@ -518,7 +525,13 @@ final class SemanticTable private[semanticdf] (
               description = sourceTable.flatMap(_ => None),
             )
             val batchModel = new SemanticTable(
-              batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest, resultCache)
+              batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest,
+              // Disable the result cache inside foreachBatch. The
+              // cache key does not include batch identity, so the
+              // first micro-batch's result could be returned for
+              // every subsequent batch. Disabling the cache here
+              // means each batch is computed fresh.
+              resultCache = None)
             val result = batchModel.toDataFrame(spark)
             foreachBatchFn(result)
         }
@@ -927,6 +940,16 @@ final class SemanticTable private[semanticdf] (
   private[semanticdf] def copyAuditRequest(req: AuditQueryRequest): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, Some(req), resultCache)
 
+  /** Drop the captured audit request. The cache key is derived from
+    * the audit request, so dropping it also disables the result
+    * cache for this table. Used by result-shaping chainable
+    * methods (orderBy, limit, where, having, atTimeGrain) when
+    * they're called AFTER `query()`. Without this, the cached key
+    * wouldn't reflect the new shape, and a hit could return the
+    * wrong rows. */
+  private[semanticdf] def invalidateAuditRequest(): SemanticTable =
+    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, None, resultCache)
+
   /** Same as [[explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:io.semanticdf.SemanticTable#Scope)]]
     * but accepts an optional SparkSession (e.g. for a static-only view). */
   def explainSemantic(spark: Option[SparkSession], scope: Scope): String = {
@@ -1117,6 +1140,10 @@ final class SemanticTable private[semanticdf] (
           // Path C: prefix fields (recipe §3.6, caveat §1.3).
           leftPrefix = j.leftPrefix,
           rightPrefix = j.rightPrefix,
+          // Preserve the structured predicate AST across the
+          // extra-* rewrite so the joined-manifest round-trip
+          // keeps it (PR #186).
+          predicateAst = j.predicateAst,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
@@ -1222,6 +1249,10 @@ final class SemanticTable private[semanticdf] (
           // Path C: prefix fields (recipe §3.6, caveat §1.3).
           leftPrefix = j.leftPrefix,
           rightPrefix = j.rightPrefix,
+          // Preserve the structured predicate AST across the
+          // extra-* rewrite so the joined-manifest round-trip
+          // keeps it (PR #186).
+          predicateAst = j.predicateAst,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
@@ -1710,15 +1741,24 @@ final class SemanticTable private[semanticdf] (
     val newRoot = pre.foldLeft(root) { (r, p) =>
       SemanticFilterOp(r, p)
     }
-    new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status, auditSink, auditRequest, resultCache)
+    val next = new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status, auditSink, auditRequest, resultCache)
+    // If auditRequest was set by an earlier query() call, the new
+    // filter changes the result. Drop the audit request so the
+    // cache key doesn't match the pre-filter query.
+    if (auditRequest.isDefined) next.invalidateAuditRequest() else next
   }
 
   /** Apply a filter predicate explicitly as post-aggregation (HAVING).
     *
     * Use when you want a dimension filter to apply after aggregation (rare, but
     * sometimes needed when the dimension is derived from a measure). */
-  def having(pred: Predicate): SemanticTable =
-    new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status, auditSink, auditRequest, resultCache)
+  def having(pred: Predicate): SemanticTable = {
+    val next = new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status, auditSink, auditRequest, resultCache)
+    // If auditRequest was set by an earlier query() call, the new
+    // post-agg filter changes the result. Drop the audit request so
+    // the cache key doesn't match the pre-filter query.
+    if (auditRequest.isDefined) next.invalidateAuditRequest() else next
+  }
 
   // -------------------------------------------------------------------------
   // Phase 5 completion: order_by / limit / query
@@ -1732,12 +1772,18 @@ final class SemanticTable private[semanticdf] (
     * }}}
     *
     * Typically chained after `aggregate()`. Composes with [[limit]]. */
-  def orderBy(keys: SortKey*): SemanticTable =
-    new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
+  def orderBy(keys: SortKey*): SemanticTable = {
+    // If auditRequest is set (came from query()), drop it so the
+    // cache key reflects the new shape. Otherwise preserve.
+    val next = new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
+    if (auditRequest.isDefined) next.invalidateAuditRequest() else next
+  }
 
   /** Limit the result to the first `n` rows. Composes with [[orderBy]]. */
-  def limit(n: Int): SemanticTable =
-    new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
+  def limit(n: Int): SemanticTable = {
+    val next = new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
+    if (auditRequest.isDefined) next.invalidateAuditRequest() else next
+  }
 
   /** Add a Spark planner hint to this SemanticTable.
     *
@@ -1836,6 +1882,9 @@ final class SemanticTable private[semanticdf] (
       orderBy    = orderBy.toSeq.map { case SortKey.Asc(name)  => (name, "asc")
                                        case SortKey.Desc(name) => (name, "desc") },
       limit      = limit,
+      timeGrain  = timeGrain,
+      timeGrains = timeGrains,
+      timeRange  = timeRange,
     )
     result.auditRequest match {
       case Some(_) => result  // already stamped by a nested query() call

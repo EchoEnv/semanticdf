@@ -261,6 +261,23 @@ class JoinKeysFoundationSpec extends AnyFunSuite with Matchers {
     } finally spark.stop()
   }
 
+  test("withDimensions and withMeasures preserve the joined predicate AST") {
+    val spark = setupSpark()
+    try {
+      val a = toSemanticTable(makeA(spark), name = Some("A"))
+      val b = toSemanticTable(makeB(spark), name = Some("B"))
+      val joined = a.join_one(b, (l, r) => l("id") === r("id"))
+      assert(joined.root.asInstanceOf[SemanticJoinOp].predicateAst.isDefined)
+
+      val withDimension = joined.withDimensions(Dimension("marker", _ => lit(1)))
+      val withMeasure = joined.withMeasures(
+        Measure("cnt", _ => count(lit(1)), exprString = Some("count(1)")))
+
+      assert(withDimension.root.asInstanceOf[SemanticJoinOp].predicateAst.isDefined)
+      assert(withMeasure.root.asInstanceOf[SemanticJoinOp].predicateAst.isDefined)
+    } finally spark.stop()
+  }
+
   // -- back-compat default --
 
   test("SemanticJoinOp can still be constructed without the new keys / onExprString fields (back-compat)") {
