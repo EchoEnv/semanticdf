@@ -163,14 +163,6 @@ in StreamingQueryOptions (set StreamingQueryOptions.window)
 
 The error message is the *correct* answer, not a silent failure. `sdf query` ran the streaming terminal's validator against the op tree — the same validator the library runs — and it correctly rejected an aggregation against a streaming model that has no window spec (`sdf` doesn't carry operator-side `StreamingQueryOptions`, so aggregation is operator-only).
 
-For streaming models, prefer filter-only queries:
-
-```bash
-$ sdf query events --where "event_type = 'deploy'"
-event_type
----------
-deploy
-```
 
 (filter-only returns rows matching the filter at the moment of the call; useful for spot-checks, *not* a continuous tail.)
 

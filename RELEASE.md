@@ -25,7 +25,7 @@ Twelve PRs landed in this wave. The unifying entry point is now `loadSemanticTab
 
 The cache miss path used to populate the cache by collecting from the lazy compiled `fresh` DataFrame, then return that lazy DataFrame to the caller. The caller's `collect()` then re-executed the source query — **twice on every miss, once on every hit**. The fix mirrors the cache hit path: collect once for the cache, then rebuild the DataFrame from those exact rows + schema. The returned DataFrame is parallelize-backed and decoupled from the source.
 
-### Review follow-ups (PR #183, #185)
+### Review follow-ups (PR #183, #185, #186, #187, #188, #189, #190)
 
 **PR #183 (eight fixes):**
 - **Cache key correctness**: `CacheKey` now includes `orderBy` direction + columns + `limit` (None vs Some). A cached `LIMIT 10 ORDER BY x DESC` could previously be returned for an uncapped ascending query — **wrong answer**. `CacheKey` no longer sorts `dimensions`/`measures` — column order is part of the result contract.
@@ -38,6 +38,28 @@ The cache miss path used to populate the cache by collecting from the lazy compi
 - **`stripTablePrefix` over-stripping fixed**. Now only strips the bound qualifier (passed through to `exprFor`), not every `identifier.` pattern.
 - **`byModel` empty-set leak fixed**. Both `removeEldestEntry` and `putWithModel` drop the model entry when the set becomes empty.
 - **`Throwable` swallow in cache-miss fallback fixed**. Now uses `scala.util.control.NonFatal`; `collect()` is outside the try-catch so query failures propagate through the outer audit handler.
+
+**PR #186 (five verified bugs):**
+- **Cache key `timeGrain` collision** — `None` and `Some("none")` both hashed to the same key; `Map("a"->"b,c:d")` collided with `Map("a"->"b","c"->"d")`. Length-prefixed encoding for the time fields only.
+- **Audit predicate hasher gaps** — `In`, `NotIn`, `IsNull`, `IsNotNull` were missing from the `PredicateHasher` match (would `MatchError` on a valid query).
+- **Join key probe re-evaluated per `toDataFrame`** — the lambda ran against the joined DataFrames on every compile just to discover keys already known at construction.
+- **Audit event `rowCount` is 0 on cache miss** — the cache-fill path emitted the event before the cache was populated, so a miss showed `rowCount=0`.
+- **`removeEldestEntry` runs `byModel` cleanup unconditionally** — entry cleanup fired on every `put`, not only on actual eviction (introduced in #182).
+
+**PR #187 (three follow-ups):**
+- **Length-prefixed encoding for all time fields** — extends #186 to `timeGrain`, `timeGrains`, `timeRange` (the `timeGrain`/`timeGrains` field was still delimiter-encoded in #186).
+- **Cache key collision regression test** — locks in the time-field encoding (no regression in #186's fix).
+- **POM `modelVersion` / `connection` sanitization** — `mvn install` warnings silenced.
+
+**PR #188:**
+- **Length-prefixed encoding extended to every field** — PR #186 / #187 only covered the time fields; `model`, `measures`, `dimensions`, `orderBy` still used delimiter encoding (admitted collisions when a value contained the delimiter or field separator).
+- **MCP `time_grains` test coverage** — three new tests in `QuerySpec` (acceptance, propagation, error path).
+
+**PR #189 (data correctness):**
+- **`foreachBatch` now applies the streaming model's transformations**. The pre-fix code constructed a bare `SemanticTableOp(batchDf)` and discarded the rest of the op tree, so filters/transforms applied to a streaming model never reached the `foreachBatch` callback. New `substituteStreamingLeaf` walk replaces the streaming leaf with the batch DataFrame while preserving every intermediate op.
+
+**PR #190 (audit observability):**
+- **Per-batch audit events emit the actual `rowCount`**. The windowed-aggregation `foreachBatch` short-circuit bypassed the normal `toDataFrame` audit emit, so a streaming query with `withAuditSink(...)` produced ZERO audit events. The filter-only path emitted events with `rowCount=0` (the "caller will collect" sentinel). Both paths now go through `emitStreamingAudit`, which calls `batchDf.count()` and reports the real per-batch row count.
 
 ### Test count
 

@@ -36,7 +36,7 @@ In your project's `pom.xml`:
 
 ```xml
 <properties>
-    <semanticdf.version>0.1.6</semanticdf.version>
+    <semanticdf.version>0.1.17</semanticdf.version>
 </properties>
 
 <dependencies>
@@ -48,7 +48,7 @@ In your project's `pom.xml`:
 </dependencies>
 ```
 
-For `sbt` users: `"io.semanticdf" %% "semanticdf" % "0.1.6"`.
+For `sbt` users: `"io.semanticdf" %% "semanticdf" % "0.1.17"`.
 
 > **Upgrading?** Bump the version and re-run. Semanticdf is
 > additive-only between minor versions — your existing code keeps

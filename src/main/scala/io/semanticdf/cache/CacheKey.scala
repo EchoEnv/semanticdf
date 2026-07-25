@@ -38,8 +38,8 @@ object CacheKey {
       // Every field is length-prefixed. Without length prefixes,
       // delimiter-based encoding admits collisions: `Seq("a,b")`
       // and `Seq("a","b")` both encode as `"a,b"`, returning the
-      // wrong cached rows. PR #186 fixed this for the time
-      // fields; PR #188 extends it to the rest of the request
+      // wrong cached rows. PR #187 fixed this for the time
+      // fields; PR #188 extended it to the rest of the request
       // shape.
       val modelPart   = encodeString(req.model)
       val measuresPart = encodeList(req.measures)

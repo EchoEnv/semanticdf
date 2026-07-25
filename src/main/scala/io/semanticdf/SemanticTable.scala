@@ -512,6 +512,16 @@ final class SemanticTable private[semanticdf] (
         // If we did TRUE streaming aggregation, the batch IS the per-window
         // aggregated result. Pass it through as-is.
         // If we're in the filter-only path, run the op tree per batch.
+        //
+        // COST NOTE (v0.2.0 doc fix): when `withAuditSink(...)` is set,
+        // both the windowed and the filter-only branches call
+        // `batchDf.count()` per microbatch to populate the audit
+        // event's `rowCount`. This is a Spark action — it materializes
+        // the batch partitions. The user's `foreachBatchFn` typically
+        // also does an action on the same batch, so for batches that
+        // are not already materialized, the same partitions may be
+        // computed twice. If the per-microbatch cost matters, drop the
+        // audit sink on hot streaming queries.
         root match {
           case _: SemanticAggregateOp if opts.window.isDefined =>
             // The streaming engine already did the aggregation. batchDf is
@@ -527,11 +537,16 @@ final class SemanticTable private[semanticdf] (
             emitStreamingAudit(batchDf, t0)(spark)
             foreachBatchFn(batchDf)
           case _ =>
-            // Filter-only path: walk the original op tree and substitute
-            // the streaming leaf with the batch DataFrame. This
-            // preserves the user's `.where(...)`, `.withTransforms(...)`,
-            // `.withRowFilter(...)` and similar transformations — they
-            // were silently dropped in v0.1.16 and earlier.
+            // Non-aggregated path: walk the original op tree and
+            // substitute the streaming leaf with the batch DataFrame.
+            // This catch-all also receives a `SemanticStreamingTableOp`
+            // root with no window (filter-only models), a streaming
+            // root with `window + groupKeys` (the per-micros-batch
+            // group-by path), and the static side of a static-stream
+            // join. It preserves the user's `.where(...)`,
+            // `.withTransforms(...)`, `.withRowFilter(...)` and
+            // similar transformations — they were silently dropped in
+            // v0.1.16 and earlier.
             //
             // The pre-fix code constructed a bare `SemanticTableOp(batchDf)`
             // and discarded the rest of the op tree, so filters/transforms

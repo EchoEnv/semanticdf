@@ -1,6 +1,6 @@
 # semanticdf starter template
 
-A complete, working example of [semanticdf](https://github.com/earendil/semanticdf) — a declarative semantic layer on Apache Spark.
+A complete, working example of [semanticdf](https://github.com/EchoEnv/semanticdf) — a declarative semantic layer on Apache Spark.
 
 This template shows how to define your data models in **YAML** (no Scala required) and run typed queries against them. It's the fastest way to evaluate semanticdf.
 
@@ -41,7 +41,7 @@ cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
-This puts `io.semanticdf:semanticdf_2.13:0.1.8` in `~/.m2/repository`.
+This puts `io.semanticdf:semanticdf_2.13:0.1.17` in `~/.m2/repository`.
 
 ### Step 2: run the starter
 
@@ -224,7 +224,7 @@ For a real deployment:
    spark-submit \
      --class com.example.starter.Main \
      --master yarn \
-     target/semanticdf-starter_2.13-0.1.8-jar-with-dependencies.jar
+     target/semanticdf-starter_2.13-0.1.17-jar-with-dependencies.jar
    ```
 
 ---
@@ -240,5 +240,5 @@ For a real deployment:
 
 ## Get help
 
-- Issues: [github.com/earendil/semanticdf/issues](https://github.com/earendil/semanticdf/issues)
-- Discussions: [github.com/earendil/semanticdf/discussions](https://github.com/earendil/semanticdf/discussions)
+- Issues: [github.com/EchoEnv/semanticdf/issues](https://github.com/EchoEnv/semanticdf/issues)
+- Discussions: [github.com/EchoEnv/semanticdf/discussions](https://github.com/EchoEnv/semanticdf/discussions)
