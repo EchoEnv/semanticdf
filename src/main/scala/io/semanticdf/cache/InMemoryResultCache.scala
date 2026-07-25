@@ -36,8 +36,18 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     /* loadFactor      */ 0.75f,
     /* accessOrder     */ true,
   ) {
-    override def removeEldestEntry(eldest: java.util.Map.Entry[String, Entry]): Boolean =
-      size > InMemoryResultCache.this.maxEntries
+    override def removeEldestEntry(eldest: java.util.Map.Entry[String, Entry]): Boolean = {
+      val shouldEvict = size > InMemoryResultCache.this.maxEntries
+      // Only clean up the byModel sidecar when actually evicting.
+      // Running the cleanup unconditionally (as an earlier draft
+      // did) would remove non-evicted entries from the sidecar
+      // after every put, defeating invalidation.
+      if (shouldEvict) {
+        val e = eldest.getValue
+        if (e.model.nonEmpty) byModel.get(e.model).foreach(_.remove(eldest.getKey))
+      }
+      shouldEvict
+    }
   }
 
   /** Sidecar index from model name to the set of cache keys tagged
@@ -68,19 +78,11 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   override def invalidateModel(name: String): Int = lock.synchronized {
-    byModel.get(name) match {
+    byModel.remove(name) match {
       case Some(keys) if keys.nonEmpty =>
-        val toRemove = keys.toList
-        keys.clear()
-        toRemove.foreach { k =>
-          map.remove(k)
-          Option(map.get(k))  // no-op; just clarity
-        }
-        // The above `keys` is the SAME set backing the map; removing
-        // by key was already done via the caller's iterator. We've
-        // cleared it. Now also clear the outer map entry.
-        byModel.remove(name)
-        toRemove.size
+        val removed = keys.size
+        keys.foreach(map.remove)
+        removed
       case _ => 0
     }
   }

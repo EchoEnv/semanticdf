@@ -7,9 +7,13 @@ import io.semanticdf.audit.{PredicateHasher, QueryRequest => AuditQueryRequest}
   *
   * Two queries share a cache entry iff they ask for the same data:
   *   - same model
-  *   - same measures (in any order — `measures` is a set from the
-  *     caller's perspective)
-  *   - same dimensions
+  *   - same measures (in the order the user asked — the measure
+  *     order doesn't change the result but is part of the request
+  *     contract; a future refactor that puts measures in a different
+  *     column would break caller assumptions if we sorted)
+  *   - same dimensions (in the order the user asked — the column
+  *     order is part of the result, e.g. for positional row arrays
+  *     returned by the MCP `query` tool)
   *   - same `where` predicate (via the canonical SHA-256 hash from
   *     [[PredicateHasher]])
   *   - same `having` predicate
@@ -29,12 +33,18 @@ object CacheKey {
   def forRequest(req: AuditQueryRequest): Option[String] = {
     if (req.model == null || req.model.isEmpty) None
     else {
-      val measures   = req.measures.sorted.mkString(",")
-      val dimensions = req.dimensions.sorted.mkString(",")
+      val measures   = req.measures.mkString(",")
+      val dimensions = req.dimensions.mkString(",")
       val whereHash  = req.where.map(PredicateHasher.hash).getOrElse("")
       val havingHash = req.having.map(PredicateHasher.hash).getOrElse("")
+      // Order-preserving encoding: the user-requested column order is
+      // part of the result contract (esp. for positional row arrays
+      // in the MCP wire). Sorting here would conflate semantically-
+      // different requests.
+      val orderBy   = req.orderBy.map { case (name, dir) => s"$name:$dir" }.mkString(",")
+      val limitPart = req.limit.map(_.toString).getOrElse("none")
       val canonical = s"m=${req.model}|me=$measures|dim=$dimensions" +
-        s"|w=$whereHash|h=$havingHash"
+        s"|w=$whereHash|h=$havingHash|ob=$orderBy|lim=$limitPart"
       Some(sha256(canonical))
     }
   }

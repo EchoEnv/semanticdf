@@ -45,9 +45,15 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(a != b)
   }
 
-  test("forRequest: measures are order-insensitive (set semantics)") {
+  test("forRequest: measures order matters (column order is part of the result contract)") {
     val a = CacheKey.forRequest(makeReq(measures = Seq("c1", "c2")))
     val b = CacheKey.forRequest(makeReq(measures = Seq("c2", "c1")))
+    assert(a != b, "swapping measure order should change the cache key")
+  }
+
+  test("forRequest: same measure order => same key") {
+    val a = CacheKey.forRequest(makeReq(measures = Seq("c1", "c2")))
+    val b = CacheKey.forRequest(makeReq(measures = Seq("c1", "c2")))
     assert(a == b)
   }
 
@@ -87,6 +93,30 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(a == b)
   }
 
+  test("forRequest: orderBy direction matters (asc != desc)") {
+    val a = CacheKey.forRequest(makeReq(orderBy = Seq(("c", "asc"))))
+    val b = CacheKey.forRequest(makeReq(orderBy = Seq(("c", "desc"))))
+    assert(a != b, "asc vs desc must produce different keys")
+  }
+
+  test("forRequest: orderBy column matters") {
+    val a = CacheKey.forRequest(makeReq(orderBy = Seq(("c1", "asc"))))
+    val b = CacheKey.forRequest(makeReq(orderBy = Seq(("c2", "asc"))))
+    assert(a != b)
+  }
+
+  test("forRequest: limit matters (None != Some(10))") {
+    val a = CacheKey.forRequest(makeReq(limit = None))
+    val b = CacheKey.forRequest(makeReq(limit = Some(10)))
+    assert(a != b, "uncapped vs capped must produce different keys")
+  }
+
+  test("forRequest: dimensions order matters (column order is part of the result)") {
+    val a = CacheKey.forRequest(makeReq(dimensions = Seq("c1", "c2")))
+    val b = CacheKey.forRequest(makeReq(dimensions = Seq("c2", "c1")))
+    assert(a != b, "swapping dimension order should change the cache key")
+  }
+
   // ----------------------------------------------------------------
   // InMemoryResultCache
   // ----------------------------------------------------------------
@@ -117,6 +147,33 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(c.get("b").isEmpty,  "b should be evicted")
     assert(c.get("a").isDefined)
     assert(c.get("c").isDefined)
+  }
+
+  test("inMemory: LRU eviction cleans the byModel sidecar (no leak on rotation)") {
+    // Regression: before the fix, removeEldestEntry ran the cleanup
+    // unconditionally, which removed non-evicted entries from the
+    // sidecar after every put. After the fix, the sidecar should
+    // only be cleaned when an entry is actually evicted.
+    val c = ResultCache.inMemory(maxEntries = 2).asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val v = CachedResult(Array.empty[Row], schema)
+    c.putWithModel("a", v, "orders")
+    c.putWithModel("b", v, "orders")
+    // No eviction yet (size=2, maxEntries=2). Both should still be in
+    // the sidecar, so invalidateModel returns 2.
+    assert(c.invalidateModel("orders") == 2, "both entries should still be tracked")
+  }
+
+  test("inMemory: LRU eviction of a model-tagged entry cleans the sidecar") {
+    // When an entry IS evicted, the sidecar should be cleaned up.
+    val c = ResultCache.inMemory(maxEntries = 2).asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val v = CachedResult(Array.empty[Row], schema)
+    c.putWithModel("a", v, "orders")
+    c.putWithModel("b", v, "orders")
+    c.putWithModel("c", v, "orders")  // evicts "a"
+    // After eviction, only "b" and "c" should be tracked.
+    assert(c.invalidateModel("orders") == 2, "only 2 surviving entries should be tracked")
   }
 
   test("inMemory: clear() drops everything") {
@@ -293,6 +350,8 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       dimensions: Seq[String] = Seq("carrier"),
       where: Option[io.semanticdf.Predicate] = None,
       having: Option[io.semanticdf.Predicate] = None,
+      orderBy: Seq[(String, String)] = Seq.empty,
+      limit: Option[Int] = None,
   ): io.semanticdf.audit.QueryRequest =
     io.semanticdf.audit.QueryRequest(
       model      = model,
@@ -300,5 +359,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       dimensions = dimensions,
       where      = where,
       having     = having,
+      orderBy    = orderBy,
+      limit      = limit,
     )
 }
