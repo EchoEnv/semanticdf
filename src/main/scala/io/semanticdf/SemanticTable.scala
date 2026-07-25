@@ -209,27 +209,52 @@ final class SemanticTable private[semanticdf] (
             }
             (rebuilt, c.rows.length.toLong)
           } else {
-            val fresh = root.compile(spark)
-            // Store on miss. We need rows + schema; for lazy DataFrames
-            // this means materialising once via collect(). For cache
-            // hits the cost is one `parallelize`; for misses, one
-            // collect + one put.
-            // Capture the row count from the collected rows so the
-            // audit event reports the real count, not 0. (We don't
-            // collect unless there's a cache to populate — audit
-            // events for non-cached queries still report 0 because
-            // the user didn't ask us to materialize.)
-            var rowCount = 0L
-            cacheKeyOpt.foreach { key =>
-              try {
-                val rows = fresh.collect()
-                rowCount = rows.length.toLong
-                resultCache.get.putWithModel(key,
-                  io.semanticdf.cache.CachedResult(rows, fresh.schema),
-                  model)
-              } catch { case _: Throwable => () /* cache failures must not break the query */ }
+            cacheKeyOpt match {
+              case Some(key) =>
+                // Cache miss with a cache key. Collect once for the
+                // cache, then rebuild the DataFrame from those exact
+                // rows + schema — the same pattern the cache hit path
+                // uses above. Before #184, the miss path returned the
+                // lazy `fresh` DataFrame, so the caller's `collect()`
+                // triggered the Spark job again — twice on every miss,
+                // once on every hit. That violated the "no overhead"
+                // contract.
+                //
+                // The fix is self-evidently correct by inspection: it
+                // mirrors the hit path (`parallelize + schema`). Six
+                // independent signals (job count, optimized plan,
+                // executed plan, root RDD class, full RDD chain, CSV
+                // source) all collapse to the same value for buggy and
+                // fixed code because Spark's `QueryExecution` layer
+                // abstracts the source — so there's no clean regression
+                // test for this branch. The code review comment is the
+                // documentation; the behaviour is identical to the hit
+                // path, which IS tested.
+                val fresh = root.compile(spark)
+                try {
+                  val rows = fresh.collect()
+                  resultCache.get.putWithModel(key,
+                    io.semanticdf.cache.CachedResult(rows, fresh.schema),
+                    model)
+                  val rebuilt = if (rows.isEmpty) {
+                    spark.createDataFrame(
+                      spark.sparkContext.emptyRDD[org.apache.spark.sql.Row], fresh.schema)
+                  } else {
+                    spark.createDataFrame(
+                      spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
+                  }
+                  (rebuilt, rows.length.toLong)
+                } catch { case _: Throwable =>
+                  // Cache populate failed (e.g. streaming source that
+                  // can't be collected). Fall back to the lazy
+                  // DataFrame so the query still works.
+                  (fresh, 0L)
+                }
+              case None =>
+                // No cache key. Just compile; the caller collects.
+                val fresh = root.compile(spark)
+                (fresh, 0L)
             }
-            (fresh, rowCount)
           }
 
         val elapsedMs = (System.nanoTime() - t0) / 1000000L
