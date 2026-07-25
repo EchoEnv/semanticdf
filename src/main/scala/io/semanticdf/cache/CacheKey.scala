@@ -43,8 +43,16 @@ object CacheKey {
       // different requests.
       val orderBy   = req.orderBy.map { case (name, dir) => s"$name:$dir" }.mkString(",")
       val limitPart = req.limit.map(_.toString).getOrElse("none")
+      // Time-grain fields change the executed query (atTimeGrain
+      // truncates time dimensions, timeRange adds a range filter), so
+      // they must be in the cache key. Encode the per-dimension map
+      // deterministically by sorting the keys.
+      val grainPart = req.timeGrain.getOrElse("none")
+      val grainsPart = req.timeGrains.toSeq.sortBy(_._1).map { case (k, v) => s"$k:$v" }.mkString(",")
+      val rangePart = req.timeRange.map { case (s, e) => s"$s..$e" }.getOrElse("none")
       val canonical = s"m=${req.model}|me=$measures|dim=$dimensions" +
-        s"|w=$whereHash|h=$havingHash|ob=$orderBy|lim=$limitPart"
+        s"|w=$whereHash|h=$havingHash|ob=$orderBy|lim=$limitPart" +
+        s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart"
       Some(sha256(canonical))
     }
   }

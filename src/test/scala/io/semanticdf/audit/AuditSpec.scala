@@ -285,6 +285,21 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
     assert(e.error.isDefined)
   }
 
+  test("query + toDataFrame: audit emission does not swallow fatal errors") {
+    val fatalSink = new AuditSink {
+      override def emit(event: AuditEvent): Unit = throw new LinkageError("fatal audit sink")
+    }
+    val t = baseModel.withAuditSink(fatalSink)
+
+    val ex = intercept[LinkageError] {
+      t.query(
+        measures   = Seq("flight_count"),
+        dimensions = Seq("carrier"),
+      ).toDataFrame(spark)
+    }
+    assert(ex.getMessage == "fatal audit sink")
+  }
+
   test("query + toDataFrame: no sink = no audit (default off, zero overhead)") {
     // Default model has no sink; toDataFrame must still succeed.
     val df = baseModel.query(
