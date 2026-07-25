@@ -150,6 +150,138 @@ class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture w
     assert(r(100) == 15.0)
   }
 
+  test("OssieReader: qualified metric is bound only to its named dataset") {
+    // In the minimal fixture, SUM(orders.amount) is qualified to
+    // `orders`, so `total_revenue` should be on `orders` and NOT
+    // on `customers`. toSemanticTables calls resolve(ds.source) for
+    // every dataset, so we must wire real (tiny) DataFrames.
+    val project = OssieReader.parse(Paths.get(
+      "src/test/resources/ossie-fixtures/minimal-ossie.yaml"))
+    val ordersDf = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(1, 100, "2026-01-01", 10.0))),
+      StructType(Seq(
+        StructField("order_id",    IntegerType),
+        StructField("customer_id", IntegerType),
+        StructField("order_date",  StringType),
+        StructField("amount",      org.apache.spark.sql.types.DoubleType),
+      )),
+    )
+    val customersDf = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(100, "Alice"))),
+      StructType(Seq(
+        StructField("customer_id", IntegerType),
+        StructField("name",        StringType),
+      )),
+    )
+    val resolve: String => org.apache.spark.sql.DataFrame = {
+      case "db.schema.orders"    => ordersDf
+      case "db.schema.customers" => customersDf
+      case _ => throw new IllegalArgumentException("unexpected")
+    }
+    val tables = OssieReader.toSemanticTables(project, resolve)
+    assert(tables("orders").measures.contains("total_revenue"),
+      "qualified metric should be on its named dataset")
+    assert(!tables("customers").measures.contains("total_revenue"),
+      "qualified metric should NOT leak onto other datasets")
+  }
+
+  test("OssieReader: unqualified metric in a multi-dataset project is skipped") {
+    // In the minimal fixture, COUNT(1) is unqualified. Before the
+    // fix this was blindly attached to every dataset, which would
+    // silently count customers as orders. Now it should be skipped.
+    val project = OssieReader.parse(Paths.get(
+      "src/test/resources/ossie-fixtures/minimal-ossie.yaml"))
+    val ordersDf = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(1, 100, "2026-01-01", 10.0))),
+      StructType(Seq(
+        StructField("order_id",    IntegerType),
+        StructField("customer_id", IntegerType),
+        StructField("order_date",  StringType),
+        StructField("amount",      org.apache.spark.sql.types.DoubleType),
+      )),
+    )
+    val customersDf = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(100, "Alice"))),
+      StructType(Seq(
+        StructField("customer_id", IntegerType),
+        StructField("name",        StringType),
+      )),
+    )
+    val resolve: String => org.apache.spark.sql.DataFrame = {
+      case "db.schema.orders"    => ordersDf
+      case "db.schema.customers" => customersDf
+      case _ => throw new IllegalArgumentException("unexpected")
+    }
+    val tables = OssieReader.toSemanticTables(project, resolve)
+    assert(!tables("orders").measures.contains("order_count"),
+      "unqualified metric should be skipped (ambiguous) in multi-dataset project")
+    assert(!tables("customers").measures.contains("order_count"),
+      "unqualified metric should be skipped (ambiguous) in multi-dataset project")
+  }
+
+  test("OssieReader: composite join keys use all columns (not just .head)") {
+    // Regression: before the fix, join_on(..., fromColumns.head, toColumns.head)
+    // would silently drop every column past the first. For a 2+
+    // column relationship this would cross-join rows.
+    val project = OssieProject(
+      name = "composite-test",
+      description = None,
+      datasets = Seq(
+        OssieDataset("orders", "db.schema.orders",
+          fields = Seq(
+            OssieField("order_id",    "order_id"),
+            OssieField("tenant_id",   "tenant_id"),
+            OssieField("customer_id", "customer_id"),
+          )),
+        OssieDataset("customers", "db.schema.customers",
+          fields = Seq(
+            OssieField("tenant_id",   "tenant_id"),
+            OssieField("customer_id", "customer_id"),
+            OssieField("name",        "name"),
+          )),
+      ),
+      relationships = Seq(
+        OssieRelationship(
+          "tenant_customer",
+          from = "orders", to = "customers",
+          fromColumns = Seq("tenant_id", "customer_id"),
+          toColumns   = Seq("tenant_id", "customer_id"),
+        ),
+      ),
+      metrics = Seq.empty,
+    )
+    val rows1 = spark.sparkContext.parallelize(Seq(
+      Row(1, "t1", 100),
+      Row(2, "t2", 100),  // same customer_id, different tenant
+    ))
+    val schema1 = StructType(Seq(
+      StructField("order_id", IntegerType),
+      StructField("tenant_id", StringType),
+      StructField("customer_id", IntegerType),
+    ))
+    val rows2 = spark.sparkContext.parallelize(Seq(
+      Row("t1", 100, "Alice"),
+      Row("t2", 100, "Bob"),
+    ))
+    val schema2 = StructType(Seq(
+      StructField("tenant_id", StringType),
+      StructField("customer_id", IntegerType),
+      StructField("name", StringType),
+    ))
+    val resolve: String => org.apache.spark.sql.DataFrame = {
+      case "db.schema.orders"    => spark.createDataFrame(rows1, schema1)
+      case "db.schema.customers" => spark.createDataFrame(rows2, schema2)
+      case _ => throw new IllegalArgumentException("unexpected")
+    }
+    val tables = OssieReader.toSemanticTables(Seq(project), resolve)
+    val orders = tables("orders")
+    // The orders table now has the customer `name` joined in. Read
+    // it by name to be robust to column reordering.
+    val result = orders.toDataFrame(spark).collect().map(_.getAs[String]("name")).toSet
+    assert(result == Set("Alice", "Bob"),
+      s"composite key should match each tenant to its own customer, got: $result")
+  }
+
   // ----------------------------------------------------------------
   // Unified entry point — `loadSemanticTables`
   // ----------------------------------------------------------------

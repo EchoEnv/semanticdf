@@ -32,30 +32,29 @@ object PredicateHasher {
     bytes.map(b => f"${b & 0xff}%02x").mkString
   }
 
-  /** Stable string form. Useful for debugging ("what does this 
+  /** Stable string form. Useful for debugging ("what does this
     * hash map to?"). NOT the hash itself. */
   def canonicalize(p: Predicate): String = p match {
-    case Predicate.Compare.Eq(f, v)  => s"eq($f,${stableValue(v)})"
-    case Predicate.Compare.Ne(f, v)  => s"ne($f,${stableValue(v)})"
-    case Predicate.Compare.Lt(f, v)  => s"lt($f,${stableValue(v)})"
-    case Predicate.Compare.Le(f, v)  => s"le($f,${stableValue(v)})"
-    case Predicate.Compare.Gt(f, v)  => s"gt($f,${stableValue(v)})"
-    case Predicate.Compare.Ge(f, v)  => s"ge($f,${stableValue(v)})"
-    case Predicate.In(f, vs, false)  => s"in($f,${vs.map(stableValue).sorted.mkString(",")})"
-    case Predicate.In(f, vs, true)   => s"not_in($f,${vs.map(stableValue).sorted.mkString(",")})"
-    case Predicate.IsNull(f, false)  => s"is_null($f)"
-    case Predicate.IsNull(f, true)   => s"is_not_null($f)"
-    case Predicate.Not(inner)        => s"not(${canonicalize(inner)})"
-    case Predicate.And(left, right)  => s"and(${sortCommutative(left, right)})"
-    case Predicate.Or(left, right)   => s"or(${sortCommutative(left, right)})"
-  }
-
-  /** `and(A, B)` and `and(B, A)` should hash to the same value.
-    * Sort children by their canonical form, comma-separated. */
-  private def sortCommutative(left: Predicate, right: Predicate): String = {
-    val lc = canonicalize(left)
-    val rc = canonicalize(right)
-    if (lc <= rc) s"$lc,$rc" else s"$rc,$lc"
+    case Predicate.Compare.Eq(f, v)         => s"eq($f,${stableValue(v)})"
+    case Predicate.Compare.Ne(f, v)         => s"ne($f,${stableValue(v)})"
+    case Predicate.Compare.Lt(f, v)         => s"lt($f,${stableValue(v)})"
+    case Predicate.Compare.Le(f, v)         => s"le($f,${stableValue(v)})"
+    case Predicate.Compare.Gt(f, v)         => s"gt($f,${stableValue(v)})"
+    case Predicate.Compare.Ge(f, v)         => s"ge($f,${stableValue(v)})"
+    case Predicate.Compare.Contains(f, v)    => s"contains($f,${stableValue(v)})"
+    case Predicate.Compare.StartsWith(f, v) => s"starts_with($f,${stableValue(v)})"
+    case Predicate.Compare.EndsWith(f, v)   => s"ends_with($f,${stableValue(v)})"
+    case Predicate.Compare.ArrayContains(f, v) => s"array_contains($f,${stableValue(v)})"
+    case Predicate.In(f, vs, false)        => s"in($f,${vs.map(stableValue).sorted.mkString(",")})"
+    case Predicate.In(f, vs, true)         => s"not_in($f,${vs.map(stableValue).sorted.mkString(",")})"
+    case Predicate.IsNull(f, false)        => s"is_null($f)"
+    case Predicate.IsNull(f, true)         => s"is_not_null($f)"
+    case Predicate.Not(inner)              => s"not(${canonicalize(inner)})"
+    // And/Or are varargs. Sort the children's canonical forms so
+    // associativity doesn't change the hash (a and (b and c) hashes
+    // the same as (a and b) and c).
+    case Predicate.And(children @ _*)      => s"and(${children.map(canonicalize).sorted.mkString(",")})"
+    case Predicate.Or(children @ _*)       => s"or(${children.map(canonicalize).sorted.mkString(",")})"
   }
 
   /** Render a value (number, string, boolean, null) deterministically.

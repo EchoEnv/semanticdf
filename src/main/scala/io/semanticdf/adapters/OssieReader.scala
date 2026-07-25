@@ -143,11 +143,31 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
           ))
         }
         val withMeasures = project.metrics.foldLeft(withTime) { (acc, m) =>
-          acc.withMeasures(Measure(
-            name = m.name,
-            expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name),
-            description = m.description,
-          ).copy(exprString = Some(m.expression)))
+          m.qualifier match {
+            case Some(tableName) =>
+              // Qualified metric: bind it to the matching dataset only.
+              // Other datasets in this project must not receive it.
+              if (tableName == ds.name)
+                acc.withMeasures(Measure(
+                  name = m.name,
+                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name),
+                  description = m.description,
+                ).copy(exprString = Some(m.expression)))
+              else acc
+            case None =>
+              // Unqualified metric + this dataset is the only one in
+              // the project: bind it here. Unqualified in multi-
+              // dataset projects: skip (the bound expression would
+              // be ambiguous — we'd rather drop it than corrupt every
+              // dataset with the same COUNT(1)).
+              if (project.datasets.length == 1)
+                acc.withMeasures(Measure(
+                  name = m.name,
+                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name),
+                  description = m.description,
+                ).copy(exprString = Some(m.expression)))
+              else acc
+          }
         }
         tables(ds.name) = withMeasures
       }
@@ -165,12 +185,12 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
         (fromTable, toTable) match {
           case (Some(ft), Some(tt)) =>
             // Ossie's `from_columns` / `to_columns` are parallel
-            // arrays; for v1 we require same length and use the
-            // first column as the symmetric join key (the common
-            // case). Composite keys are preserved in the project
-            // but not yet wired — a v2 extension.
+            // arrays. Wire composite keys via the multi-key
+            // `join_on` overload — using only `head` would lose
+            // keys for multi-column relationships and silently
+            // cross-join the rest of the row.
             if (rel.fromColumns.nonEmpty && rel.fromColumns.length == rel.toColumns.length) {
-              val join = ft.join_on(tt, rel.fromColumns.head -> rel.toColumns.head)
+              val join = ft.join_on(tt, rel.fromColumns, rel.toColumns)
               tables(rel.from) = join
             }
             // Asymmetric keys would need an extension; for v1 we
@@ -238,13 +258,45 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
       toColumns   = r.get("to_columns").map(asList).getOrElse(Seq.empty).map(_.toString),
     )
 
-  private def parseMetric(m: Map[String, Any]): OssieMetric =
+  private def parseMetric(m: Map[String, Any]): OssieMetric = {
+    val rawExpr = pickAnsiExpression(m.get("expression"))
     OssieMetric(
       name        = m.getOrElse("name", "<unnamed>").toString,
-      expression  = pickAnsiExpression(m.get("expression")),
+      expression  = rawExpr,
+      qualifier   = detectQualifier(rawExpr),
       description = m.get("description").map(_.toString),
       datatype    = m.get("datatype").map(_.toString),
     )
+  }
+
+  /** Detect the first `dataset.identifier` pattern in the
+    * expression. Returns the dataset name if the expression
+    * references a qualified column; `None` if the metric is
+    * unqualified (e.g. `COUNT(1)` or `SUM(amount)`). This is
+    * consumed by `toSemanticTables` to bind the metric to its
+    * owning dataset (see the `withMeasures` fold for the
+    * resolution rules).
+    *
+    * Karpathy: matches the first such occurrence anywhere in the
+    * expression. For nested cases like `SUM(orders.amount)` the
+    * match is `orders.amount`. For real-world Ossie metrics the
+    * qualifier is almost always inside a function call, so we
+    * don't anchor to the start. The qualifier is the FIRST
+    * identifier in the first `ident.ident` match. */
+  private def detectQualifier(expr: String): Option[String] = {
+    val firstIdentDot = """([A-Za-z_][A-Za-z_0-9]*)\.""".r
+    val m = firstIdentDot.findFirstMatchIn(expr)
+    m.map { matched =>
+      val ident = matched.group(1)
+      // Don't treat SQL keywords as qualifiers even if they look
+      // like an identifier (e.g. `IS NULL`, `IS DISTINCT`).
+      val sqlKeywords = Set("SUM", "COUNT", "AVG", "MIN", "MAX", "DISTINCT",
+        "COALESCE", "CAST", "CASE", "WHEN", "THEN", "ELSE", "END", "AS",
+        "AND", "OR", "NOT", "NULL", "IS", "IN", "EXISTS", "BETWEEN",
+        "FROM", "WHERE", "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "OFFSET")
+      if (sqlKeywords.contains(ident.toUpperCase)) null else ident
+    }.filter(_ != null)
+  }
 
   /** Pick the ANSI_SQL expression from an Ossie `expression` block.
     * Falls back to the first dialect if ANSI_SQL is missing. Returns

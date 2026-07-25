@@ -23,4 +23,12 @@ final case class QueryRequest(
     dimensions: Seq[String] = Seq.empty,
     where:      Option[Predicate] = None,
     having:     Option[Predicate] = None,
+    /** Sort spec, captured for cache-key equivalence. The order
+      * (and direction) of the keys is part of the result contract:
+      * `Seq(carrier asc, revenue desc)` is NOT the same answer as
+      * `Seq(carrier desc, revenue asc)`. */
+    orderBy:    Seq[(String, String)] = Seq.empty,
+    /** Top-N cap. `None` (no cap) and `Some(10)` are different
+      * answers, so the key distinguishes them. */
+    limit:      Option[Int] = None,
 )

@@ -214,15 +214,22 @@ final class SemanticTable private[semanticdf] (
             // this means materialising once via collect(). For cache
             // hits the cost is one `parallelize`; for misses, one
             // collect + one put.
+            // Capture the row count from the collected rows so the
+            // audit event reports the real count, not 0. (We don't
+            // collect unless there's a cache to populate — audit
+            // events for non-cached queries still report 0 because
+            // the user didn't ask us to materialize.)
+            var rowCount = 0L
             cacheKeyOpt.foreach { key =>
               try {
                 val rows = fresh.collect()
+                rowCount = rows.length.toLong
                 resultCache.get.putWithModel(key,
                   io.semanticdf.cache.CachedResult(rows, fresh.schema),
                   model)
               } catch { case _: Throwable => () /* cache failures must not break the query */ }
             }
-            (fresh, 0L)
+            (fresh, rowCount)
           }
 
         val elapsedMs = (System.nanoTime() - t0) / 1000000L
@@ -1798,6 +1805,9 @@ final class SemanticTable private[semanticdf] (
       dimensions = dimensions.toSeq,
       where      = where,
       having     = having,
+      orderBy    = orderBy.toSeq.map { case SortKey.Asc(name)  => (name, "asc")
+                                       case SortKey.Desc(name) => (name, "desc") },
+      limit      = limit,
     )
     result.auditRequest match {
       case Some(_) => result  // already stamped by a nested query() call

@@ -64,10 +64,18 @@ final case class OssieRelationship(
 )
 
 /** One Ossie `metric` — a top-level aggregate defined in the
-  * `metrics` array. Becomes a semanticdf [[io.semanticdf.Measure]]. */
+  * `metrics` array. Becomes a semanticdf [[io.semanticdf.Measure]].
+  *
+  * `qualifier` is the dataset name the metric was bound to in the
+  * original Ossie expression, if any (e.g. `SUM(orders.amount)`
+  * has qualifier `Some("orders")`). An unqualified metric
+  * (e.g. `COUNT(1)`) has `None`. The OssieReader uses this to
+  * decide which dataset the metric belongs to — see the reader's
+  * `toSemanticTables` for the resolution rules. */
 final case class OssieMetric(
     name:        String,
     expression:  String,
+    qualifier:   Option[String] = None,
     description: Option[String] = None,
     datatype:    Option[String] = None,
 )

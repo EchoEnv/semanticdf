@@ -103,6 +103,66 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
     assert(PredicateHasher.hash(a) != PredicateHasher.hash(b))
   }
 
+  test("hash: Contains is distinct from Eq") {
+    // `carrier = 'AA'` and `carrier contains 'AA'` produce different
+    // SQL — the cache must distinguish them.
+    val a = Predicate.Compare.Eq("carrier", "AA")
+    val b = Predicate.Compare.Contains("carrier", "AA")
+    assert(PredicateHasher.hash(a) != PredicateHasher.hash(b))
+  }
+
+  test("hash: Contains does not crash (was a MatchError before the fix)") {
+    val p = Predicate.Compare.Contains("carrier", "AA")
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64) // SHA-256 hex
+  }
+
+  test("hash: StartsWith does not crash") {
+    val p = Predicate.Compare.StartsWith("carrier", "AA")
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64)
+  }
+
+  test("hash: EndsWith does not crash") {
+    val p = Predicate.Compare.EndsWith("carrier", "AA")
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64)
+  }
+
+  test("hash: ArrayContains does not crash") {
+    val p = Predicate.Compare.ArrayContains("tags", "promo")
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64)
+  }
+
+  test("hash: And with 3+ children does not crash") {
+    val a = Predicate.Compare.Eq("a", 1)
+    val b = Predicate.Compare.Eq("b", 2)
+    val c = Predicate.Compare.Eq("c", 3)
+    val p = Predicate.And(a, b, c)
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64)
+  }
+
+  test("hash: Or with 3+ children does not crash") {
+    val a = Predicate.Compare.Eq("a", 1)
+    val b = Predicate.Compare.Eq("b", 2)
+    val c = Predicate.Compare.Eq("c", 3)
+    val p = Predicate.Or(a, b, c)
+    val h = PredicateHasher.hash(p)
+    assert(h.length == 64)
+  }
+
+  test("hash: And with 3+ children is commutative") {
+    // 3+ children can be reordered; the hash should be stable.
+    val a = Predicate.Compare.Eq("a", 1)
+    val b = Predicate.Compare.Eq("b", 2)
+    val c = Predicate.Compare.Eq("c", 3)
+    val left  = Predicate.And(a, b, c)
+    val right = Predicate.And(c, b, a)
+    assert(PredicateHasher.hash(left) == PredicateHasher.hash(right))
+  }
+
   test("canonicalize: stable string form") {
     val p = Predicate.And(
       Predicate.Compare.Eq("carrier", "AA"),
