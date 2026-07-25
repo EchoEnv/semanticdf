@@ -145,8 +145,8 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     // collisions: `None` and `Some("none")` both hashed to the same
     // value; `Map("a"->"b,c:d")` collided with `Map("a"->"b", "c"->"d")`;
     // `Some(("a..b","c"))` collided with `Some(("a","b..c"))`. PR
-    // #187 switched to length-prefixed encoding. These tests prove
-    // the collisions are gone.
+    // #187 switched to length-prefixed encoding for time fields.
+    // These tests prove the collisions are gone.
     val a = CacheKey.forRequest(makeReq(timeGrain = None))
     val b = CacheKey.forRequest(makeReq(timeGrain = Some("none")))
     assert(a != b, s"None and Some('none') must hash to different keys; both = $a")
@@ -163,6 +163,46 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     val g1 = CacheKey.forRequest(makeReq(timeGrain = Some("day"), timeGrains = Map("ts" -> "day"), timeRange = Some("2024-01-01", "2024-01-31")))
     val g2 = CacheKey.forRequest(makeReq(timeGrain = Some("day"), timeGrains = Map("ts" -> "day"), timeRange = Some("2024-01-01", "2024-01-31")))
     assert(g1 == g2, "identical requests must hash to the same key")
+  }
+
+  test("forRequest: model/measure/dimension/orderBy encoding has no collisions (regression for #188)") {
+    // PR #187 only length-prefixed the time fields. The rest of the
+    // request still used delimiter encoding — which admits collisions
+    // whenever a string value contains the delimiter:
+    //   - Seq("a,b") and Seq("a","b") both encoded as "a,b"
+    //   - Seq("a:b") and Seq("a","b") both encoded as "a:b" (orderBy)
+    //   - model containing `|` or `me=` could cross field boundaries
+    // PR #188 extended the length-prefixed encoding to every field.
+    // These tests reproduce the collisions and prove they're gone.
+
+    // Measures: single element with a comma vs two elements
+    val k1 = CacheKey.forRequest(makeReq(measures = Seq("a,b")))
+    val k2 = CacheKey.forRequest(makeReq(measures = Seq("a", "b")))
+    assert(k1 != k2, s"Seq('a,b') and Seq('a','b') must hash to different keys; both = $k1")
+
+    // Dimensions: same scenario
+    val k3 = CacheKey.forRequest(makeReq(dimensions = Seq("a,b")))
+    val k4 = CacheKey.forRequest(makeReq(dimensions = Seq("a", "b")))
+    assert(k3 != k4, s"Seq('a,b') and Seq('a','b') must hash to different keys; both = $k3")
+
+    // OrderBy: single pair with a colon in the name vs two pairs
+    val k5 = CacheKey.forRequest(makeReq(orderBy = Seq(("a:b", "asc"))))
+    val k6 = CacheKey.forRequest(makeReq(orderBy = Seq(("a", "b"), ("", "asc"))))
+    assert(k5 != k6, s"orderBy with delimiter in name must not collide with multi-pair orderBy; both = $k5")
+
+    // Model: containing a `|` (the field separator) must not break the canonical
+    val k7 = CacheKey.forRequest(makeReq(model = "flights|me=fake"))
+    val k8 = CacheKey.forRequest(makeReq(model = "flights", measures = Seq("fake")))
+    assert(k7 != k8, s"model with '|' delimiter must not break canonical encoding; both = $k7")
+
+    // Identical inputs produce identical keys (determinism)
+    val k9 = CacheKey.forRequest(makeReq(
+      model = "flights", measures = Seq("a,b", "c"), dimensions = Seq("x|y", "z"),
+      orderBy = Seq(("a:b", "asc"), ("c:d", "desc"))))
+    val k10 = CacheKey.forRequest(makeReq(
+      model = "flights", measures = Seq("a,b", "c"), dimensions = Seq("x|y", "z"),
+      orderBy = Seq(("a:b", "asc"), ("c:d", "desc"))))
+    assert(k9 == k10, "identical requests must hash to the same key")
   }
 
   // ----------------------------------------------------------------
