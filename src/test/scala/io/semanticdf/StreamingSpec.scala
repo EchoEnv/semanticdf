@@ -7,6 +7,7 @@ import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType
 import org.scalatest.funsuite.AnyFunSuite
 
 import io.semanticdf.StreamingSupport._
+import io.semanticdf.audit.{AuditEvent, AuditSink}
 
 /** Tests for the streaming terminal.
   *
@@ -585,6 +586,116 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
       s"where filter was not applied: $violators <= 5 appeared in the callback (seen values: ${seenValues.toSeq.sorted.take(20)})")
   }
 
+  // -------------------------------------------------------------------------
+  // Regression for #190: streaming audit emit
+  // -------------------------------------------------------------------------
+  //
+  // PR #190: the streaming terminal was emitting NO audit events for
+  // windowed queries and emitting audit events with rowCount=0 for
+  // filter-only queries. Both broke the v0.1.17 observability surface.
+
+  test("toStreamingQuery: filter-only path emits audit events with the actual rowCount (regression for #190)") {
+    val s: SparkSession = spark
+    val stream = s.readStream
+      .format("rate")
+      .option("rowsPerSecond", 10)
+      .load()
+    val auditSink = new TestAuditSink()
+    val model = toStreamingSemanticTable(stream, name = Some("audit_filter"))
+      .withDimensions(Dimension("value", t => t("value")))
+      .withMeasures(Measure("c", t => count(lit(1))))
+      .withAuditSink(auditSink)
+
+    val query = model.toStreamingQuery(s, StreamingQueryOptions(
+      trigger = Some(Trigger.ProcessingTime("500 milliseconds")),
+    ))
+    Thread.sleep(2000)
+    query.stop()
+    query.awaitTermination()
+
+    val events = auditSink.events
+    assert(events.nonEmpty, s"expected at least one audit event, got 0")
+    // The first batch can be empty (Spark warm-up). The audit log
+    // records rowCount=0 for that batch — which is the correct
+    // value. Assert on the NON-EMPTY batches, which carry the
+    // actual batch count.
+    val nonEmpty = events.filter(_.rowCount > 0L)
+    assert(nonEmpty.nonEmpty,
+      s"expected at least one non-empty batch, got 0; events: $events")
+    for (event <- events) {
+      // The pre-fix code emitted rowCount=0 for every batch
+      // (BUG #190). The fix counts the actual batch rows. An
+      // audit event for a 0-row batch is still correct (and
+      // expected for the first warm-up batch).
+      assert(event.rowCount >= 0L, s"audit event has negative rowCount: $event")
+      assert(event.status == "ok", s"audit event status is not ok: $event")
+    }
+  }
+
+  test("toStreamingQuery: windowed path (SemanticAggregateOp root) emits audit events (regression for #190)") {
+    // PR #190 fixed two audit bugs. BUG 1 was the
+    // `case _: SemanticAggregateOp if opts.window.isDefined` branch
+    // short-circuiting to `foreachBatchFn(batchDf)` with no audit
+    // emit. To exercise that branch the model root MUST be a
+    // SemanticAggregateOp — which requires `.groupBy(...).aggregate(...)`
+    // on the model. The previous version of this test used
+    // `opts.window + groupKeys` (which routes through the
+    // SemanticStreamingTableOp branch, NOT the SemanticAggregateOp
+    // one), so it never actually covered BUG 1. Running the old test
+    // against the unfixed code passed unchanged.
+    val s: SparkSession = spark
+    val stream = s.readStream
+      .format("rate")
+      .option("rowsPerSecond", 5)
+      .load()
+    val auditSink = new TestAuditSink()
+    val model = toStreamingSemanticTable(stream, name = Some("audit_windowed"))
+      .withDimensions(Dimension.time("timestamp", t => t("timestamp"), smallestTimeGrain = Some("second")))
+      .withMeasures(Measure("count", t => count(lit(1))))
+      .withAuditSink(auditSink)
+      .groupBy("timestamp")
+      .aggregate("count")
+
+    val query = model.toStreamingQuery(s, StreamingQueryOptions(
+      trigger = Some(Trigger.ProcessingTime("500 milliseconds")),
+      // Short window so a window can close within the test wait time.
+      window = Some(WindowSpec("timestamp", "1 second")),
+      watermark = Some(WatermarkSpec("timestamp", "1 second")),
+      // Update mode emits per-micro-batch aggregates (so we don't
+      // have to wait for a window to close).
+      outputMode = "update",
+    ))
+    Thread.sleep(5000)
+    query.stop()
+    query.awaitTermination()
+
+    val events = auditSink.events
+    // BUG 1 was that the windowed branch emitted ZERO audit events.
+    // The fix emits one per micro-batch.
+    assert(events.nonEmpty,
+      s"expected at least one audit event for windowed streaming, got 0; this is BUG #190")
+    // Tighten the assertion: a regression that always emitted
+    // rowCount=0 (the BUG #2 pattern) would silently pass `rowCount >= 0L`.
+    // Assert at least one event has a positive rowCount.
+    val nonEmpty = events.filter(_.rowCount > 0L)
+    assert(nonEmpty.nonEmpty,
+      s"expected at least one audit event with positive rowCount, got 0; events: $events")
+    for (event <- events) {
+      assert(event.rowCount >= 0L, s"audit event has negative rowCount: $event")
+      assert(event.status == "ok", s"audit event status is not ok: $event")
+    }
+  }
+}
+
+/** Minimal in-test audit sink. Captures events in a ListBuffer
+  * for assertion. We can't import `InMemoryAuditSink` from outside
+  * the `audit` package (it's `private[audit]`), so this is a 1-class
+  * substitute for the streaming test. */
+class TestAuditSink extends AuditSink {
+  val events = scala.collection.mutable.ListBuffer.empty[AuditEvent]
+  override def emit(event: AuditEvent): Unit = {
+    events.synchronized { events += event }
+  }
 }
 
 /** Phantom tags + implicit refs used by the typed-DSL equivalence test.
