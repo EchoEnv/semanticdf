@@ -120,10 +120,14 @@ the audit path.
 
 ## What's NOT in v1
 
-- **Eager row count.** Counting would force `df.count()` (a re-run
-  of the query plan) on every emit. Not minimum code; not the user's
-  request. The field is reserved (default `0`); consumers extend if
-  they need it.
+- **Eager row count for batch `toDataFrame`.** Counting would force
+  `df.count()` (a re-run of the query plan) on every batch emit. The
+  field is reserved (default `0`); consumers extend if they need it.
+  *For the streaming `foreachBatch` path, eager counting IS
+  implemented (v0.1.17, PR #190) — the `emitStreamingAudit` helper
+  calls `batchDf.count()` per microbatch so the audit log carries
+  the actual per-batch row count. The cost is documented at the
+  call site in `SemanticTable.toStreamingQuery`.*
 - **Async / queue-based sinks.** A follow-up if real-world sinks
   become a bottleneck.
 - **Predicate AST shape parity.** The library's `Predicate` and the
