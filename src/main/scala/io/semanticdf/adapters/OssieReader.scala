@@ -83,6 +83,11 @@ import scala.jdk.CollectionConverters._
   * }}} */
 object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
 
+  /** Explicit implicit for the typeclass. See [[SDFAdapter.instance]]
+    * for the rationale. */
+  implicit val instance: SemanticMetadataAdapter[NioPath, OssieProject] = this
+
+
   /** Phase 1 — pure parse. Loads the YAML, walks both the canonical
     * shape (`semantic_model`) and the legacy ontology shape
     * (`ontology_mappings[*].semantic_model`), returns one
@@ -130,7 +135,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
         val withDims = ds.fields.filter(!_.isTimeDimension).foldLeft(st) { (acc, f) =>
           acc.withDimensions(new Dimension(
             name = f.name,
-            expr = (t: io.semanticdf.SemanticScope) => exprFor(f.expression, t, f.name),
+            expr = (t: io.semanticdf.SemanticScope) => exprFor(f.expression, t, f.name, ""),
             description = f.description,
             exprString = Some(f.expression),
           ))
@@ -138,7 +143,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
         val withTime = ds.fields.filter(_.isTimeDimension).foldLeft(withDims) { (acc, f) =>
           acc.withDimensions(Dimension.time(
             name = f.name,
-            expr = (t: io.semanticdf.SemanticScope) => exprFor(f.expression, t, f.name),
+            expr = (t: io.semanticdf.SemanticScope) => exprFor(f.expression, t, f.name, ""),
             description = f.description,
           ))
         }
@@ -150,7 +155,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
               if (tableName == ds.name)
                 acc.withMeasures(Measure(
                   name = m.name,
-                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name),
+                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name, m.qualifier.getOrElse("")),
                   description = m.description,
                 ).copy(exprString = Some(m.expression)))
               else acc
@@ -163,7 +168,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
               if (project.datasets.length == 1)
                 acc.withMeasures(Measure(
                   name = m.name,
-                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name),
+                  expr = (t: io.semanticdf.SemanticScope) => exprFor(m.expression, t, m.name, m.qualifier.getOrElse("")),
                   description = m.description,
                 ).copy(exprString = Some(m.expression)))
               else acc
@@ -352,10 +357,11 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
       expression: String,
       t: io.semanticdf.SemanticScope,
       fallbackName: String,
+      qualifier: String = "",
   ): org.apache.spark.sql.Column = {
     if (expression.isEmpty) t(fallbackName)
     else if (expression.matches("[A-Za-z_][A-Za-z_0-9]*")) t(expression)
-    else org.apache.spark.sql.functions.expr(stripTablePrefix(expression))
+    else org.apache.spark.sql.functions.expr(stripTablePrefix(expression, qualifier))
   }
 
   /** Strip the dataset-name prefix from a metric expression.
@@ -376,16 +382,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
   // doesn't interpret `orders.amount` as a struct field access.
   // Karpathy: minimum code. Not a real SQL parser — works for the
   // common case where the table-name prefix matches an identifier.
-  private val anyIdentDot = """([A-Za-z_][A-Za-z_0-9]*)\.""".r
-  private def stripTablePrefix(expression: String): String =
-    anyIdentDot.replaceAllIn(expression, m => {
-      val ident = m.group(1)
-      // Don't strip SQL keywords or function names
-      val sqlKeywords = Set("SUM", "COUNT", "AVG", "MIN", "MAX", "DISTINCT",
-        "COALESCE", "CAST", "CASE", "WHEN", "THEN", "ELSE", "END", "AS",
-        "AND", "OR", "NOT", "NULL", "IS", "IN", "EXISTS", "BETWEEN",
-        "FROM", "WHERE", "GROUP", "BY", "ORDER", "HAVING", "LIMIT", "OFFSET")
-      if (sqlKeywords.contains(ident.toUpperCase)) m.matched
-      else ""
-    })
+  private def stripTablePrefix(expression: String, qualifier: String): String =
+    if (qualifier.nonEmpty) expression.replaceAllLiterally(qualifier + ".", "")
+    else expression
 }

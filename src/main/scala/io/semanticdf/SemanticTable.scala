@@ -231,25 +231,28 @@ final class SemanticTable private[semanticdf] (
                 // documentation; the behaviour is identical to the hit
                 // path, which IS tested.
                 val fresh = root.compile(spark)
+                // Step 1: collect. If the query itself fails, let the
+                // failure propagate through the outer audit handler.
+                val rows = fresh.collect()
+                // Step 2: try to populate the cache. Cache failures
+                // must NOT break the query, so we use NonFatal only
+                // (catching OOM/SOE was wrong — it would silently
+                // report a successful query).
                 try {
-                  val rows = fresh.collect()
                   resultCache.get.putWithModel(key,
                     io.semanticdf.cache.CachedResult(rows, fresh.schema),
                     model)
-                  val rebuilt = if (rows.isEmpty) {
-                    spark.createDataFrame(
-                      spark.sparkContext.emptyRDD[org.apache.spark.sql.Row], fresh.schema)
-                  } else {
-                    spark.createDataFrame(
-                      spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
-                  }
-                  (rebuilt, rows.length.toLong)
-                } catch { case _: Throwable =>
-                  // Cache populate failed (e.g. streaming source that
-                  // can't be collected). Fall back to the lazy
-                  // DataFrame so the query still works.
-                  (fresh, 0L)
+                } catch { case scala.util.control.NonFatal(_) => () }
+                // Step 3: rebuild the DataFrame from the collected
+                // rows so the caller is decoupled from the source.
+                val rebuilt = if (rows.isEmpty) {
+                  spark.createDataFrame(
+                    spark.sparkContext.emptyRDD[org.apache.spark.sql.Row], fresh.schema)
+                } else {
+                  spark.createDataFrame(
+                    spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
                 }
+                (rebuilt, rows.length.toLong)
               case None =>
                 // No cache key. Just compile; the caller collects.
                 val fresh = root.compile(spark)

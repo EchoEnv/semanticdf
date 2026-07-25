@@ -35,6 +35,11 @@ import scala.jdk.CollectionConverters._
   * The `_` import brings `DbtAdapter` into implicit scope. */
 object DbtAdapter extends SemanticMetadataAdapter[java.nio.file.Path, DbtProject] {
 
+  /** Explicit implicit for the typeclass. See [[SDFAdapter.instance]]
+    * for the rationale. */
+  implicit val instance: SemanticMetadataAdapter[java.nio.file.Path, DbtProject] = this
+
+
   /** Phase 1 — pure parse. Wraps [[DbtManifestReader.read]]. */
   def parse(source: java.nio.file.Path): Seq[DbtProject] =
     Seq(DbtManifestReader.read(source))

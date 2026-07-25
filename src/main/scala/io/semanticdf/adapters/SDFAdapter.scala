@@ -53,6 +53,13 @@ import scala.jdk.CollectionConverters._
   * }}} */
 object SDFAdapter extends SemanticMetadataAdapter[NioPath, SDFProject] {
 
+  /** Explicit implicit for the typeclass. The object itself extends
+    * the trait, but Scala 2's implicit search needs a value-typed
+    * implicit, not just the object. Without this, callers can't use
+    * `loadSemanticTables(...)` via `import SDFAdapter._`. */
+  implicit val instance: SemanticMetadataAdapter[NioPath, SDFProject] = this
+
+
   private val mapper: ObjectMapper = new ObjectMapper()
 
   /** Phase 1 — pure parse. Reads the file, extracts the `kind` and

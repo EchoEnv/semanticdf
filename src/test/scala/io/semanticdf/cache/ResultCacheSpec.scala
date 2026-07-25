@@ -176,6 +176,36 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(c.invalidateModel("orders") == 2, "only 2 surviving entries should be tracked")
   }
 
+  test("inMemory: byModel entry is dropped when its set becomes empty (no empty-set leak)") {
+    // Regression: before the fix, the byModel sidecar kept an
+    // empty `Set` for each model that had been fully evicted, so
+    // cycling through distinct model names accumulated unbounded
+    // empty sets. Now the empty set is dropped.
+    val c = ResultCache.inMemory(maxEntries = 2).asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val v = CachedResult(Array.empty[Row], schema)
+    // 3 distinct models, each with one entry. First put evicts.
+    c.putWithModel("a", v, "m1")  // size=1
+    c.putWithModel("b", v, "m2")  // size=2
+    c.putWithModel("c", v, "m3")  // evicts "a" (m1's set should drop)
+    // Force the remaining two out so m2 and m3 also drop.
+    c.putWithModel("d", v, "m4")  // evicts "b" (m2 drops)
+    c.putWithModel("e", v, "m5")  // evicts "c" (m3 drops)
+    c.putWithModel("f", v, "m6")  // evicts "d" (m4 drops)
+    // m5 is still in (just put, plus "e"). m6 is the latest.
+    // The byModel map should have only m5 and m6 — no empty sets
+    // for m1, m2, m3, m4.
+    val tracked = c.keys().toSet
+    assert(tracked == Set("e", "f"),
+      s"expected only the live keys; got $tracked")
+    // invalidateModel on a fully-evicted model returns 0 (the
+    // byModel entry has been cleaned up):
+    assert(c.invalidateModel("m1") == 0)
+    assert(c.invalidateModel("m2") == 0)
+    assert(c.invalidateModel("m3") == 0)
+    assert(c.invalidateModel("m4") == 0)
+  }
+
   test("inMemory: clear() drops everything") {
     val c = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
     val v = CachedResult(Array.empty[Row], StructType(Seq(StructField("x", IntegerType))))
