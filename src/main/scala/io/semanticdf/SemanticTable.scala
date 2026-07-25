@@ -516,6 +516,15 @@ final class SemanticTable private[semanticdf] (
           case _: SemanticAggregateOp if opts.window.isDefined =>
             // The streaming engine already did the aggregation. batchDf is
             // the per-window result. No further compilation needed.
+            //
+            // The normal `toDataFrame` audit emit (which fires rowCount
+            // from the cache row count) is bypassed in this short-circuit
+            // branch, so we have to emit the audit event here with the
+            // actual batch row count. Without this, a windowed streaming
+            // query with `withAuditSink(...)` produces ZERO audit events
+            // — a silent break of the v0.1.17 observability surface.
+            val t0 = System.nanoTime()
+            emitStreamingAudit(batchDf, t0)(spark)
             foreachBatchFn(batchDf)
           case _ =>
             // Filter-only path: walk the original op tree and substitute
@@ -529,15 +538,27 @@ final class SemanticTable private[semanticdf] (
             // applied to a streaming model never reached the
             // `foreachBatch` callback. This is the data-correctness fix.
             val batchRoot = substituteStreamingLeaf(root, batchDf)
+            // Pass `auditSink = None` to the batchModel so its
+            // `toDataFrame` takes the fast path and does NOT emit an
+            // audit event. We emit manually below with the actual
+            // rowCount; otherwise we'd double-emit and the first event
+            // would carry rowCount=0 (the `case None` branch's
+            // documented "caller will collect" sentinel). Without
+            // auditSink=None, the audit log would show every batch
+            // as "0 rows" — a silent wrong-answer.
             val batchModel = new SemanticTable(
-              batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest,
+              batchRoot, postAggPredicates, this.version, sourceTable, status,
+              auditSink = None,
+              auditRequest = auditRequest,
               // Disable the result cache inside foreachBatch. The
               // cache key does not include batch identity, so the
               // first micro-batch's result could be returned for
               // every subsequent batch. Disabling the cache here
               // means each batch is computed fresh.
               resultCache = None)
+            val t0 = System.nanoTime()
             val result = batchModel.toDataFrame(spark)
+            emitStreamingAudit(result, t0)(spark)
             foreachBatchFn(result)
         }
       }
@@ -627,6 +648,44 @@ final class SemanticTable private[semanticdf] (
     case tr: SemanticTransformsOp     => findStreamRecursive(tr.source)
     case j: SemanticJoinOp            => findStreamRecursive(j.left) || findStreamRecursive(j.right)
     case _                           => false
+  }
+
+  /** Emit an audit event for a streaming micro-batch.
+    *
+    * The standard [[toDataFrame]] audit emit returns `rowCount=0`
+    * when there is no cache key (the `case None` branch — the
+    * caller is expected to collect). For the streaming terminal's
+    * `foreachBatch` path, the data is in `batchDf` RIGHT NOW; the
+    * user does not call `collect()` separately. Count it here so
+    * the audit log reflects the real per-batch row count.
+    *
+    * The error path is the standard `NonFatal` swallow (the audit
+    * sink is best-effort, never the cause of a query failure). */
+  private def emitStreamingAudit(
+      batchDf: DataFrame,
+      t0: Long,
+  )(implicit spark: SparkSession): Unit = {
+    if (auditSink.isDefined) {
+      try {
+        val rowCount   = batchDf.count()
+        val elapsedMs  = (System.nanoTime() - t0) / 1000000L
+        val model      = this.name.getOrElse(sourceTable.getOrElse("unknown"))
+        val req        = auditRequest.getOrElse(AuditQueryRequest(model = model))
+        val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
+        val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
+        auditSink.get.emit(AuditEvent(
+          ts         = java.time.Instant.now(),
+          model      = model,
+          measures   = req.measures,
+          dimensions = req.dimensions,
+          whereHash  = whereHash,
+          havingHash = havingHash,
+          rowCount   = rowCount,
+          elapsedMs  = elapsedMs,
+          status     = "ok",
+        ))
+      } catch { case scala.util.control.NonFatal(_) => () }
+    }
   }
 
   /** Declarative overload of [[toStreamingQuery]] — takes a
