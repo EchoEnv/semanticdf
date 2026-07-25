@@ -28,7 +28,23 @@ package io.semanticdf.cache
   *     default `inMemory(maxEntries)` evicts the LRU entry on
   *     overflow.
   *   - The default sink is `NoOp` — no caching, no overhead. Opt
-  *     in via [[io.semanticdf.SemanticTable.withResultCache]]. */
+  *     in via [[io.semanticdf.SemanticTable.withResultCache]].
+  *
+  * == Cost note ==
+  *
+  * On a cache miss, the in-memory implementation
+  * ([[InMemoryResultCache]]) rebuilds the cached result via
+  * `parallelize(rows.toSeq) + schema`. This is O(n) over the result
+  * set — for a 10k-row × 20-column result, that's ~200k fields
+  * re-allocated on every miss. For result sets >1MB, prefer a
+  * different cache backend or no cache.
+  *
+  * The cache key itself ([[CacheKey.forRequest]]) is a SHA-256 over
+  * the full request shape: model, measures, dimensions, where hash,
+  * having hash, `orderBy` (direction + columns), `limit` (None vs
+  * Some), and the time-grain / time-range / per-dimension-grains
+  * fields (post-v0.1.17). Hashing is microseconds; not a hot-path
+  * concern. */
 trait ResultCache {
 
   /** Look up a cached result. Returns `None` on miss; the caller
