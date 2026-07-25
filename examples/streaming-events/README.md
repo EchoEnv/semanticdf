@@ -1,6 +1,6 @@
 # semanticdf streaming-events example
 
-A complete, working streaming example of [semanticdf](https://github.com/earendil/semanticdf) — a declarative semantic layer on Apache Spark.
+A complete, working streaming example of [semanticdf](https://github.com/EchoEnv/semanticdf) — a declarative semantic layer on Apache Spark.
 
 This template shows how to define a streaming model in **YAML** (no Scala required for the model itself) and run it from a regular Spark program. Windowed aggregation, watermarks, and percent-of-total are expressed in the model; lifecycle (when to start / how long to run / graceful stop) is owned by the operator program.
 
@@ -37,7 +37,7 @@ cd /path/to/semanticdf
 mvn install -DskipTests
 ```
 
-This puts `io.semanticdf:semanticdf_2.13:0.1.8` in `~/.m2/repository`.
+This puts `io.semanticdf:semanticdf_2.13:0.1.17` in `~/.m2/repository`.
 
 ### Step 2: run the example
 
@@ -235,7 +235,7 @@ Checkpointing default is a per-query temp dir; set `checkpointLocation = Some("s
 
 ## What's next
 
-- Add the same model to the MCP server and query it from an LLM agent with `list_models` / `describe_model` / `query_model` tools — semanticdf's `MCP` surface works the same on streaming models.
+- Add the same model to the MCP server and query it from an LLM agent with `list_models` / `describe_model` / `query` tools — semanticdf's `MCP` surface works the same on streaming models.
 - See [`examples/starter`](../starter/README.md) for batch-side fundamentals (dims / measures / calcs / joins).
 - See [`examples/hospital`](../hospital/README.md) for a worked batch example with multiple models and joins.
 - See [`examples/window-analytics`](../window-analytics/README.md) for batch window functions.

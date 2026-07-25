@@ -1,10 +1,9 @@
 package io.semanticdf.adapters
 
 import io.semanticdf.DbtManifestReader
-import io.semanticdf.DbtManifestReader.{DbtModel, DbtProject, DbtSource, DbtField}
+import io.semanticdf.DbtManifestReader.DbtProject
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
-import scala.jdk.CollectionConverters._
 
 /** dbt `manifest.json` adapter — implements [[SemanticMetadataAdapter]]
   * for dbt's v12+ manifest shape.
