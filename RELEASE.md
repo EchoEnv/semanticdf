@@ -1,5 +1,48 @@
 # Release notes
 
+## v0.1.17 — audit log + result cache + Ossie adapter + SDFAdapter + review follow-ups
+
+Twelve PRs landed in this wave. The unifying entry point is now `loadSemanticTables[S, P](source, resolve)` with implicit `SDFAdapter`, `DbtAdapter`, and `OssieReader` instances. A single call works for any of the three supported metadata formats.
+
+### Observability surface
+
+- **Audit log** (`audit/AuditEvent`, `audit/AuditSink`, `JsonlStdoutSink`, `InMemoryAuditSink`). `SemanticTable` gains `auditSink: Option[AuditSink]` + `withAuditSink(...)`. Every `toDataFrame` emits an `AuditEvent` (12 fields: timestamp, model, measures, dimensions, `whereHash`, `havingHash`, rowCount, elapsedMs, status, error, requester, requestId). Default is `NoOp` — zero overhead when not configured.
+- **MCP `audit_log` retrieval tool**. The shared `InMemoryAuditSink` is wired to both the `query` writer and the `audit_log` handler reader. Agents can ask "what did I just query?" without a separate observability stack.
+- **Result cache** (`cache/ResultCache`, `InMemoryResultCache`, `CachedResult`, `CacheKey`). `SemanticTable.withResultCache(...)` + `toDataFrame`'s cache-check / execute-on-miss / store path. Cache key is a SHA-256 of the **full** request shape: model, measures, dimensions, where hash, having hash, `orderBy` (direction + columns), `limit` (None vs Some). Column order is preserved (not sorted) — it's part of the result contract.
+- **Performance baseline + leak tests**. `perf/PerfBaselineSpec` (7 benchmarks, INFO-only numbers published to surefire reports) + `leak/LeakSpec` (9 gates). v0.1.17 baseline: `toDataFrame`=62ms, cache hit=26ms, predicate hash=20μs. See `docs/design/perf-baseline.md`.
+- **Cache invalidation hooks**. `ResultCache.putWithModel(key, value, model)` + `invalidateModel(name): Int`. `InMemoryResultCache` has a sidecar `byModel: HashMap[String, Set[String]]` for O(1) lookup. The LRU `removeEldestEntry` callback cleans the sidecar only when actually evicting (`invalidateModel` on 256 entries = 0ms median).
+
+### Adapter surface
+
+- **`SemanticMetadataAdapter[S, P]` typeclass** (`adapters/SemanticMetadataAdapter.scala`). Unifying entry point `loadSemanticTables[S, P](source, resolve)`. Implicit `spark: SparkSession` on `toSemanticTables(projects, resolve)(implicit spark)`. Three instances:
+  - `SDFAdapter` (wraps `SemanticManifest.fromJson` / `fromJoinedJson`; the legacy methods are now `@deprecated` pointing at the adapter)
+  - `DbtAdapter` (wraps `DbtManifestReader`)
+  - `OssieReader` (new; parses both canonical `semantic_model.{datasets,relationships,metrics}` and legacy `ontology_mappings[*].semantic_model` shapes)
+- **Ossie adapter perf + leak tests** (`perf/OssieReaderPerfSpec`, `leak/OssieReaderLeakSpec`). v0.1.17 baseline: small=4ms, medium=8ms, large=52ms, regex=26ms. Medium fixture = TPC-DS from `/tmp/ossie/examples/tpcds_semantic_model.yaml`.
+- **Examples + README migration**. `examples/joined-manifest-e2e/Query.scala` + `TypedQuery.scala` use `loadSemanticTables(path, resolve)` via `SDFAdapter._`. The unified API is now the documented shape.
+
+### Cache miss returns the rebuilt DataFrame (#184)
+
+The cache miss path used to populate the cache by collecting from the lazy compiled `fresh` DataFrame, then return that lazy DataFrame to the caller. The caller's `collect()` then re-executed the source query — **twice on every miss, once on every hit**. The fix mirrors the cache hit path: collect once for the cache, then rebuild the DataFrame from those exact rows + schema. The returned DataFrame is parallelize-backed and decoupled from the source.
+
+### Review follow-ups (PR #183, #185)
+
+**PR #183 (eight fixes):**
+- **Cache key correctness**: `CacheKey` now includes `orderBy` direction + columns + `limit` (None vs Some). A cached `LIMIT 10 ORDER BY x DESC` could previously be returned for an uncapped ascending query — **wrong answer**. `CacheKey` no longer sorts `dimensions`/`measures` — column order is part of the result contract.
+- **Cache hygiene**: the `invalidateModel` dead code (the `Option(map.get(k))` block) was deleted. `removeEldestEntry` now runs the `byModel` cleanup **only** when actually evicting (was running unconditionally on every put — a real bug introduced in #182). `rowCount` in audit events no longer reads 0 on cache miss.
+- **Audit predicate hasher**: added the missing `Compare` subtypes (`Contains`, `StartsWith`, `EndsWith`, `ArrayContains`) that previously caused a `MatchError` on a valid query. `And`/`Or` now accept 3+ children via varargs.
+- **Ossie adapter**: metrics bound to a specific dataset via `dataset.column` are no longer attached to every dataset (`SUM(orders.amount)` lives only on `orders`). Unqualified metrics like `COUNT(1)` in multi-dataset projects are skipped (ambiguous) rather than silently attached to everyone. Composite join keys use the typed multi-key `join_on` overload, not the previous `.head` pair.
+
+**PR #185 (four fixes):**
+- **CRITICAL — unified `loadSemanticTables` entry point didn't compile**. Each adapter object now exposes an `implicit val instance: SemanticMetadataAdapter[S, P] = this` so `import SDFAdapter._` brings the implicit into scope. This was the headline feature of the wave and the example `examples/joined-manifest-e2e/` failed to compile without it.
+- **`stripTablePrefix` over-stripping fixed**. Now only strips the bound qualifier (passed through to `exprFor`), not every `identifier.` pattern.
+- **`byModel` empty-set leak fixed**. Both `removeEldestEntry` and `putWithModel` drop the model entry when the set becomes empty.
+- **`Throwable` swallow in cache-miss fallback fixed**. Now uses `scala.util.control.NonFatal`; `collect()` is outside the try-catch so query failures propagate through the outer audit handler.
+
+### Test count
+
+693 library + 125 MCP = 818 green on Spark 3.5.8 and 4.1.1.
+
 ## v0.1.16 — structured predicate on the MCP wire + dbt manifest reader
 
 Two independent features, shipped together:

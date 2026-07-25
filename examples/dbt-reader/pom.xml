@@ -6,7 +6,7 @@
 
     <groupId>com.example</groupId>
     <artifactId>dbt-reader</artifactId>
-    <version>0.1.16</version>
+    <version>0.1.17</version>
     <packaging>jar</packaging>
 
     <name>dbt-reader</name>
@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.13.18</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
-        <semanticdf.version>0.1.16</semanticdf.version>
+        <semanticdf.version>0.1.17</semanticdf.version>
         <spark.version>3.5.8</spark.version>
     </properties>
 
