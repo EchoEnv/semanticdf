@@ -140,6 +140,31 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       key(timeRange = Some("2024-02-01" -> "2024-02-29")))
   }
 
+  test("forRequest: time field encoding has no collisions (regression for #186)") {
+    // PR #186 introduced length-prefixed-free encoding that admitted
+    // collisions: `None` and `Some("none")` both hashed to the same
+    // value; `Map("a"->"b,c:d")` collided with `Map("a"->"b", "c"->"d")`;
+    // `Some(("a..b","c"))` collided with `Some(("a","b..c"))`. PR
+    // #187 switched to length-prefixed encoding. These tests prove
+    // the collisions are gone.
+    val a = CacheKey.forRequest(makeReq(timeGrain = None))
+    val b = CacheKey.forRequest(makeReq(timeGrain = Some("none")))
+    assert(a != b, s"None and Some('none') must hash to different keys; both = $a")
+
+    val c = CacheKey.forRequest(makeReq(timeGrains = Map("a" -> "b,c:d")))
+    val d = CacheKey.forRequest(makeReq(timeGrains = Map("a" -> "b", "c" -> "d")))
+    assert(c != d, s"ambiguous timeGrains encoding collides: both = $c")
+
+    val e = CacheKey.forRequest(makeReq(timeRange = Some("a..b", "c")))
+    val f = CacheKey.forRequest(makeReq(timeRange = Some("a", "b..c")))
+    assert(e != f, s"range with '..' in endpoints collides: both = $e")
+
+    // Same input produces the same key (deterministic).
+    val g1 = CacheKey.forRequest(makeReq(timeGrain = Some("day"), timeGrains = Map("ts" -> "day"), timeRange = Some("2024-01-01", "2024-01-31")))
+    val g2 = CacheKey.forRequest(makeReq(timeGrain = Some("day"), timeGrains = Map("ts" -> "day"), timeRange = Some("2024-01-01", "2024-01-31")))
+    assert(g1 == g2, "identical requests must hash to the same key")
+  }
+
   // ----------------------------------------------------------------
   // InMemoryResultCache
   // ----------------------------------------------------------------
@@ -433,6 +458,9 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       having: Option[io.semanticdf.Predicate] = None,
       orderBy: Seq[(String, String)] = Seq.empty,
       limit: Option[Int] = None,
+      timeGrain: Option[String] = None,
+      timeGrains: Map[String, String] = Map.empty,
+      timeRange: Option[(String, String)] = None,
   ): io.semanticdf.audit.QueryRequest =
     io.semanticdf.audit.QueryRequest(
       model      = model,
@@ -442,5 +470,8 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       having     = having,
       orderBy    = orderBy,
       limit      = limit,
+      timeGrain  = timeGrain,
+      timeGrains = timeGrains,
+      timeRange  = timeRange,
     )
 }

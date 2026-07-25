@@ -62,8 +62,12 @@ private[audit] final class JsonlStdoutSink extends AuditSink {
       event.requestId.foreach(payload.put("request_id", _))
       log.info(mapper.writeValueAsString(payload))
     } catch {
-      // Sink must never break the query.
-      case _: Throwable => ()
+      // Sink must never break the query. Use NonFatal so fatal
+      // JVM errors (OOM, StackOverflow, LinkageError) propagate
+      // through the outer `toDataFrame` catch, where they trigger
+      // an audit `status="error"` event instead of being silently
+      // swallowed as a successful query with no audit record.
+      case scala.util.control.NonFatal(_) => ()
     }
   }
 }

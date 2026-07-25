@@ -66,6 +66,7 @@ final class Query(
         orderBy    = request.order_by.map(Query.toSortKey),
         limit      = request.limit,
         timeGrain  = request.time_grain,
+        timeGrains = request.time_grains.map(_.toMap).getOrElse(Map.empty),
         timeRange  = request.time_range,
       )
 
@@ -119,6 +120,7 @@ final class Query(
         orderBy    = request.order_by.map(Query.toSortKey),
         limit      = request.limit,
         timeGrain  = request.time_grain,
+        timeGrains = request.time_grains.map(_.toMap).getOrElse(Map.empty),
         timeRange  = request.time_range,
       )
     val planText = st.explainSemantic(spark)
@@ -341,6 +343,7 @@ object Query {
     props.put("order_by",   strProp("array"))
     props.put("limit",      strProp("integer"))
     props.put("time_grain", strProp("string"))
+    props.put("time_grains", strProp("array"))
     props.put("time_range", strProp("array"))
     new io.modelcontextprotocol.spec.McpSchema.JsonSchema(
       "object",
@@ -529,6 +532,20 @@ object Query {
       order_by   = asSeq("order_by").map(OrderByParser.parse),
       limit      = asOpt[java.lang.Integer]("limit").map(_.intValue),
       time_grain = asOpt[String]("time_grain"),
+      time_grains = map.get("time_grains") match {
+        case Some(arr: Seq[_]) =>
+          // Each entry is `[dimension, grain]`. Skip malformed pairs.
+          Some(arr.collect { case pair: Seq[_] if pair.length >= 2 =>
+            (pair.head.toString, pair(1).toString)
+          case pair: java.util.List[_] if pair.size() >= 2 =>
+            (pair.get(0).toString, pair.get(1).toString)
+          })
+        case Some(jl: java.util.List[_]) =>
+          Some(jl.asScala.toSeq.collect { case pair: java.util.List[_] if pair.size() >= 2 =>
+            (pair.get(0).toString, pair.get(1).toString)
+          })
+        case _ => None
+      },
       time_range = map.get("time_range") match {
         case Some(arr: Seq[_]) if arr.length >= 2 =>
           Some((arr.head.asInstanceOf[String], arr(1).asInstanceOf[String]))
@@ -553,6 +570,10 @@ final case class QueryRequest(
     order_by: Seq[OrderBy] = Seq.empty,
     limit: Option[Int] = None,
     time_grain: Option[String] = None,
+    /** Per-dimension time-grain map. MCP accepts an array of
+      * `[dimension, grain]` pairs and converts to the
+      * `Map[String, String]` the library expects. */
+    time_grains: Option[Seq[(String, String)]] = None,
     time_range: Option[(String, String)] = None,
 )
 
