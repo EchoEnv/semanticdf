@@ -535,6 +535,56 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
     assert(q.isInstanceOf[org.apache.spark.sql.streaming.StreamingQuery])
     q.stop()
   }
+
+  test("toStreamingQuery: foreachBatch applies the streaming model's where filter (regression for #189)") {
+    // PR #189 fix: the filter-only streaming path used to construct
+    // a bare `SemanticTableOp(batchDf)` and discard the rest of the
+    // op tree, so `.where(...)` and `.withTransforms(...)` on a
+    // streaming model were silently dropped. The fix walks the op
+    // tree and substitutes the streaming leaf with the batch.
+    //
+    // The rate source emits rows with monotonically increasing `value`
+    // starting from 0. With rowsPerSecond=10 and a 2-second wait, we
+    // expect to see values 0..19. Filtering to `value > 5` should drop
+    // values 0..5 from the callback.
+    val s: SparkSession = spark
+    val stream = s.readStream
+      .format("rate")
+      .option("rowsPerSecond", 10)
+      .load()
+
+    val model = toStreamingSemanticTable(stream, name = Some("filter_test"))
+      .withDimensions(Dimension("value", t => t("value")))
+      .withMeasures(Measure("c", t => count(lit(1))))
+      .where(Predicate.Compare.Gt("value", 5))
+
+    // Collect the actual `value` seen across all micro-batches.
+    // After the fix, every value must be > 5 (the filter predicate).
+    // Before the fix, values 0..N would appear (the op tree was
+    // discarded) and the assertion below would fail.
+    val seenValues = scala.collection.mutable.Set.empty[Long]
+    val query = model.toStreamingQuery(s, StreamingQueryOptions(
+      trigger = Some(Trigger.ProcessingTime("500 milliseconds")),
+      foreachBatch = (df: DataFrame) => {
+        // column 1 is `value`; column 0 is `timestamp`
+        df.collect().foreach(row => seenValues += row.getLong(1))
+      },
+    ))
+
+    Thread.sleep(2000)
+    query.stop()
+    query.awaitTermination()
+
+    assert(seenValues.nonEmpty, s"expected at least one micro-batch, got 0")
+    // The rate source emits `value` starting at 0. With the where
+    // filter `value > 5` properly applied, every collected value
+    // must be > 5. Before #189 the filter was silently dropped
+    // and `seenValues` would contain 0, 1, 2, ...
+    val violators = seenValues.filter(_ <= 5L)
+    assert(violators.isEmpty,
+      s"where filter was not applied: $violators <= 5 appeared in the callback (seen values: ${seenValues.toSeq.sorted.take(20)})")
+  }
+
 }
 
 /** Phantom tags + implicit refs used by the typed-DSL equivalence test.
