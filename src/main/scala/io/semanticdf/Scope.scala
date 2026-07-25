@@ -47,7 +47,7 @@ object SemanticScope {
   *
   * Used for plain base measures and for dimension expressions.
   */
-final class BaseScope(df: DataFrame) extends SemanticScope {
+final case class BaseScope(df: DataFrame) extends SemanticScope {
   override def apply(name: String): Column =
     if (df.columns.contains(name)) df(name)
     else throw new SemanticScope.UnknownFieldError(name, df.columns)
@@ -69,7 +69,7 @@ final class BaseScope(df: DataFrame) extends SemanticScope {
   * measure aggregated with no group keys, cross-joined into this DataFrame under a
   * `__total__` prefix. When present, `all(name)` resolves to it (percent-of-total).
   */
-final class MeasureScope(
+final case class MeasureScope(
     df: DataFrame,
     knownMeasures: Set[String],
     totalsResolver: Option[String => Column] = None,
