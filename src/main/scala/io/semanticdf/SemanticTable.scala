@@ -518,12 +518,17 @@ final class SemanticTable private[semanticdf] (
             // the per-window result. No further compilation needed.
             foreachBatchFn(batchDf)
           case _ =>
-            // Filter-only path: compile the op tree against the batch.
-            val batchRoot = SemanticTableOp(
-              table = batchDf,
-              name = sourceTable,
-              description = sourceTable.flatMap(_ => None),
-            )
+            // Filter-only path: walk the original op tree and substitute
+            // the streaming leaf with the batch DataFrame. This
+            // preserves the user's `.where(...)`, `.withTransforms(...)`,
+            // `.withRowFilter(...)` and similar transformations — they
+            // were silently dropped in v0.1.16 and earlier.
+            //
+            // The pre-fix code constructed a bare `SemanticTableOp(batchDf)`
+            // and discarded the rest of the op tree, so filters/transforms
+            // applied to a streaming model never reached the
+            // `foreachBatch` callback. This is the data-correctness fix.
+            val batchRoot = substituteStreamingLeaf(root, batchDf)
             val batchModel = new SemanticTable(
               batchRoot, postAggPredicates, this.version, sourceTable, status, auditSink, auditRequest,
               // Disable the result cache inside foreachBatch. The
@@ -555,6 +560,73 @@ final class SemanticTable private[semanticdf] (
     }
 
     writerWithCheckpoint.start()
+  }
+
+  /** Recursive walk that replaces every [[SemanticStreamingTableOp]]
+    * leaf in `op` with a [[SemanticTableOp]] wrapping `batchDf`. Used
+    * by [[toStreamingQuery]]'s `foreachBatch` path so the user's
+    * `.where(...)`, `.withTransforms(...)`, `.withRowFilter(...)`
+    * and other transformations on a streaming model actually
+    * execute per micro-batch.
+    *
+    * Each intermediate op (filter, transform, hint, etc.) is
+    * preserved with the substituted source. The `name` and
+    * `description` from the original streaming leaf are copied
+    * onto the replacement.
+    */
+  private def substituteStreamingLeaf(
+      op: SemanticOp,
+      batchDf: DataFrame,
+  ): SemanticOp = op match {
+    case s: SemanticStreamingTableOp =>
+      SemanticTableOp(
+        table = batchDf,
+        name = s.name,
+        description = s.description,
+      )
+    case a: SemanticAggregateOp =>
+      a.copy(source = substituteStreamingLeaf(a.source, batchDf))
+    case f: SemanticFilterOp =>
+      f.copy(source = substituteStreamingLeaf(f.source, batchDf))
+    case rf: SemanticRowFilterOp =>
+      rf.copy(source = substituteStreamingLeaf(rf.source, batchDf))
+    case o: SemanticOrderByOp =>
+      o.copy(source = substituteStreamingLeaf(o.source, batchDf))
+    case l: SemanticLimitOp =>
+      l.copy(source = substituteStreamingLeaf(l.source, batchDf))
+    case h: SemanticHintOp =>
+      h.copy(source = substituteStreamingLeaf(h.source, batchDf))
+    case tr: SemanticTransformsOp =>
+      tr.copy(source = substituteStreamingLeaf(tr.source, batchDf))
+    case j: SemanticJoinOp =>
+      // Joins in streaming models are static-stream only; the
+      // streaming side is on either j.left or j.right. Substitute
+      // the side that holds the streaming leaf.
+      val newLeft  = findStreamRecursive(j.left)
+      val newRight = findStreamRecursive(j.right)
+      val substLeft  = if (newLeft)  substituteStreamingLeaf(j.left,  batchDf) else j.left
+      val substRight = if (newRight) substituteStreamingLeaf(j.right, batchDf) else j.right
+      j.copy(left = substLeft, right = substRight)
+    case other =>
+      // Other ops (e.g. SemanticTableOp at a non-streaming root, or
+      // a node we don't recognise) — pass through. The compile()
+      // will fail loudly if the resulting tree is malformed.
+      other
+  }
+
+  /** Inner helper: is there a streaming leaf anywhere under `op`?
+    * Walks the same set of node types as [[substituteStreamingLeaf]]. */
+  private def findStreamRecursive(op: SemanticOp): Boolean = op match {
+    case _: SemanticStreamingTableOp => true
+    case a: SemanticAggregateOp       => findStreamRecursive(a.source)
+    case f: SemanticFilterOp          => findStreamRecursive(f.source)
+    case rf: SemanticRowFilterOp      => findStreamRecursive(rf.source)
+    case o: SemanticOrderByOp         => findStreamRecursive(o.source)
+    case l: SemanticLimitOp           => findStreamRecursive(l.source)
+    case h: SemanticHintOp           => findStreamRecursive(h.source)
+    case tr: SemanticTransformsOp     => findStreamRecursive(tr.source)
+    case j: SemanticJoinOp            => findStreamRecursive(j.left) || findStreamRecursive(j.right)
+    case _                           => false
   }
 
   /** Declarative overload of [[toStreamingQuery]] — takes a
