@@ -39,11 +39,11 @@ object DbtAdapter extends SemanticMetadataAdapter[java.nio.file.Path, DbtProject
   implicit val instance: SemanticMetadataAdapter[java.nio.file.Path, DbtProject] = this
 
 
-  /** Phase 1 — pure parse. Wraps [[DbtManifestReader.read]]. */
+  /** Pure parse. Wraps [[DbtManifestReader.read]]. */
   def parse(source: java.nio.file.Path): Seq[DbtProject] =
     Seq(DbtManifestReader.read(source))
 
-  /** Phase 2 — bind to Spark. Wraps
+  /** Bind to Spark. Wraps
     * [[DbtManifestReader.toSemanticTables]]; the project is already
     * parsed, so we just feed it through. */
   def toSemanticTables(

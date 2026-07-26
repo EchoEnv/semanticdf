@@ -104,10 +104,10 @@ object SemanticManifest {
       metadata:         Map[String, String] = Map.empty,
       // Joined-specific shape from recipe §3.
       cardinality:      String,         // "one" | "many" | "cross"
-      leftKeys:         Seq[String],    // from PR #153 key fields; empty for cross joins
+      leftKeys:         Seq[String],    // key fields; empty for cross joins
       rightKeys:        Seq[String],    // or when the wire shape came from a pre-#153 producer
       multiColumn:      Boolean,        // true if either key array has length > 1
-      onExprString:     Option[String], // SQL-form capture from PR #153; non-equi fallback
+      onExprString:     Option[String], // SQL-form capture; non-equi fallback
       // v0.1.13: structured predicate AST. Closed the last caveat of
       // the joined-models-manifest recipe. `None` when the AST wasn't
       // available (legacy producers, or predicates whose structure
@@ -262,7 +262,7 @@ object SemanticManifest {
   /** Source-free joined-manifest header for `kind = semanticdf-joined-manifest`.
     *
     * Mirrors [[parseMeta]] for the joined case. Used by `tools.Main
-    * validate-joined-manifest` (added in PR #151). Throws
+    * validate-joined-manifest` (introduced when joined-manifest wire shape was added). Throws
     * [[ManifestParsingException]] if the JSON is not a joined manifest.
     *
     * Implementation note: the joined wire shape per
@@ -413,7 +413,7 @@ object SemanticManifest {
         "SemanticManifest.toJoinedJson: joined op has no `leftSide`. " +
         "Construct joins via `SemanticTable.join_*` (which populates the side fields), " +
         "not by hand-assembling SemanticJoinOp, so the originating SemanticTable " +
-        "is recoverable. See PR #150 (feat/model: SemanticJoinOp carries originating " +
+        "is recoverable. See (feat/model: SemanticJoinOp carries originating " +
         "SemanticTable sides)."))
     val rightT = op.rightSide.getOrElse(
       throw new IllegalStateException(
@@ -484,7 +484,7 @@ object SemanticManifest {
     if (op.leftPrefix.nonEmpty)  joinObj.put("leftPrefix",  op.leftPrefix)
     if (op.rightPrefix.nonEmpty) joinObj.put("rightPrefix", op.rightPrefix)
     // leftKeys / rightKeys are populated from `SemanticJoinOp.leftKeys`
-    // / `rightKeys` (added in PR #153). They carry the equi-join key
+    // / `rightKeys`. They carry the equi-join key
     // column names whether the user typed them via `join_on(...)` /
     // `join_many_on(...)` or whether the lambda-decomposition probe at
     // construction recovered them.
@@ -500,7 +500,7 @@ object SemanticManifest {
     }
     writeKeyArr("leftKeys",  op.leftKeys)
     writeKeyArr("rightKeys", op.rightKeys)
-    // `onExprString` is the SQL-form capture carried from PR #153 for
+    // `onExprString` is the SQL-form capture carried for
     // non-equi predicates or multi-key equis that didn't factor.
     // Emitted on the join block (alongside `cardinality`) so the
     // reader can reach it without searching the model. Empty strings
@@ -635,7 +635,7 @@ object SemanticManifest {
       case _       => JoinCardinality.One
     }
 
-    // Reconstruct the `on` lambda from the wire. PR #153 added explicit
+    // Reconstruct the `on` lambda from the wire. Added explicit
     // `leftKeys` / `rightKeys` / `onExprString` fields on
     // `SemanticJoinOp`. The fallback lattice:
     //
@@ -746,7 +746,7 @@ object SemanticManifest {
       leftSide    = Some(leftT),
       rightSide   = Some(rightT),
       // Wire-shape carry-over: the keys + onExprString from the writer
-      // (PR #153 foundation) preserve the through-trip integrity. If
+      // (foundation work) preserve the through-trip integrity. If
       // the manifest was hand-rolled or emitted by a pre-#153 writer,
       // these default to empty / None and the join degrades gracefully
       // (the `on` rebuild above still works for the legacy empty case

@@ -61,10 +61,10 @@ import scala.jdk.CollectionConverters._
   * == Usage ==
   *
   * {{{
-  *   // Phase 1: read the manifest. No Spark needed.
+  *   // read the manifest. No Spark needed.
   *   val project = DbtManifestReader.read(Paths.get("target/manifest.json"))
   *
-  *   // Phase 2: bind to a Spark session, resolving each model's source
+  *   // bind to a Spark session, resolving each model's source
   *   // table to a DataFrame.
   *   val spark: SparkSession = ...
   *   val tables: Map[String, SemanticTable] = project.toSemanticTables(spark) { model =>

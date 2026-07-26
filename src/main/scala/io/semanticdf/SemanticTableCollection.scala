@@ -89,7 +89,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
     toDataFrame(spark).collect().toSeq.map(decoder.decode)
 
   /** Typed one-shot bundled query — `query(...)` that decodes into a
-    * Spark `Dataset[T]` (Phase E1, see `docs/phase-E-plan.md`).
+    * Spark `Dataset[T]` ().
     *
     * Builds the op tree, runs it, decodes every row into a `T` via the
     * implicit [[ResultDecoder[T]]], and returns a Spark `Dataset[T]`.
@@ -145,7 +145,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
       .as[T](encoder)
 
   // -------------------------------------------------------------------------
-  // Observability (Phase B)
+  // Observability
   // -------------------------------------------------------------------------
 
   /** Summarize the planned execution path without running anything.

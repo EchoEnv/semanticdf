@@ -88,7 +88,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
   implicit val instance: SemanticMetadataAdapter[NioPath, OssieProject] = this
 
 
-  /** Phase 1 — pure parse. Loads the YAML, walks both the canonical
+  /** Pure parse. Loads the YAML, walks both the canonical
     * shape (`semantic_model`) and the legacy ontology shape
     * (`ontology_mappings[*].semantic_model`), returns one
     * [[OssieProject]] per `semantic_model` entry. */
@@ -123,7 +123,7 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
     }
   }
 
-  /** Phase 2 — bind to Spark. Builds a `SemanticTable` per
+  /** Bind to Spark. Builds a `SemanticTable` per
     * `OssieDataset` and wires the relationships. The caller
     * supplies a `resolve(source)` callback that turns each
     * dataset's `source` string into a `DataFrame`. */

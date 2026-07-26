@@ -381,7 +381,7 @@ that omit the (potentially large) `okf_markdown` field.
 > `expr = d.exprString.getOrElse(d.expr.toString)`. Programmatic
 > constructions (e.g. `Dimension("foo", t => t("bar"))` without an
 > `exprString` hint) still fall back to `lambda.toString`, which prints
-> as opaque addresses like `io.semanticdf.YamlLoader$$$Lambda$.../1234`;
+> as opaque addresses like `io.semanticdf.adapters.YamlLoader$$$Lambda$.../1234`;
 > for those, callers should populate `exprString = Some("bar")` at
 > construction. In all cases, the LLM only ever needs the **name** to
 > construct queries; the `expr` field is informational and shown for

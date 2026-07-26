@@ -1,7 +1,6 @@
 # Feature Roadmap & Performance Plan
 
-**Status:** Living document — revised as features ship. Tier assignments reflect *current* gating, not original intent.
-**Last updated:** v0.1.17 shipped (audit log + result cache + perf/leak baseline + Ossie adapter + SDFAdapter + cache invalidation + review follow-ups). The wave closed 12 PRs since v0.1.16; the unifying entry point is now `loadSemanticTables[S, P](source, resolve)` with implicit `SDFAdapter`, `DbtAdapter`, and `OssieReader` instances. See [RELEASE.md](RELEASE.md) for the cumulative changelog. Pre-v0.1.17 entries below are kept for design history; the status markers on each item reflect its *current* gating. 8 templates shipping (`cli-consumer` added in v0.1.3); `sdf` CLI is the project's first real consumer.
+**Status:** Living document. Tier assignments reflect *current* gating, not original intent.
 
 This plan lists the features and performance improvements that would benefit semanticdf, organized by tier and gated on real consumer feedback. It does **not** commit to a timeline — every feature here should be re-evaluated after we have a first consumer.
 
@@ -277,10 +276,10 @@ mvn exec:java \
 **Solution:** A Scala adapter (`DbtManifestReader`) that reads dbt's `manifest.json` (v12+, the format `dbt parse` produces) and turns it into a `Map[String, SemanticTable]`.
 
 ```scala
-// Phase 1: read the manifest (pure, no Spark).
+// Read the manifest (pure, no Spark).
 val project = DbtManifestReader.read(Paths.get("target/manifest.json"))
 
-// Phase 2: bind to a Spark session via a caller-supplied resolver.
+// Bind to a Spark session via a caller-supplied resolver.
 val tables = DbtManifestReader.toSemanticTables(project, spark, sourceTable =>
   spark.read.format("parquet").load(s"/data/$sourceTable"))
 ```
@@ -880,14 +879,14 @@ These are tempting but premature without a real consumer.
 
 If we want a rough sequence to discuss:
 
-**Phase 1 (Tier 1):** Lazy measure eval, introspect tool, error messages, docs gen, semantic EXPLAIN. ~2 weeks total.
+**Tier 1 first:** Lazy measure eval, introspect tool, error messages, docs gen, semantic EXPLAIN. ~2 weeks total.
 
-**Phase 2 (Tier 2, gated on consumer signals):**
+**Tier 2 next, gated on consumer signals:**
 - Query cache — when consumer reports latency
 - Materialized views — when consumer identifies hot query
 - Query audit log — when consumer asks for compliance
 
-**Phase 3 (Tier 3+):** All gated on multiple consumers + real demand.
+**Tier 3+:** All gated on multiple consumers + real demand.
 
 **Skip:** Tier 4 features until a paying enterprise customer asks.
 
@@ -907,10 +906,3 @@ If we want a rough sequence to discuss:
 
 ---
 
-## Decision log
-
-- **2024-XX:** This document created. T1 features identified as universal wins. T2-T4 features gated on consumer feedback.
-- **2026-07:** v0.1.1 shipped (typed withMeasures + SortKey.asc/desc overloads; ExpressionValidator for dims/transforms/measures/filters; CalcExpr.validateReferences for calculated_measures). The YAML load-time validation pass is now complete — every `expr` field in the YAML model schema has consistent fail-fast validation with explicit, documented visibility rules. The library is at 294 tests on both Spark 3.5.8 and 4.1.1; MCP server at 35 tests.
-- **2026-07:** v0.1.2 shipped the `LazyTransformsOp` refactor (lazy compile contract for `withTransforms` on join models — no more `SparkSession.active` side effect).
-- **2026-07:** v0.1.3 shipped (`#54` Jackson Scala module registered for case-class JSON; `#55` shared `SparkFixture` across MCP specs; `#56` `OrderByParser` accepts Scala `Map`; `#57` `examples/cli-consumer/` standalone CLI for the REST API; `#58` `Dimension`/`Measure` carry `exprString` so `describe_model` surfaces real expressions; `#59` CLI README "What building this surfaced" section closed).
-- **2026-07:** Post-v0.1.3: PR `#61` (wiring `# WARN:` lines through `Introspect.handle()`; `field_inventory.skipped` agrees with `warnings.length`). PR `#62` (clean entity placeholder names in `Introspector.toJoinYaml` — bare `id` → `id_model:`, `_uuid`/`_code`/`_key` suffixes strip cleanly). Library at 329 tests; MCP at 72 tests. PR `#63` (docs refresh — version/test-count references + retire limitations fixed earlier). PR `#64` (`ResultDecoder.derive[T]` Scala 2 macro for case classes with primitive fields; closes the typeclass derivation deferral noted in `docs/phase-E-plan.md` §E1). Library at 335 tests; MCP at 72 tests; 407 total. PR `#65` (README + DESIGN + phase-E-plan + feature-roadmap docs surface `ResultDecoder.derive[T]`). PR `#66` (README intro rewrite — status banner replaced with educational intro). PR `#67` (T1 — new `docs/GLOSSARY.md` + `docs/DOCS_MAP.md` + README section reorder). PR `#68` (T2 — new `examples/README.md` central index with reader journeys). PR `#69` (T3-A — new `docs/guide.md` narrative walkthrough companion to DESIGN.md). PR `#70` (T3-B — expand `docs/guide.md` with worked examples per section + trim README Capabilities by relocating tutorial-length subsections to `guide.md`).

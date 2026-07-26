@@ -3,7 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions.{lit, when}
 
-/** Convenience helpers for calc-measure lambdas (Phase A hardening).
+/** Convenience helpers for calc-measure lambdas 
   *
   * Calc authors divide measures, and Spark's `/` operator returns `null` on divide-by-
   * zero (and on `x / null`). That is *correct SQL semantics*, but it silently propagates

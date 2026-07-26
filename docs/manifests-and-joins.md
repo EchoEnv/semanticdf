@@ -156,8 +156,8 @@ cover.
 
 ```scala
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
-import io.semanticdf.SemanticManifest.Identity
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest.Identity
 
 // Joined model — built via the public join_* API so the foundation
 // populates SemanticJoinOp.leftSide / rightSide.

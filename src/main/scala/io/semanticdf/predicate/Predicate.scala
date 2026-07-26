@@ -6,7 +6,7 @@ import io.semanticdf.FieldRef
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions.{array_contains, lit}
 
-/** Predicate AST for filter expressions (Phase 5, DESIGN §6.5).
+/** Predicate AST for filter expressions.
   *
   * A small algebra over filters: `Compare | In | IsNull | And | Or | Not`.
   * Every node compiles to a Spark [[Column]] via a [[SemanticScope]], and reports the

@@ -508,7 +508,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def withHint(strategy: String, params: Any*): SemanticTable =
     new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
-  /** One-shot bundled query (Phase 5 completion).
+  /** One-shot bundled query.
     *
     * Pure sugar over the fluent API — chains `where → groupBy → aggregate[having] →
     * orderBy → limit`. Useful for parameterized / programmatic query building where
@@ -540,7 +540,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
         "Cannot specify both 'timeGrain' and 'timeGrains'. Use 'timeGrain' for a single " +
           "grain applied to all time dimensions, or 'timeGrains' for per-dimension grains.")
     var t = this
-    // Phase 6: time_range first (filters rows by raw timestamp, pre-truncation).
+    // time_range first (filters rows by raw timestamp, pre-truncation).
     timeRange.foreach { case (start, end) =>
       val td = findTimeDimension(dimensions)
         .getOrElse(throw new IllegalArgumentException(
@@ -552,7 +552,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       val rangePred = Predicate.Compare("ge", td, start).and(Predicate.Compare("le", td, end))
       t = t.where(rangePred)
     }
-    // Phase 6: grain truncation overrides each time dimension's expr.
+    // grain truncation overrides each time dimension's expr.
     val grainMap: Map[String, String] =
       if (timeGrains.nonEmpty) timeGrains
       else timeGrain.map(g => timeDimensionsAmong(dimensions).map(_ -> g).toMap).getOrElse(Map.empty)
@@ -894,7 +894,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     // probing each measure's expr through a ClassificationScope, which needs a
     // DataFrame — and validate() is documented as compile-free. The runtime check
     // in SemanticAggregateOp.topologicalLayers raises "Calc dependency cycle"
-    // with a clear message when execute() runs; see the Phase 2a regression test.
+    // with a clear message when execute() runs; see the regression test.
 
     // 1. Filter references an unknown field (ERROR).
     allFilters.foreach { f =>

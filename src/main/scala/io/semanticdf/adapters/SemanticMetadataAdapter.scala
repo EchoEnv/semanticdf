@@ -43,11 +43,11 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
   * @tparam Project the format-specific intermediate produced by `parse` */
 trait SemanticMetadataAdapter[Source, Project] {
 
-  /** Phase 1 — pure parse. Reads the source, returns the format-specific
+  /** Pure parse. Reads the source, returns the format-specific
     * intermediate(s). No Spark involvement. */
   def parse(source: Source): Seq[Project]
 
-  /** Phase 2 — bind to Spark. Builds a `Map[Name, SemanticTable]`
+  /** Bind to Spark. Builds a `Map[Name, SemanticTable]`
     * across all projects, calling `resolve(source)` for each
     * dataset's `source` string to get a `DataFrame`. */
   def toSemanticTables(

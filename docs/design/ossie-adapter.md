@@ -191,7 +191,7 @@ means a real leak:
 - Error: file without `version` key
 
 The dbt test reuses the existing `minimal-manifest.json` fixture
-from PR #171.
+from earlier work.
 
 ## Usage
 

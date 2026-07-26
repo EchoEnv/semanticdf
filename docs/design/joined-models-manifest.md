@@ -27,8 +27,8 @@ All five BLOCK findings are now closed. None remain deferred.
 ## What works today
 ```scala
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
-import io.semanticdf.SemanticManifest.Identity
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest.Identity
 
 val joined = toSemanticTable(leftDf,  name = Some("customers"))
   .join_one(toSemanticTable(rightDf, name = Some("orders")),

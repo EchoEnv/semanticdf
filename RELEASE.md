@@ -1,5 +1,32 @@
 # Release notes
 
+## v0.2.0 — file organization + cluster-mode safety
+
+This release tightens the package layout, hardens the library for cluster-mode deployment, and introduces a cache auto-invalidation strategy keyed on model version. No behaviour change for existing batch or streaming terminals.
+
+### What changed
+
+- **Predicate DSL in its own sub-package.** The four predicate files (`Predicate`, `PredicateAst`, `PredicateAstWalker`, `PredicateOps`) form a tightly-coupled module — 52 inter-file references between them, more than every other group in the codebase. They are now in `io.semanticdf.predicate.*`. Consumers using FQN imports need to update.
+- **Manifest ingestion files consolidated.** `SemanticManifest`, `YamlLoader`, and `DbtManifestReader` are in `io.semanticdf.adapters.*` alongside the other format readers. Consumers using FQN imports need to update.
+- **Standalone public types split out of `SemanticTable.scala`.** `SortKey`, `ValidationResult`, `MeasureKind`, `JoinInfo`, and `SemanticFilter` now live in their own files. `SemanticTable.scala` is now just the class declaration.
+- **Cluster-mode safety.** `SemanticTable`, `AuditSink`, and `ResultCache` are now `Serializable`. The `PredicateAst.Predicate` cache is `@volatile @transient` so it survives `QueryRequest` capture but is dropped on round-trip. The `OssieReader` `BufferedReader` FD leak is closed.
+- **Cache auto-invalidation.** `AuditQueryRequest` and `AuditEvent` carry a `version: Int`. The cache key includes a length-prefixed `mv=<version>` segment; `InMemoryResultCache` invalidates by `(model, version)` pair. After a model rebuild with a new version, old cache entries for that model drop on the next read.
+- **Audit event version propagates** through the JSONL stdout sink and the MCP `audit_log` DTO.
+
+### Migration for FQN importers
+
+```diff
+-import io.semanticdf.Predicate
+-import io.semanticdf.Predicate.Compare
+-import io.semanticdf.PredicateOps
+-import io.semanticdf.SemanticManifest
+-import io.semanticdf.YamlLoader
++import io.semanticdf.predicate.{Predicate, Compare, PredicateOps}
++import io.semanticdf.adapters.{SemanticManifest, YamlLoader}
+```
+
+Wildcard imports (`import io.semanticdf._`) keep working because the sub-packages are sub-packages of `io.semanticdf`.
+
 ## v0.1.17 — audit log + result cache + Ossie adapter + SDFAdapter + review follow-ups
 
 Twelve PRs landed in this wave. The unifying entry point is now `loadSemanticTables[S, P](source, resolve)` with implicit `SDFAdapter`, `DbtAdapter`, and `OssieReader` instances. A single call works for any of the three supported metadata formats.
