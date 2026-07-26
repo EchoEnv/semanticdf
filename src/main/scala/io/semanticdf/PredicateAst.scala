@@ -41,7 +41,7 @@ object PredicateAst {
   /** Predicate operators the library actually produces. Adding a new
     * case here requires updating the `toColumn` mapping below and
     * the wire format. */
-  sealed abstract class Op(val code: String) {
+  sealed abstract class Op(val code: String) extends Product with Serializable {
     override def equals(o: Any): Boolean = o match {
       case other: Op => this eq other
       case _        => false
@@ -71,7 +71,7 @@ object PredicateAst {
     * (for AND / OR composition). The `side` is stored as a String
     * ("left" | "right") to keep the in-memory representation
     * trivially small and the wire format direct. */
-  sealed trait Operand
+  sealed trait Operand extends Product with Serializable
   object Operand {
     /** A column reference: which side of the join and which column
       * name. */
@@ -89,14 +89,24 @@ object PredicateAst {
     op:    Op,
     left:  Operand,
     right: Operand,
-  ) extends Operand {
+  ) extends Operand with Serializable {
     // Build a Spark Column from this AST node. Cached per (leftSide,
     // rightSide) pair to avoid re-walking on repeated calls. The cache
     // uses reference-equality on the pair (the keys are the actual
     // JoinSide instances passed by callers). The cache is small in
     // practice: at most a handful of entries per AST instance (the
     // typical case is 1).
-    @volatile private var cache: scala.collection.mutable.Map[(Any, Any), Column] = null
+    // `transient` so the cache is dropped on Java serialization
+    // (cluster mode, spark-submit). The cache is a driver-side
+    // memoization local to one `toColumn` invocation; rebuilding it on
+    // the next call costs one extra `Column` build. The value type
+    // `mutable.Map` is also not Serializable in the general case
+    // (Scala 2.13 mutable collections); `transient` makes the field
+    // disappear on round-trip and removes the static-type hazard.
+    // Regression: `SerializationSpec` for the broader serialization
+    // contract; this field's safety is documented in the field
+    // comment.
+    @volatile @transient private var cache: scala.collection.mutable.Map[(Any, Any), Column] = null
 
     /** Build the column for the given per-side scopes. Cache check is
       * reference-equality on the pair, so callers with the same scopes
