@@ -1,6 +1,8 @@
 package io.semanticdf.adapters
 
-import io.semanticdf.{Dimension, FlightsFixture, Measure, SemanticManifest, SemanticTable, SparkSessionFixture, toSemanticTable}
+import io.semanticdf.adapters.SemanticManifest
+
+import io.semanticdf.{Dimension, FlightsFixture, Measure, SemanticTable, SparkSessionFixture, toSemanticTable}
 import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
 
 import org.apache.spark.sql.{Row, SparkSession}

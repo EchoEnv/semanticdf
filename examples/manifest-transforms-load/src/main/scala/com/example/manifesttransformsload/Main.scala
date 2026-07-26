@@ -1,8 +1,8 @@
 package com.example.manifesttransformsload
 
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
-import io.semanticdf.SemanticManifest.Identity
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest.Identity
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.functions._

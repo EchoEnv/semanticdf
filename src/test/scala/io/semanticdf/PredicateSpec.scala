@@ -1,10 +1,13 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+
 import java.io.{File, PrintWriter}
 import org.apache.spark.sql.DataFrame
 import org.scalatest.funsuite.AnyFunSuite
-import io.semanticdf.Predicate.Compare
-import Predicate._
+import io.semanticdf.predicate.Predicate.Compare
+import io.semanticdf.predicate._
+import io.semanticdf.predicate.Predicate._
 
 /** Regression tests for the sealed comparison-predicate hierarchy.
   *

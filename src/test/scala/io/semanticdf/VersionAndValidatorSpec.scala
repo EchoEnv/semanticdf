@@ -1,5 +1,8 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+import io.semanticdf.predicate._
+
 import java.io.{File, PrintWriter}
 import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
@@ -60,13 +63,13 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
   test("version is preserved through where()") {
     val m = versionedModel
     assert(m.version == 2)
-    val m2 = m.where(io.semanticdf.Predicate.Compare("eq", "carrier", "AA"))
+    val m2 = m.where(io.semanticdf.predicate.Predicate.Compare("eq", "carrier", "AA"))
     assert(m2.version == 2, s"where() dropped version, got ${m2.version}")
   }
 
   test("version is preserved through having()") {
     val m = versionedModel
-    val m2 = m.having(io.semanticdf.Predicate.Compare("gt", "flight_count", 5))
+    val m2 = m.having(io.semanticdf.predicate.Predicate.Compare("gt", "flight_count", 5))
     assert(m2.version == 2, s"having() dropped version, got ${m2.version}")
   }
 
@@ -100,7 +103,7 @@ class VersionAndValidatorSpec extends AnyFunSuite with SparkSessionFixture with 
   // --- 2. requireRoot wrapper handling --------------------------------------
 
   test("requireRoot throws a clear error for SemanticFilterOp root") {
-    val m = versionedModel.where(io.semanticdf.Predicate.Compare("eq", "carrier", "AA"))
+    val m = versionedModel.where(io.semanticdf.predicate.Predicate.Compare("eq", "carrier", "AA"))
     // Inner join would call requireRoot on a FilterOp-wrapped model; we
     // exercise it via the public DSL: join_one on a filtered left side.
     val ex = intercept[IllegalArgumentException] {

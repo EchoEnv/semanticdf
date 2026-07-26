@@ -1,4 +1,4 @@
-package io.semanticdf
+package io.semanticdf.predicate
 
 import scala.jdk.CollectionConverters._
 

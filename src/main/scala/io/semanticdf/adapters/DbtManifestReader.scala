@@ -1,4 +1,6 @@
-package io.semanticdf
+package io.semanticdf.adapters
+
+import io.semanticdf._
 
 import com.fasterxml.jackson.databind.{DeserializationFeature, ObjectMapper}
 import com.fasterxml.jackson.module.scala.DefaultScalaModule

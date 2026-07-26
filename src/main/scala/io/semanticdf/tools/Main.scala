@@ -2,7 +2,7 @@ package io.semanticdf.tools
 
 import org.apache.spark.sql.SparkSession
 
-import io.semanticdf.{ManifestParsingException, SemanticManifest, YamlLoader}
+import io.semanticdf.adapters.{ManifestParsingException, SemanticManifest, YamlLoader}
 
 
 /** CLI entry point for semanticdf tooling.

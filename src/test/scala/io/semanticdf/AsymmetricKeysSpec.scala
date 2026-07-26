@@ -1,4 +1,6 @@
 package io.semanticdf
+import io.semanticdf.adapters._
+import io.semanticdf.predicate._
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.apache.spark.sql.{Row, SparkSession}

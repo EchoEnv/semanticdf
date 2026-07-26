@@ -1,6 +1,6 @@
 package io.semanticdf.adapters
 
-import io.semanticdf.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest
 import io.semanticdf.SemanticTable
 
 import com.fasterxml.jackson.databind.ObjectMapper

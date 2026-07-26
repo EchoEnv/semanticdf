@@ -1,7 +1,8 @@
 package io.semanticdf.examples
 
 import io.semanticdf._
-import YamlLoader._
+import io.semanticdf.adapters.YamlLoader._
+import io.semanticdf.adapters.YamlLoader
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._

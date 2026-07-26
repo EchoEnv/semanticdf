@@ -1,4 +1,6 @@
-package io.semanticdf
+package io.semanticdf.predicate
+
+import io.semanticdf._
 
 import org.apache.spark.sql.Column
 

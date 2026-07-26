@@ -1,7 +1,7 @@
 package io.semanticdf.mcp
 
 import io.semanticdf.SemanticTable
-import io.semanticdf.YamlLoader
+import io.semanticdf.adapters.YamlLoader
 import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.SparkSession
 import org.yaml.snakeyaml.Yaml

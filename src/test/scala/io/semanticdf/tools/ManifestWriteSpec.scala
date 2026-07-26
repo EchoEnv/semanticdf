@@ -2,8 +2,8 @@ package io.semanticdf.tools
 
 import org.scalatest.funsuite.AnyFunSuite
 
-import io.semanticdf.SemanticManifest
-import io.semanticdf.YamlLoader
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters.YamlLoader
 import io.semanticdf.tools.Main.CliParser
 
 import java.io.{File, PrintWriter}

@@ -1,6 +1,6 @@
 package io.semanticdf.perf
 
-import io.semanticdf.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest
 import io.semanticdf.adapters.SDFAdapter
 
 import org.scalatest.funsuite.AnyFunSuite

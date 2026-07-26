@@ -1,5 +1,7 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+
 import java.io.{File, PrintWriter}
 
 import org.apache.spark.sql.DataFrame

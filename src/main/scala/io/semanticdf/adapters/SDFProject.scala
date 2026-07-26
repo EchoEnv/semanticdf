@@ -12,8 +12,8 @@ package io.semanticdf.adapters
   *     are the per-side tables to load
   *
   * The JSON text is preserved so the existing
-  * [[io.semanticdf.SemanticManifest.fromJso[[SDFAdapter.pars[[SDFAdapter.parse]]]] and
-  * [[io.semanticdf.SemanticManifest.fromJoinedJso[[SDFAdapter.pars[[SDFAdapter.parse]]]] methods can
+  * [[io.semanticdf.adapters.SemanticManifest.fromJso[[SDFAdapter.pars[[SDFAdapter.parse]]]] and
+  * [[io.semanticdf.adapters.SemanticManifest.fromJoinedJso[[SDFAdapter.pars[[SDFAdapter.parse]]]] methods can
   * do the actual reconstruction — the adapter is a delegation layer,
   * not a re-implementation. */
 final case class SDFProject(

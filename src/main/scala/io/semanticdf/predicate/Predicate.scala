@@ -1,4 +1,7 @@
-package io.semanticdf
+package io.semanticdf.predicate
+
+import io.semanticdf.{SemanticField, SemanticScope}
+import io.semanticdf.FieldRef
 
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions.{array_contains, lit}

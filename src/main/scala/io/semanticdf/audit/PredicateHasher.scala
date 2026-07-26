@@ -1,6 +1,6 @@
 package io.semanticdf.audit
 
-import io.semanticdf.Predicate
+import io.semanticdf.predicate.Predicate
 
 /** Stable, canonical hash of a `Predicate` tree.
   *

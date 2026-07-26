@@ -243,7 +243,7 @@ object Main {
     * older server versions that don't carry the `exprString` field. Newer
     * servers (≥ PR feat/describe-model-expr-string) emit the original YAML
     * expression string verbatim, so this is a no-op in the common case —
-    * we keep it for safety. e.g. `io.semanticdf.YamlLoader$$$Lambda$...`
+    * we keep it for safety. e.g. `io.semanticdf.adapters.YamlLoader$$$Lambda$...`
     * is human-unreadable; masking it keeps the table legible when run
     * against a pre-PR server. */
   private def maskExpr(s: String): String =

@@ -1,4 +1,6 @@
 package io.semanticdf
+import io.semanticdf.adapters._
+import io.semanticdf.predicate._
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window

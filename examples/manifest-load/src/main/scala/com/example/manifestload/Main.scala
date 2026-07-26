@@ -1,6 +1,6 @@
 package com.example.manifestload
 
-import io.semanticdf.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest
 
 import scala.io.Source
 

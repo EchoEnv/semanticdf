@@ -1,5 +1,9 @@
 package com.example.hospital
 
+import io.semanticdf.predicate._
+
+import io.semanticdf.adapters._
+
 import io.semanticdf._
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.expressions.Window

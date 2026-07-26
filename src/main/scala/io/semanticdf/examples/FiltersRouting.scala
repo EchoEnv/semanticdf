@@ -3,7 +3,7 @@ package io.semanticdf.examples
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit, sum}
 import io.semanticdf._
-import io.semanticdf.Predicate._
+import io.semanticdf.predicate.Predicate._
 
 /** Example 04 — Filters: WHERE / HAVING auto-routing
   *

@@ -1,7 +1,7 @@
 package io.semanticdf.adapters
 
-import io.semanticdf.DbtManifestReader
-import io.semanticdf.DbtManifestReader.DbtProject
+import io.semanticdf.adapters.DbtManifestReader
+import io.semanticdf.adapters.DbtManifestReader.DbtProject
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
 
@@ -9,7 +9,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
   * for dbt's v12+ manifest shape.
   *
   * The adapter is a thin wrapper over the existing
-  * [[io.semanticdf.DbtManifestReader]]: same parsing logic, same
+  * [[io.semanticdf.adapters.DbtManifestReader]]: same parsing logic, same
   * two-phase API, same `DbtProject` intermediate. The wrapper exposes
   * dbt as a `SemanticMetadataAdapter` instance so the unified
   * `loadSemanticTables(...)` entry point works.

@@ -1,6 +1,6 @@
 package io.semanticdf.tools
 
-import io.semanticdf.Predicate
+import io.semanticdf.predicate.Predicate
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers

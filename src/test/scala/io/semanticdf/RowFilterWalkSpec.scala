@@ -1,5 +1,8 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+import io.semanticdf.predicate._
+
 import java.io.{File, PrintWriter}
 import org.apache.spark.sql.DataFrame
 import org.scalatest.funsuite.AnyFunSuite
@@ -141,7 +144,7 @@ class RowFilterWalkSpec extends AnyFunSuite with SparkSessionFixture with Flight
     // Layered query-time filter on top of the pre-join row filter.
     // Before the fix: resolveModel threw on SemanticRowFilterOp.
     val m = filteredModel
-    val rows = m.where(io.semanticdf.Predicate.Compare("eq", "carrier", "AA"))
+    val rows = m.where(io.semanticdf.predicate.Predicate.Compare("eq", "carrier", "AA"))
       .groupBy("origin")
       .aggregate("flight_count")
       .orderBy("origin")

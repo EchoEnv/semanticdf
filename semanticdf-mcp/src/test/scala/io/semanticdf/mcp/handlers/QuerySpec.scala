@@ -1,6 +1,8 @@
 package io.semanticdf.mcp.handlers
 
-import io.semanticdf.{Dimension, Measure, Predicate, toSemanticTable}
+import io.semanticdf.predicate._
+
+import io.semanticdf.{Dimension, Measure, toSemanticTable}
 import io.semanticdf.mcp.{DataConfig, ErrorDetail, ErrorEnvelope, Models}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions.{count, lit}

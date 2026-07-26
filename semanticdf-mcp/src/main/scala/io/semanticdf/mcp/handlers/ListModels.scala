@@ -1,5 +1,7 @@
 package io.semanticdf.mcp.handlers
 
+import io.semanticdf.adapters._
+
 import io.modelcontextprotocol.json.McpJsonMapper
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification
 import io.modelcontextprotocol.spec.McpSchema.{CallToolRequest, Tool}

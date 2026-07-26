@@ -1,6 +1,6 @@
 package com.example.dbtreader
 
-import io.semanticdf.DbtManifestReader
+import io.semanticdf.adapters.DbtManifestReader
 
 import org.apache.spark.sql.SparkSession
 
@@ -64,7 +64,7 @@ object Main {
       orders.query(
         measures   = Seq("total_revenue", "order_count"),
         dimensions = Seq("order_id"),
-        where      = Some(io.semanticdf.Predicate.Compare.Eq("customer_id", 100)),
+        where      = Some(io.semanticdf.predicate.Predicate.Compare.Eq("customer_id", 100)),
         orderBy    = Seq(io.semanticdf.SortKey.asc("order_id")),
         limit      = Some(10),
       ).toDataFrame(spark).show(truncate = false)

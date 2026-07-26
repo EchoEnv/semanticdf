@@ -1,5 +1,7 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+
 import org.apache.spark.sql.functions._
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers

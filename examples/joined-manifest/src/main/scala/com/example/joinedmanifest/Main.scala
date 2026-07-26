@@ -1,8 +1,12 @@
 package com.example.joinedmanifest
 
+import io.semanticdf.predicate._
+
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
-import io.semanticdf.SemanticManifest.Identity
+import io.semanticdf.adapters._
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters._
+import io.semanticdf.adapters.SemanticManifest.Identity
 
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
