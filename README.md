@@ -48,7 +48,9 @@ guarantee that they're asking for the right thing.
   Cache keys are stable SHA-256s of the request shape
   (model + measures + dimensions + where + having + orderBy + limit),
   so semantically-equivalent queries share a cache entry. Drop all
-  entries for a model in one call via `cache.invalidateModel("orders")`.
+  entries for a model in one call via `cache.invalidateModel("orders")`,
+  or set a per-model `version: Int` and let the cache auto-evict stale
+  entries on the next read after the model rebuilds.
 - **Per-query audit log for LLM-agent observability.** Opt in with
   `.withAuditSink(AuditSink.inMemory())`; every `query()` emits an
   `AuditEvent` recording the model, request shape, elapsed time, row
@@ -61,6 +63,10 @@ guarantee that they're asking for the right thing.
   and `SDFAdapter` (the cross-process `SemanticManifest` JSON).
   Future formats plug in as a new `object` and inherit the
   `loadSemanticTables(source, resolve)` entry point.
+- **Cluster-mode safe.** A `SemanticTable` is Java-serializable, so capturing it in a closure
+  (UDF, broadcast variable, `spark-submit --master yarn|k8s`) round-trips through
+  Spark's deploy mode without `NotSerializableException`. The internal op tree,
+  dimension/measure lambdas, and cache key derivation all cross the JVM boundary safely.
 
 ## When (and when not) to use it
 
@@ -444,7 +450,7 @@ val rows = st.groupByDimensions(carrier)
 // Typed predicate (operator kind is in the method name, not a runtime string):
 val highPax = st.where(Predicate.Gt(pax, 600)).execute(spark)
 
-// Typed measure declaration (v0.1.1) — name read from the SemanticMeasure witness:
+// Typed measure declaration — name read from the SemanticMeasure witness:
 import org.apache.spark.sql.functions.row_number
 import org.apache.spark.sql.expressions.Window
 val enriched = st.withMeasures(pax, t => row_number().over(Window.partitionBy(t("carrier")).orderBy(t("total_passengers").desc)))
@@ -547,7 +553,7 @@ for the worked example with sample output.
 | Method | Description |
 |---|---|
 | `toSemanticTable(df, name?)` | Construct a semantic model from a base `DataFrame`. |
-| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(measure, expr)` overload accepts a `SemanticMeasure` witness directly via subtyping (v0.1.1). |
+| `.withDimensions(...)` / `.withMeasures(...)` | Immutable model extension. Typed `withMeasures(measure, expr)` overload accepts a `SemanticMeasure` witness directly via subtyping. |
 | `.withTransforms(transforms*)` | Per-row logic (e.g. `datediff`, `case when`) applied to source data at model-load. Mirrors the YAML `transforms:` block. |
 | `.withRowFilter(name, expr, description: Option[String], metadata: Map[String, String])` | Attach a pre-join row filter (Spark SQL string) declared in the model. Mirrors the YAML `filters:` block. `SparkFilterValidator` enforces pre-join column visibility (source + transforms; joined-side columns not visible) at load time. |
 | `.version(v: Int)` | Set the model's version (forward-compat hint for consumers). `table.version` reads the current value (0 = unversioned). |
@@ -559,7 +565,7 @@ for the worked example with sample output.
 | `Predicate.Eq/Ne/Gt/Ge/Lt/Le/in/notIn/isNull/isNotNull[F](ref, v)` | Typed predicate factories — `ref: FieldRef[F]` with `SemanticField[F]` witness. |
 | `Compare.Gt(field, value)` / `Compare.Eq(field, value)` / etc. | Sealed comparison ADT — operator kind (Eq/Ne/Lt/Le/Gt/Ge) is in the type, not a string. `Compare.apply("gt", ...)` legacy factory is preserved. |
 | `.atTimeGrain(dim, grain)` | Truncate a time dimension for grouping. |
-| `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses (v0.1.1). |
+| `.orderBy(keys...)` / `.limit(n)` | Terminal ordering / top-N. `SortKey.asc(ref)` / `SortKey.desc(ref)` accept typed `SemanticField` witnesses. |
 | `.query(measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)` | One-shot bundle. |
 | `.queryAs[T](measures, dimensions?, where?, having?, orderBy?, limit?, timeGrain?, timeGrains?, timeRange?)(implicit spark, decoder: ResultDecoder[T], encoder: Encoder[T]): Dataset[T]` | Typed one-shot bundle. Same shape as `.query` but returns a `Dataset[T]`, decoding rows into a case class via the implicit `ResultDecoder[T]` (use `ResultDecoder.derive[T]` for the case-class witness) and `Encoder[T]` (use `import spark.implicits._`). Compile-time type-safety on result field names and types. |
 | `Measure.typed[T](name: String, expr: TypedSemanticScope => TypedColumn[T]): Measure` | Typed measure factory. Same shape as the `Measure` case class but the lambda's return type is type-checked at compile time via the phantom `T`. Compose with `TypedArithmetic.{divide, plus, minus, multiply}` for type-checked arithmetic. The typed form lowers to a plain `Measure` at runtime — works with `withMeasures(...)` as usual. Zero runtime overhead, no memory leak. |
