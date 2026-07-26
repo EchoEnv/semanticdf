@@ -4,7 +4,7 @@ title: Customers
 description: Customer master data with signup dates and city
 status: published
 resource: file://examples/joined-manifest-split/models/customers.yml
-timestamp: 2026-07-22T10:30:53Z
+timestamp: 2026-07-22T11:28:55Z
 tags: [semantic-table]
 ---
 

@@ -5,7 +5,7 @@ version: 1
 description: ICD-10 diagnosis reference table
 status: published
 resource: file://examples/joined-manifest-e2e/models/diagnoses.yml
-timestamp: 2026-07-24T09:02:09Z
+timestamp: 2026-07-24T09:14:46Z
 tags: [semantic-table]
 ---
 
