@@ -1,7 +1,5 @@
 package io.semanticdf.cache
 
-import scala.collection.mutable
-
 /** Bounded in-memory LRU cache, backed by `java.util.LinkedHashMap`
   * in access-order mode. On overflow, the least-recently-accessed
   * entry is evicted.
@@ -16,7 +14,18 @@ import scala.collection.mutable
   * `O(num_columns × column_type_size)`. For most analytical
   * workloads (hundreds of rows, tens of columns) the per-entry
   * cost is KB-scale; for high-cardinality workloads it can be
-  * hundreds of MB per entry. Pick `maxEntries` accordingly. */
+  * hundreds of MB per entry. Pick `maxEntries` accordingly.
+  *
+  * The internal maps are `java.util.HashMap` / `HashSet` (which
+  * are `Serializable`) rather than `scala.collection.mutable.*`
+  * (which are not). This is required for cluster-mode safety:
+  * when a `SemanticTable` is captured in a closure and shipped
+  * to executors, the `resultCache` field's stored data must
+  * round-trip through Java serialization. The cache's *contents*
+  * are driver-side (the `mutable.HashMap` holds query results in
+  * memory); in cluster mode the cache should typically be empty
+  * per executor. We still make it Serializable so the cache can
+  * cross JVM boundaries when needed. */
 private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCache {
 
   /** One entry in the cache: the cached result + the (model, version) tag
@@ -29,7 +38,8 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
 
   // `accessOrder = true` makes the LinkedHashMap reorder entries on
   // every get/put so the eldest entry is the LRU one. We override
-  // `removeEldestEntry` to evict on overflow.
+  // `removeEldestEntry` to evict on overflow. (java.util.LinkedHashMap
+  // IS Serializable, so this is cluster-mode safe.)
   private val map = new java.util.LinkedHashMap[String, Entry](
     /* initialCapacity */ 16,
     /* loadFactor      */ 0.75f,
@@ -54,21 +64,22 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   /** Sidecar index from (model, version) to the set of cache keys
     * tagged with that model+version. Used by both [[invalidateModel]]
     * (walks all versions) and [[invalidateByModelAndVersion]] (single
-    * lookup). Lazily maintained; entries that were stored without a
-    * model tag (`put` without a model) are not in this map.
+    * lookup). Lazily maintained; entries that were stored without a model
+    * tag (`put` without a model) are not in this map.
     *
     * Memory cost: one entry per distinct (model, version) pair that
-    * has been put with a tag. */
-  private val byModelAndVersion = mutable.HashMap.empty[(String, Int), mutable.Set[String]]
+    * has been put with a tag. `java.util.HashMap` / `HashSet` are
+    * Serializable (the Scala `mutable.*` variants are not). */
+  private val byModelAndVersion = new java.util.HashMap[(String, Int), java.util.Set[String]]()
 
   /** Helper: remove `key` from the sidecar at (model, version).
     * Drops the sidecar entry entirely if its key-set becomes empty. */
   private def removeFromSidecar(key: String, model: String, version: Int): Unit = {
-    byModelAndVersion.get((model, version)) match {
-      case Some(set) =>
-        set.remove(key)
-        if (set.isEmpty) byModelAndVersion.remove((model, version))
-      case None =>
+    val mv = (model, version)
+    val set = byModelAndVersion.get(mv)
+    if (set != null) {
+      set.remove(key)
+      if (set.isEmpty) byModelAndVersion.remove(mv)
     }
   }
 
@@ -93,26 +104,34 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     // `put` triggers `removeEldestEntry` (synchronous, on this thread).
     map.put(key, Entry(value, model, version))
     if (model.nonEmpty) {
-      byModelAndVersion
-        .getOrElseUpdate((model, version), mutable.Set.empty)
-        .add(key)
+      val mv = (model, version)
+      val existing = byModelAndVersion.get(mv)
+      val set =
+        if (existing != null) existing
+        else {
+          val s = new java.util.HashSet[String]()
+          byModelAndVersion.put(mv, s)
+          s
+        }
+      set.add(key)
     }
   }
 
   override def invalidateModel(name: String): Int = lock.synchronized {
-    // Collect all keys across this model's versions, then drop them
-    // from both the cache and the sidecar. The walk is over the
-    // sidecar's distinct (model, version) entries, not over the
-    // cache's per-key entries — so O(distinct_versions) which is
-    // typically 1–3.
-    val collected = mutable.Set.empty[String]
-    byModelAndVersion.toList.foreach { case ((m, _), keys) =>
-      if (m == name) collected ++= keys
+    // Walk the sidecar once to collect keys for matching model across all versions,
+    // then remove them from both the cache and the sidecar. O(distinct-versions
+    // for this model); in practice models typically have 1–3 versions.
+    import scala.jdk.CollectionConverters._
+    val matching = scala.collection.mutable.Set.empty[String]
+    val it = byModelAndVersion.entrySet().iterator()
+    while (it.hasNext) {
+      val e = it.next()
+      if (e.getKey._1 == name) matching ++= e.getValue.asScala
     }
-    if (collected.isEmpty) 0
+    if (matching.isEmpty) 0
     else {
-      val removed = collected.size
-      collected.foreach { k =>
+      val removed = matching.size
+      matching.foreach { k =>
         val e = map.remove(k)
         if (e != null && e.model.nonEmpty) {
           removeFromSidecar(k, e.model, e.version)
@@ -123,19 +142,13 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
-    byModelAndVersion.remove((name, version)) match {
-      case Some(keys) if keys.nonEmpty =>
-        val removed = keys.size
-        keys.foreach { k =>
-          val e = map.remove(k)
-          if (e != null && e.model.nonEmpty) {
-            // Best-effort sidecar cleanup; the entry is already gone
-            // from the sidecar by virtue of `remove` above.
-            ()
-          }
-        }
-        removed
-      case _ => 0
+    val set = byModelAndVersion.remove((name, version))
+    if (set == null || set.isEmpty) 0
+    else {
+      val removed = set.size()
+      val it = set.iterator()
+      while (it.hasNext) map.remove(it.next())
+      removed
     }
   }
 

@@ -14,7 +14,7 @@ package io.semanticdf.audit
   *     Catch and log internally; never propagate.
   *   - Cheap to construct. Sinks are typically shared across the
   *     lifetime of a SparkSession. */
-trait AuditSink {
+trait AuditSink extends Serializable {
 
   /** Record one event. Must not throw. */
   def emit(event: AuditEvent): Unit
