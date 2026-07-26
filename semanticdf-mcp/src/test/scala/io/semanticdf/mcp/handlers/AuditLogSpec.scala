@@ -116,6 +116,11 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
     val e = data.events.head
     assert(e.ts == "2026-07-24T10:00:00Z")
     assert(e.model == "flights")
+    // PR #200 regression: the wire DTO carries the model version.
+    // (The event above was constructed with `version = 0` because the
+    // old test didn't pin a value. PR #200 added it; this assertion
+    // locks in the wire propagation.)
+    assert(e.version == 0, s"wire-side version default must be 0; got ${e.version}")
     assert(e.measures == List("flight_count"))
     assert(e.dimensions == List("carrier"))
     assert(e.where_hash == Some("abc123"))
@@ -124,6 +129,29 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
     assert(e.elapsed_ms == 42L)
     assert(e.status == "ok")
     assert(e.error == None)
+  }
+
+  test("handle: AuditEvent.version is propagated to the wire (PR follow-up)") {
+    // Regression for PR #200 (carry `version` to all wire surfaces).
+    // Without this, downstream consumers (MCP `audit_log` tool)
+    // wouldn't see the model version.
+    val sink = AuditSink.inMemory()
+    sink.emit(AuditEvent(
+      ts         = Instant.now(),
+      model      = "flights",
+      version    = 7,        // explicit non-default
+      measures   = Seq("flight_count"),
+      dimensions = Seq("carrier"),
+      whereHash  = None,
+      havingHash = None,
+      rowCount   = 3L,
+      elapsedMs  = 5L,
+      status     = "ok",
+    ))
+    val e = new AuditLog(sink).handle(AuditLogRequest())
+      .data.asInstanceOf[AuditLog.Data].events.head
+    assert(e.version == 7,
+      s"wire-side AuditLog.Event must carry the model version; got ${e.version}")
   }
 
   test("handle: error event carries the error string") {

@@ -300,6 +300,52 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
     assert(ex.getMessage == "fatal audit sink")
   }
 
+  test("JsonlStdoutSink: emits an event whose JSON payload includes the model version") {
+    // The standing recommendation says the audit log is the natural
+    // trigger for downstream invalidation consumers. For that to be
+    // true at the wire level, the JSONL stdout sink must include the
+    // model version. This test wires a custom JUL handler to capture
+    // the sink's output and verify the payload.
+    import java.util.logging.{Handler, LogRecord, Logger}
+
+    val log = Logger.getLogger("io.semanticdf.audit.jsonl")
+    val captured = scala.collection.mutable.ArrayBuffer.empty[LogRecord]
+    val handler = new Handler {
+      override def publish(record: LogRecord): Unit = synchronized { captured += record }
+      override def flush(): Unit = ()
+      override def close(): Unit = ()
+    }
+    log.addHandler(handler)
+    try {
+      val sink = AuditSink.JsonlStdout
+      // Build an event with a non-default version.
+      val event = AuditEvent(
+        ts         = java.time.Instant.parse("2026-07-26T11:00:00Z"),
+        model      = "flights",
+        version    = 42,
+        measures   = Seq("flight_count"),
+        dimensions = Seq("carrier"),
+        whereHash  = Some("abc123"),
+        havingHash = None,
+        rowCount   = 3L,
+        elapsedMs  = 42L,
+        status     = "ok",
+      )
+      sink.emit(event)
+      assert(captured.length == 1, s"expected exactly 1 log record; got ${captured.length}")
+      val json = captured.head.getMessage
+      // The wire surface must carry the model version so operators
+      // tail-ing the JSONL can correlate events with model versions.
+      assert(json.contains(""""version":42"""),
+        s"JSONL output must include the model version; got: $json")
+      // Regression: the existing fields still arrive.
+      assert(json.contains(""""model":"flights""""), s"model missing: $json")
+      assert(json.contains(""""row_count":3"""), s"row_count missing: $json")
+    } finally {
+      log.removeHandler(handler)
+    }
+  }
+
   test("query + toDataFrame: no sink = no audit (default off, zero overhead)") {
     // Default model has no sink; toDataFrame must still succeed.
     val df = baseModel.query(

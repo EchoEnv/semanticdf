@@ -70,6 +70,7 @@ final class AuditLog(sink: io.semanticdf.audit.AuditSink) {
   private def toWire(e: AuditEvent): AuditLog.Event = AuditLog.Event(
     ts          = e.ts.toString,
     model       = e.model,
+    version     = e.version,
     measures    = e.measures.toList,
     dimensions  = e.dimensions.toList,
     where_hash  = e.whereHash,
@@ -106,6 +107,10 @@ object AuditLog {
   final case class Event(
       ts:           String,
       model:        String,
+      /** Model version that ran this query (v0.2.0+). Wire-side addition
+        * so agents can correlate audit events with model versions.
+        * Defaults to 0 (pre-versioning era). */
+      version:      Int,
       measures:     List[String],
       dimensions:   List[String],
       where_hash:   Option[String],

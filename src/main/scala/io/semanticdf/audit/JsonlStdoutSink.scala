@@ -49,6 +49,12 @@ private[audit] final class JsonlStdoutSink extends AuditSink {
       val payload = scala.collection.mutable.LinkedHashMap[String, Any](
         "ts"         -> tsFormatter.format(event.ts),
         "model"      -> event.model,
+        // `version` is the model version that ran this query (added in
+        // v0.2.0). Defaults to 0 (pre-versioning era). Forward-compatible
+        // addition; downstream operators parsing this JSONL with strict
+        // schemas may need to extend theirs (any reasonable parser ignores
+        // unknown keys). See `docs/design/audit-log.md`.
+        "version"    -> event.version,
         "measures"   -> event.measures.toList,
         "dimensions" -> event.dimensions.toList,
         "where_hash"   -> event.whereHash.orNull,
