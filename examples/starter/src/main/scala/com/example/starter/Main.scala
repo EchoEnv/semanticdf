@@ -1,6 +1,7 @@
 package com.example.starter
 
 import io.semanticdf._
+import io.semanticdf.result.ResultDecoder
 import org.apache.spark.sql.{Dataset, SparkSession}
 import org.apache.spark.sql.expressions.Window
 import org.apache.spark.sql.functions.{col, current_timestamp, lag, lit, row_number}
