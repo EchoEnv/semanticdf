@@ -45,7 +45,7 @@ package io.semanticdf.cache
   * Some), and the time-grain / time-range / per-dimension-grains
   * fields (post-v0.1.17). Hashing is microseconds; not a hot-path
   * concern. */
-trait ResultCache {
+trait ResultCache extends Serializable {
 
   /** Look up a cached result. Returns `None` on miss; the caller
     * is responsible for executing the query and calling [[put]]. */

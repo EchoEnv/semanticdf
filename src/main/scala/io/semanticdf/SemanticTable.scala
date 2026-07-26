@@ -159,7 +159,7 @@ final class SemanticTable private[semanticdf] (
       * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
       * bypass the cache. */
     val resultCache: Option[io.semanticdf.cache.ResultCache] = None,
-) extends SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
+) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }
 
 

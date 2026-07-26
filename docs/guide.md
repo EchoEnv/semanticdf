@@ -716,7 +716,7 @@ limit, timeGrain), but the result is a `Dataset[T]` decoded from
 the rows via the implicit `ResultDecoder[T]` + Spark `Encoder[T]`.
 
 ```scala
-import io.semanticdf.ResultDecoder
+import io.semanticdf.result.ResultDecoder
 import org.apache.spark.sql.SparkSession
 
 implicit val spark: SparkSession =
@@ -750,7 +750,7 @@ Notes:
   rely on the default measure name).
 - For the macro: bring `ResultDecoder.derive[T]` into scope via
   `import scala.language.experimental.macros` at the call site, or
-  import `io.semanticdf.ResultDecoder._` once and let the implicit
+  import `io.semanticdf.result.ResultDecoder._` once and let the implicit
   resolution find it.
 - The case class must be top-level (not nested inside a method or
   class) for Spark's `newProductEncoder` to find a no-arg constructor.
