@@ -46,7 +46,7 @@ class LeakSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture 
     val now  = Instant.now()
     for (i <- 0 until 1000) {
       sink.emit(AuditEvent(
-        ts = now.plusMillis(i.toLong), model = s"m$i",
+        ts = now.plusMillis(i.toLong), model = s"m$i", version = 0,
         measures = Nil, dimensions = Nil,
         whereHash = None, havingHash = None,
         rowCount = 0, elapsedMs = 0, status = "ok",

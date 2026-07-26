@@ -181,7 +181,7 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
   test("NoOp sink: accepts events without storing") {
     val sink = AuditSink.NoOp
     sink.emit(AuditEvent(
-      ts = java.time.Instant.now(), model = "x",
+      ts = java.time.Instant.now(), model = "x", version = 0,
       measures = Nil, dimensions = Nil,
       whereHash = None, havingHash = None,
       rowCount = 0, elapsedMs = 0, status = "ok"))
@@ -191,9 +191,9 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
   test("InMemory sink: retains events in arrival order") {
     val sink = AuditSink.inMemory(maxEvents = 10).asInstanceOf[InMemoryAuditSink]
     val now  = java.time.Instant.now()
-    sink.emit(AuditEvent(now, "m1", Nil, Nil, None, None, 0, 0, "ok"))
-    sink.emit(AuditEvent(now, "m2", Nil, Nil, None, None, 0, 0, "ok"))
-    sink.emit(AuditEvent(now, "m3", Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m1", 0, Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m2", 0, Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m3", 0, Nil, Nil, None, None, 0, 0, "ok"))
     val snap = sink.snapshot()
     assert(snap.length == 3)
     assert(snap.map(_.model) == Seq("m1", "m2", "m3"))
@@ -202,9 +202,9 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
   test("InMemory sink: drops oldest on overflow") {
     val sink = AuditSink.inMemory(maxEvents = 2).asInstanceOf[InMemoryAuditSink]
     val now  = java.time.Instant.now()
-    sink.emit(AuditEvent(now, "m1", Nil, Nil, None, None, 0, 0, "ok"))
-    sink.emit(AuditEvent(now, "m2", Nil, Nil, None, None, 0, 0, "ok"))
-    sink.emit(AuditEvent(now, "m3", Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m1", 0, Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m2", 0, Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m3", 0, Nil, Nil, None, None, 0, 0, "ok"))
     val snap = sink.snapshot()
     assert(snap.length == 2)
     assert(snap.map(_.model) == Seq("m2", "m3"))
@@ -213,7 +213,7 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
   test("InMemory sink: clear() drops everything") {
     val sink = AuditSink.inMemory().asInstanceOf[InMemoryAuditSink]
     val now  = java.time.Instant.now()
-    sink.emit(AuditEvent(now, "m1", Nil, Nil, None, None, 0, 0, "ok"))
+    sink.emit(AuditEvent(now, "m1", 0, Nil, Nil, None, None, 0, 0, "ok"))
     sink.clear()
     assert(sink.snapshot().isEmpty)
   }

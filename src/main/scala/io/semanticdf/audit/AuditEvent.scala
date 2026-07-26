@@ -50,6 +50,11 @@ import java.time.Instant
 final case class AuditEvent(
     ts:           Instant,
     model:        String,
+    /** Model version at the time this query ran. Recorded so consumers
+      * (MCP, dashboards, agent frameworks) can correlate audit events
+      * with the model state — "did this query run against v1 or v2?"
+      * Defaults to `0` (pre-versioning). */
+    version:      Int = 0,
     measures:     Seq[String],
     dimensions:   Seq[String],
     whereHash:    Option[String],

@@ -20,6 +20,19 @@ import io.semanticdf.Predicate
   * library's internals. */
 final case class QueryRequest(
     model:      String,
+    /** Model version at query time, propagated from [[io.semanticdf.SemanticTable.version]].
+      *
+      * Carried in the captured request so the cache key naturally differentiates
+      * entries across model versions: a version bump produces a different
+      * cache key, so old entries become unreachable and LRU evicts them. This
+      * is the auto-invalidation hook recommended by the v0.1.17 review — the
+      * model's `version` is the canonical "upstream changed" signal.
+      *
+      * Defaults to `0` (the pre-versioning-era sentinel from
+      * [[io.semanticdf.SemanticTable.version]]'s contract). When v0.2.0+ picks up
+      * versions from YAML `version:` fields, this field captures the live value
+      * at the time the user's `query()` built the request. */
+    version:    Int = 0,
     measures:   Seq[String] = Seq.empty,
     dimensions: Seq[String] = Seq.empty,
     where:      Option[Predicate] = None,
