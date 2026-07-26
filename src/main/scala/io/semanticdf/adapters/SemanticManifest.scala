@@ -1,4 +1,7 @@
-package io.semanticdf
+package io.semanticdf.adapters
+
+import io.semanticdf._
+
 import io.semanticdf.predicate._
 
 import java.time.Instant

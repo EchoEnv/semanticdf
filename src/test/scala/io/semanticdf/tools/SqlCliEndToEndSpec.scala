@@ -1,6 +1,6 @@
 package io.semanticdf.tools
 
-import io.semanticdf.YamlLoader
+import io.semanticdf.adapters.YamlLoader
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, LongType, StringType, StructField, StructType}

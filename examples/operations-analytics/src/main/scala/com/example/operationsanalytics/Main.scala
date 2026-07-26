@@ -1,5 +1,7 @@
 package com.example.operationsanalytics
 
+import io.semanticdf.adapters._
+
 import io.semanticdf._
 import io.semanticdf.predicate.PredicateOps._
 import org.apache.spark.sql.SparkSession

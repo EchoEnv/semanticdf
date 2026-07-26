@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.adapters._
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}

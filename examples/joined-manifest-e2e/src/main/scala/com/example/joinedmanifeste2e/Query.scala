@@ -1,7 +1,7 @@
 package com.example.joinedmanifeste2e
 
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
+import io.semanticdf.adapters.SemanticManifest
 import io.semanticdf.adapters.SDFAdapter
 import io.semanticdf.adapters.SemanticMetadataAdapter.loadSemanticTables
 

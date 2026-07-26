@@ -1,5 +1,7 @@
 package io.semanticdf.mcp.handlers
 
+import io.semanticdf.adapters._
+
 import io.semanticdf.{Dimension, JoinInfo, Measure, SemanticFilter, SemanticTable}
 import io.semanticdf.mcp.{Models, OkfCache, SparkFixture}
 import io.semanticdf.tools.{OkfGen}
@@ -320,7 +322,7 @@ class DescribeModelSpec extends AnyFunSuite with SparkFixture {
   // Regression: before PR (feat/describe-model-expr-string), Dimension/Measure
   // stored only a `SemanticScope => Column` lambda, so DescribeModel serialised
   // `expr` via `expr.toString` and produced opaque lambda addresses
-  // (`io.semanticdf.YamlLoader$$$Lambda$...`). The fix: Dimension and Measure
+  // (`io.semanticdf.adapters.YamlLoader$$$Lambda$...`). The fix: Dimension and Measure
   // now carry an optional `exprString` (populated by the YamlLoader from the
   // YAML `expr:` value; can also be set programmatically). DescribeModel
   // prefers the string when present and falls back to `toString` otherwise

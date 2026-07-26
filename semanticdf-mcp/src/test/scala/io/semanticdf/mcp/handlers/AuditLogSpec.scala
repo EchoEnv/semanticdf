@@ -1,5 +1,7 @@
 package io.semanticdf.mcp.handlers
 
+import io.semanticdf.predicate._
+
 import io.semanticdf.audit.{AuditEvent, AuditSink}
 import io.semanticdf.mcp.SparkFixture
 import io.semanticdf.mcp.handlers.AuditLog
@@ -195,7 +197,7 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
     // This is the integration check: the Query handler is constructed
     // with the same sink that AuditLog reads from. Run a query, then
     // read the audit log.
-    import io.semanticdf.{Dimension, Measure, Predicate, toSemanticTable}
+    import io.semanticdf.{Dimension, Measure, toSemanticTable}
     import org.apache.spark.sql.functions.{count, lit}
 
     val sink = AuditSink.inMemory()

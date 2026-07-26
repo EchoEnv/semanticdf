@@ -1,8 +1,10 @@
 package com.example.joinedmanifestsplit
 
 import io.semanticdf._
-import io.semanticdf.SemanticManifest
-import io.semanticdf.SemanticManifest.Identity
+import io.semanticdf.adapters._
+import io.semanticdf.adapters.SemanticManifest
+import io.semanticdf.adapters._
+import io.semanticdf.adapters.SemanticManifest.Identity
 
 import org.apache.spark.sql.SparkSession
 

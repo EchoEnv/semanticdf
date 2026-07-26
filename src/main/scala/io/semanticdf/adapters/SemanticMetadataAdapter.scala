@@ -13,7 +13,7 @@ import org.apache.spark.sql.{DataFrame, SparkSession}
   * write a single entry point regardless of the source format.
   *
   * The dbt adapter lives in
-  * [[io.semanticdf.DbtManifestReader]]; the Ossie adapter lives in
+  * [[io.semanticdf.adapters.DbtManifestReader]]; the Ossie adapter lives in
   * [[io.semanticdf.adapters.OssieReader]]. Both implement this trait.
   *
   * == Why a trait, not parallel objects ==

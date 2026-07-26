@@ -18,7 +18,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.13.14</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
-        <semanticdf.version>0.1.17</semanticdf.version>
+        <semanticdf.version>0.2.0</semanticdf.version>
     </properties>
 
     <dependencies>

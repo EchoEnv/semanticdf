@@ -1,5 +1,7 @@
 package io.semanticdf.mcp
 
+import io.semanticdf.adapters._
+
 import io.semanticdf.tools.OkfGen
 
 import java.io.File

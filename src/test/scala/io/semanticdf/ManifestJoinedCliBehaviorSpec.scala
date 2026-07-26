@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.adapters._
 
 /** Documents the current CLI behavior when a YAML defines a joined model.
   *

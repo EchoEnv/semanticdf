@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.adapters._
 
 import java.io.File
 import io.semanticdf.SemanticJoinOp

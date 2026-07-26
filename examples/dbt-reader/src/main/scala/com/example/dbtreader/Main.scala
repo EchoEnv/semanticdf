@@ -1,6 +1,6 @@
 package com.example.dbtreader
 
-import io.semanticdf.DbtManifestReader
+import io.semanticdf.adapters.DbtManifestReader
 
 import org.apache.spark.sql.SparkSession
 

@@ -1,4 +1,6 @@
 package io.semanticdf
+
+import io.semanticdf.adapters._
 import io.semanticdf.predicate._
 
 import java.io.{File, PrintWriter}

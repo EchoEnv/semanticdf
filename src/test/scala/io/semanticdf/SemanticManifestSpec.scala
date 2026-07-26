@@ -8,8 +8,9 @@ import org.apache.spark.sql.types._
 import org.scalatest.funspec.AnyFunSpec
 import org.scalatest.matchers.should.Matchers
 
-import io.semanticdf.ManifestParsingException
-import io.semanticdf.SemanticManifest.ManifestMeta
+import io.semanticdf.adapters._
+import io.semanticdf.adapters.ManifestParsingException
+import io.semanticdf.adapters.SemanticManifest.ManifestMeta
 
 /** Tests for [[SemanticManifest]] — round-trip persistence of a
   * `SemanticTable` to a portable JSON artifact.

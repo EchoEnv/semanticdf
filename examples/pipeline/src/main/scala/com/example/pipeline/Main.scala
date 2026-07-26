@@ -1,5 +1,7 @@
 package com.example.pipeline
 
+import io.semanticdf.adapters._
+
 import io.semanticdf._
 import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
 import org.apache.spark.sql.functions._

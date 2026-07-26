@@ -1,7 +1,9 @@
 package io.semanticdf.leak
 
+import io.semanticdf.adapters.SemanticManifest
+
 import io.semanticdf.adapters.{SDFAdapter, SDFProject}
-import io.semanticdf.{SemanticManifest, SemanticTable, SparkSessionFixture, FlightsFixture}
+import io.semanticdf.{SemanticTable, SparkSessionFixture, FlightsFixture}
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}

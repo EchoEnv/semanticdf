@@ -1,5 +1,7 @@
 package com.example.streamingevents
 
+import io.semanticdf.adapters._
+
 import io.semanticdf._
 import io.semanticdf.StreamingSupport._
 import org.apache.spark.sql.{DataFrame, SparkSession}

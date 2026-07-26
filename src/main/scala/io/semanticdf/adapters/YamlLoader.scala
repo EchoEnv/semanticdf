@@ -1,4 +1,6 @@
-package io.semanticdf
+package io.semanticdf.adapters
+
+import io.semanticdf._
 
 import org.apache.spark.sql.{DataFrame, SparkSession}
 import org.apache.spark.sql.functions.expr

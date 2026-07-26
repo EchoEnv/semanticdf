@@ -1,5 +1,7 @@
 package io.semanticdf
 
+import io.semanticdf.adapters._
+
 import java.io.File
 import java.nio.file.{Files, Path}
 
