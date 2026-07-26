@@ -3,6 +3,7 @@ package io.semanticdf.tools
 import org.apache.spark.sql.SparkSession
 
 import io.semanticdf.adapters.{ManifestParsingException, SemanticManifest, YamlLoader}
+import io.semanticdf.lineage.Lineage
 
 
 /** CLI entry point for semanticdf tooling.
@@ -15,6 +16,7 @@ import io.semanticdf.adapters.{ManifestParsingException, SemanticManifest, YamlL
   *   docsgen     — read YAML model files, produce browsable HTML docs
   *   okfgen      — read YAML model files, emit OKF knowledge bundle (.md)
   *   query       — run a SQL string against a YAML model (no Scala needed)
+  *   lineage     — emit static-analysis lineage (JSON or DOT) for a YAML model or workspace
   */
 object Main {
 
@@ -35,6 +37,8 @@ object Main {
           runValidateJoinedManifest(args.tail)
         case Some("query") =>
           runQuery(args.tail)
+        case Some("lineage") =>
+          runLineage(args.tail)
         case Some(cmd) =>
           System.err.println(s"Unknown subcommand: $cmd")
           printUsage()
@@ -267,6 +271,81 @@ object Main {
     } finally spark.stop()
   }
 
+  /** lineage — emit static-analysis lineage for a YAML model or workspace.
+    *
+    * Sub-modes:
+    *   --yaml <dir-or-file> [--model <name>]    single model (or all models in a dir)
+    *   --format json|dot                        output format (default: json)
+    *   [--out FILE]                             write to a file (default: stdout)
+    *
+    * Examples:
+    *   mvn ... lineage --yaml examples/joined-manifest/models
+    *   mvn ... lineage --yaml examples/joined-manifest/models --format dot
+    *   mvn ... lineage --yaml examples/joined-manifest/models --model orders
+    *   mvn ... lineage --yaml examples/joined-manifest/models --out lineage.json
+    *
+    * No Spark action is taken — lineage is pure static analysis (the
+    * lineage library walks the op tree; the YAML loader just walks the
+    * files). We still create a SparkSession because the YamlLoader
+    * signature requires one. */
+  private def runLineage(args: Array[String]): Unit = {
+    val spark = SparkSession.builder()
+      .master("local[*]")
+      .appName("semanticdf-lineage")
+      .config("spark.ui.enabled", "false")
+      .getOrCreate()
+    try {
+      val parser = new CliParser(args)
+      val yamlPath = parser.require("--yaml",
+        "Usage: lineage --yaml <dir-or-file> [--model NAME] [--format json|dot] [--out FILE]")
+      val modelOpt = parser.option("--model", "")
+      val format   = parser.option("--format", "json")
+      val outFile  = parser.option("--out", "")
+
+      val allModels = YamlLoader.loadDir(yamlPath, spark)
+
+      val selected: Map[String, io.semanticdf.SemanticTable] =
+        if (modelOpt.nonEmpty) {
+          val st = allModels.getOrElse(modelOpt,
+            throw new IllegalArgumentException(
+              s"--model '${modelOpt}' not found in '${yamlPath}'. " +
+              s"Available: ${allModels.keys.toSeq.sorted.mkString(", ")}."))
+          Map(modelOpt -> st)
+        } else allModels
+
+      val output = format match {
+        case "json" =>
+          if (selected.size == 1) {
+            // Single-model JSON envelope (still wrapped in WorkspaceLineage
+            // for a consistent wire shape).
+            val (_, st) = selected.head
+            Lineage.toJson(Lineage.workspaceOf(Map("model" -> st)))
+          } else {
+            Lineage.toJson(Lineage.workspaceOf(selected))
+          }
+        case "dot" =>
+          if (selected.size == 1) {
+            val (_, st) = selected.head
+            LineageCli.toDot(Lineage.workspaceOf(Map("model" -> st)))
+          } else {
+            LineageCli.toDot(Lineage.workspaceOf(selected))
+          }
+        case other =>
+          throw new IllegalArgumentException(
+            s"Unknown --format '$other' (expected: json or dot)")
+      }
+
+      if (outFile.nonEmpty) {
+        val pw = new java.io.PrintWriter(new java.io.File(outFile))
+        try pw.write(output)
+        finally pw.close()
+        println(s"Wrote lineage to $outFile")
+      } else {
+        println(output)
+      }
+    } finally spark.stop()
+  }
+
   private def printUsage(): Unit = {
     println(
       """semanticdf-tools — CLI utilities for the semanticdf semantic layer
@@ -302,11 +381,22 @@ object Main {
         |          ORDER BY (ASC/DESC), LIMIT, GROUP BY (ignored), aliases.
         |          The model decides which fields are dims vs measures.
         |
+        |  lineage --yaml <dir-or-file> [--model NAME] [--format json|dot] [--out FILE]
+        |          Emit static-analysis lineage (column-level base-cols +
+        |          calc-measure dependencies + join keys) for a YAML model
+        |          or a workspace. Default: JSON envelope to stdout.
+        |          --format dot renders a Graphviz DOT graph of model-level
+        |          dependencies (one node per model, edges for upstreamModels).
+        |          No Spark action — pure static analysis (YamlLoader walks
+        |          files; lineage walks the op tree).
+        |
         |Examples:
         |  mvn exec:java -Dexec.args="docsgen --path models/ --out docs/index.html"
         |  mvn exec:java -Dexec.args="okfgen --path models/ --out agents/"
         |  mvn exec:java -Dexec.args="introspect --path data/orders.csv --format csv --model orders"
         |  mvn exec:java -Dexec.args="query --models examples/starter/models/ --sql 'SELECT carrier, total_passengers FROM flights GROUP BY carrier ORDER BY total_passengers DESC LIMIT 10'"
+        |  mvn exec:java -Dexec.args="lineage --yaml examples/joined-manifest/models/"
+        |  mvn exec:java -Dexec.args="lineage --yaml examples/joined-manifest/models/ --format dot"
         |""".stripMargin)
   }
 
