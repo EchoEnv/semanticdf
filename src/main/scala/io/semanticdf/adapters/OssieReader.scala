@@ -95,21 +95,32 @@ object OssieReader extends SemanticMetadataAdapter[NioPath, OssieProject] {
   def parse(source: NioPath): Seq[OssieProject] = {
     if (!Files.exists(source))
       throw new IllegalArgumentException(s"Ossie file not found: $source")
-    val root = new Yaml().load[java.util.Map[String, Any]](
-      Files.newBufferedReader(source))
-    val map = Option(root).map(_.asScala.toMap).getOrElse(Map.empty)
-    if (!map.contains("version"))
-      throw new IllegalArgumentException(
-        s"Ossie file missing required 'version' key: $source")
-    val ontology: Seq[Map[String, Any]] = map.get("ontology").map(asList).getOrElse(Seq.empty).map(asMap)
+    // SnakeYAML's `Yaml.load(Reader)` does NOT close the passed Reader
+    // (documented behavior — the caller is responsible). We open a
+    // `BufferedReader` per call and close it explicitly in `finally`
+    // to avoid leaking file descriptors on long-running servers
+    // (MCP, agents) that call `parse` repeatedly. Regression test:
+    // `OssieReaderFDLeakSpec`. The `BufferedReader` allocation is
+    // unavoidable; the leak before the fix was ~1 FD per parse.
+    val reader = Files.newBufferedReader(source)
+    try {
+      val root = new Yaml().load[java.util.Map[String, Any]](reader)
+      val map = Option(root).map(_.asScala.toMap).getOrElse(Map.empty)
+      if (!map.contains("version"))
+        throw new IllegalArgumentException(
+          s"Ossie file missing required 'version' key: $source")
+      val ontology: Seq[Map[String, Any]] = map.get("ontology").map(asList).getOrElse(Seq.empty).map(asMap)
 
-    val canonical = map.get("semantic_model").map(asList).getOrElse(Seq.empty)
-    val legacy    = map.get("ontology_mappings").map(asList).getOrElse(Seq.empty)
-      .flatMap(_.asInstanceOf[java.util.Map[String, Any]].asScala.get("semantic_model"))
-      .map(asMap)
+      val canonical = map.get("semantic_model").map(asList).getOrElse(Seq.empty)
+      val legacy    = map.get("ontology_mappings").map(asList).getOrElse(Seq.empty)
+        .flatMap(_.asInstanceOf[java.util.Map[String, Any]].asScala.get("semantic_model"))
+        .map(asMap)
 
-    val models = (canonical.map(asMap) ++ legacy.map(asMap)).map(parseSemanticModel)
-    models.map(_.copy(ontology = ontology))
+      val models = (canonical.map(asMap) ++ legacy.map(asMap)).map(parseSemanticModel)
+      models.map(_.copy(ontology = ontology))
+    } finally {
+      reader.close()
+    }
   }
 
   /** Phase 2 — bind to Spark. Builds a `SemanticTable` per
