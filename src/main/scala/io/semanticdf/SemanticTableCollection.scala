@@ -1,6 +1,7 @@
 package io.semanticdf
 
 import io.semanticdf.audit.{AuditSink, QueryRequest => AuditQueryRequest}
+import io.semanticdf.result.ResultDecoder
 import org.apache.spark.sql.{Column, DataFrame, Dataset, SparkSession}
 
 /** Collection / rendering methods of [[SemanticTable]] — everything that
