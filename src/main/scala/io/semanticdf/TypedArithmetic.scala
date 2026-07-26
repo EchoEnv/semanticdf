@@ -2,7 +2,7 @@ package io.semanticdf
 
 import org.apache.spark.sql.Column
 
-/** Typed arithmetic for measure lambdas (Phase E3, see `docs/phase-E-plan.md`).
+/** Typed arithmetic for measure lambdas ().
   *
   * The untyped form keeps working unchanged:
   * {{{

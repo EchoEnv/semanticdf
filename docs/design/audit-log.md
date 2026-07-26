@@ -124,7 +124,7 @@ the audit path.
   `df.count()` (a re-run of the query plan) on every batch emit. The
   field is reserved (default `0`); consumers extend if they need it.
   *For the streaming `foreachBatch` path, eager counting IS
-  implemented (v0.1.17, PR #190) — the `emitStreamingAudit` helper
+  implemented — the `emitStreamingAudit` helper
   calls `batchDf.count()` per microbatch so the audit log carries
   the actual per-batch row count. The cost is documented at the
   call site in `SemanticTable.toStreamingQuery`.*

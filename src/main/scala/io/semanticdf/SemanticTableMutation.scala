@@ -152,7 +152,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
-      // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
+      // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       // Lets a user (or query()) chain withDimensions after where()/orderBy()/limit().
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withDimensions(dims: _*)
@@ -185,7 +185,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
     }
   }
 
-  /** Extend the model with measures. Handles single-table and joined roots (Phase 4).
+  /** Extend the model with measures. Handles single-table and joined roots.
     * Returns a new [[SemanticTable]] (immutable). */
   def withMeasures(measures: Measure*): SemanticTable = withMeasures0(measures)
 
@@ -261,7 +261,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
-      // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
+      // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withMeasures(measures: _*)
         new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
@@ -381,7 +381,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           SemanticTransformsOp(j, transforms),
           postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
 
-      // Passthrough ops (Phase 5/6): recurse to the underlying table/join, then re-wrap.
+      // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache).withTransforms(transforms: _*)
         new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
@@ -418,7 +418,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
   }
 
   // -------------------------------------------------------------------------
-  // Joins (Phase 4: DESIGN §7)
+  // Joins
   // -------------------------------------------------------------------------
 
   /** Join with a one-to-one / parent-child relationship (`join_one`).

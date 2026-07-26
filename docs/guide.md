@@ -819,7 +819,7 @@ flights
 ```
 
 The same pattern works for the full infix predicate DSL
-(import `io.semanticdf.PredicateOps._` once):
+(import `io.semanticdf.predicate.PredicateOps._` once):
 
 ```scala
 flights.where(carrier === "AA")        // equality

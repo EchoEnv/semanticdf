@@ -138,7 +138,7 @@ them or `clear()` is called.
   hook.
 - **Auto-invalidation.** Today, the user calls `invalidateModel`
   themselves. A v2 hook could integrate with the audit-log stream
-  (PR #174) to invalidate entries when source rows change.
+  to invalidate entries when source rows change.
 - **Cross-process / cross-restart durability.** The cache is
   in-memory only. A restart wipes it. A file-backed or Redis-backed
   sink is a v2 conversation.

@@ -3,7 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions.col
 
-/** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]] (Phase 5 completion).
+/** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]].
   *
   * A bare string is ascending; wrap in [[SortKey.desc]] for descending:
   * {{{

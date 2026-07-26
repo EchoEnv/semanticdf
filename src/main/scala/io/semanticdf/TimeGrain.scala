@@ -3,7 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.Column
 import org.apache.spark.sql.functions.date_trunc
 
-/** Time-grain truncation for time dimensions (Phase 6, DESIGN §6.6).
+/** Time-grain truncation for time dimensions ().
   *
   * A time grain truncates a timestamp to a fixed unit (year/quarter/month/week/day/
   * hour/minute/second) so rows can be grouped at that granularity. Spark's

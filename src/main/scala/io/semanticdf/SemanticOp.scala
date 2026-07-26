@@ -76,7 +76,7 @@ object SemanticOp {
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4: Join cardinalities (DESIGN §7)
+// Join cardinalities
 // ---------------------------------------------------------------------------
 
 /** Join cardinality, mirroring BSL's `join_one` / `join_many` / `join_cross`.
@@ -376,10 +376,10 @@ final case class SemanticStreamingTableOp(
 }
 
 // ---------------------------------------------------------------------------
-// Phase 4: Join op (DESIGN §7)
+// Join op
 // ---------------------------------------------------------------------------
 
-/** A joined semantic model (Phase 4). Holds the op tree (`left` ⊕ `right`) and metadata
+/** A joined semantic model (op tree (`left` ⊕ `right`) and metadata
   * merged from both sides.
   *
   * Compile strategy:
@@ -826,7 +826,7 @@ final case class SemanticJoinOp(
     } else joined
   }
 
-  /** Pre-aggregate a DataFrame at the given grain (Phase 4 fan-out prevention).
+  /** Pre-aggregate a DataFrame at the given grain (fan-out prevention).
     *
     * Measures are aggregated at `grainCols`. ALL dimensions in `dims` are included in
     * the groupBy — not just the join keys — so non-key dimensions (e.g. `carrier` on
@@ -886,10 +886,10 @@ final case class SemanticJoinOp(
 
 
 // ---------------------------------------------------------------------------
-// Phase 5: Filter op (WHERE / HAVING, DESIGN §6.5)
+// Filter op (WHERE / HAVING)
 // ---------------------------------------------------------------------------
 
-/** A filter applied to a semantic source (Phase 5).
+/** A filter applied to a semantic source ().
   *
   * Wraps a source op and applies a [[Predicate]] when compiled. Used for both:
   * - **pre-aggregation** (WHERE): wraps the source table → filters base rows.
@@ -941,7 +941,7 @@ final case class SemanticRowFilterOp(
   }
 }
 
-/** Order the result of a semantic op by one or more [[SortKey]]s (Phase 5 completion).
+/** Order the result of a semantic op by one or more [[SortKey]]s ().
   *
   * A deferred, composable node — typically chained after `aggregate()`. Sort keys are
   * name-based, resolved against the compiled DataFrame at execution time. */
@@ -953,7 +953,7 @@ final case class SemanticOrderByOp(
     source.compile(spark).orderBy(keys.map(_.toColumn): _*)
 }
 
-/** Limit the result of a semantic op to the first `n` rows (Phase 5 completion).
+/** Limit the result of a semantic op to the first `n` rows ().
   *
   * Deferred and composable. `offset` is deferred — Spark 3.5 has no Dataset `.offset()`. */
 final case class SemanticLimitOp(source: SemanticOp, n: Int) extends SemanticOp {
@@ -961,7 +961,7 @@ final case class SemanticLimitOp(source: SemanticOp, n: Int) extends SemanticOp 
     source.compile(spark).limit(n)
 }
 
-/** A planner hint applied to the compiled DataFrame (Phase 8: `withHint`).
+/** A planner hint applied to the compiled DataFrame (`withHint`).
   *
   * Wraps the source's compiled DataFrame with `df.hint(strategy, params*)`. Common
   * uses: forcing a known-small dimension to broadcast on downstream joins, or
@@ -979,7 +979,7 @@ final case class SemanticHintOp(
     else                 source.compile(spark).hint(strategy, params: _*)
 }
 
-/** Per-row transforms applied at compile time (Phase 2: `withTransforms`).
+/** Per-row transforms applied at compile time (`withTransforms`).
   *
   * Holds the transform list and applies them to `source.compile(spark)` lazily,
   * one `withColumn` per transform in declaration order. The transforms are
@@ -1030,12 +1030,12 @@ private[semanticdf] final case class MergedSemanticModel(
 )
 
 // ---------------------------------------------------------------------------
-// Aggregate op (handles single-table and Phase 4 joined sources)
+// Aggregate op (handles single-table and joined sources)
 // ---------------------------------------------------------------------------
 
 /** Per-measure classification produced by [[SemanticAggregateOp.classifyOne]].
   * `deps`   = known-measure names the lambda references (non-empty → calc).
-  * `totals` = measure names referenced via `t.all(...)` (Phase 3 percent-of-total). */
+  * `totals` = measure names referenced via `t.all(...)` (percent-of-total). */
 private case class Classification(deps: Set[String], totals: Set[String])
 
 /** Group-by + aggregate. Resolves measure expressions from the root model and compiles
@@ -1044,7 +1044,7 @@ private case class Classification(deps: Set[String], totals: Set[String])
   *   1. base measures → `groupBy(keys).agg(...)`, each aliased to its measure name;
   *   2. calc measures → one `select` per topological layer.
   *
-  * For joined sources (Phase 4), the model is [[SemanticJoinOp.mergedModel]] so that
+  * For joined sources (joined source), the model is [[SemanticJoinOp.mergedModel]] so that
   * prefixed names (`"orders.total_amount"`) resolve correctly.
   */
 final case class SemanticAggregateOp(
@@ -1053,7 +1053,7 @@ final case class SemanticAggregateOp(
     measureNames: Seq[String],
 ) extends SemanticOp {
 
-  /** Prefix for grand-total columns cross-joined in for percent-of-total (Phase 3). */
+  /** Prefix for grand-total columns cross-joined in for percent-of-total. */
   private val TotalColPrefix = "__total__"
 
   /** Compile this aggregate to a Spark DataFrame in two passes:
@@ -1063,9 +1063,9 @@ final case class SemanticAggregateOp(
     *   2. '''calc measures''' (reference other measures by name) → compiled
     *      as one `select` per topological layer on top of the aggregated
     *      result. Calc measures using `t.all("x")` for percent-of-total
-    *      trigger an intermediate grand-total cross-join (Phase 3).
+    *      trigger an intermediate grand-total cross-join.
     *
-    * For joined sources (Phase 4), the model is [[SemanticJoinOp.mergedModel]]
+    * For joined sources (joined source), the model is [[SemanticJoinOp.mergedModel]]
     * so that prefixed names (`"orders.total_amount"`) resolve correctly.
     */
   override def compile(spark: SparkSession): DataFrame =
@@ -1076,9 +1076,9 @@ final case class SemanticAggregateOp(
     * `base` (no double source-compile). `computeTotals = false` suppresses totals-building
     * to avoid infinite recursion when computing the totals table itself.
     *
-    * Phases:
+    * Steps:
     *   1. base measures → `groupBy(keys).agg(...)`, each aliased to its measure name;
-    *   2. (Phase 3) if any calc uses `t.all(...)`, build a 1-row grand-total table at
+    *   2. if any calc uses `t.all(...)`, build a 1-row grand-total table at
     *      zero grain and cross-join it (broadcast); expose its columns to calcs;
     *   3. calc measures → one `select` per topological layer; drop totals columns.
     */
@@ -1117,7 +1117,7 @@ final case class SemanticAggregateOp(
         "aggregate() resolved no measures. Pass at least one measure name."
       )
 
-    // --- Auto-pull transitive calc dependencies (Phase 2a) ---
+    // --- Auto-pull transitive calc dependencies ---
     val allMeasuresClosed = transitiveClosure(allMeasures, model, base)
 
     // --- Classify into base vs calc ---
@@ -1146,14 +1146,14 @@ final case class SemanticAggregateOp(
     // --- Pass 1: group-by + aggregate the base measures ---
     val baseScope = new BaseScope(base)
     // Resolve group keys via the dimension's expr when a dimension with that name exists
-    // (Phase 6: this is what makes atTimeGrain work — it overrides a dim's expr with a
+    // this is what makes atTimeGrain work — it overrides a dim's expr with a
     // date_trunc). Falls back to the raw column for keys without a declared dimension.
     // Backwards-compatible: existing dims use `t => t("col")`, which resolves identically.
     val modelDims = model.dimensions
     val groupCols: Seq[Column] = groupKeys.map { k =>
       modelDims.get(k).map(d => d.expr(baseScope).as(k)).getOrElse(baseScope(k).as(k))
     }
-    // For joined sources (Phase 4), base measures may already be pre-aggregated columns
+    // For joined sources (joined source), base measures may already be pre-aggregated columns
     // in `base` (from preAggregateAtGrain). Re-aggregating them requires summing the
     // existing column, NOT re-evaluating the original source-column expression (which
     // would fail because source columns like `qty` are gone post-join).
@@ -1190,7 +1190,7 @@ final case class SemanticAggregateOp(
       if (groupKeys.isEmpty) base.agg(aggCols.head, aggCols.tail: _*)
       else               base.groupBy(groupCols: _*).agg(aggCols.head, aggCols.tail: _*)
 
-    // --- Pass 1.5 (Phase 3): percent-of-total totals cross-join ---
+    // --- Pass 1.5: percent-of-total totals cross-join ---
     // Any calc may reference `t.all(measure)`. When it does, build the grand-total row
     // (same aggregation, zero grain) over the SAME base and cross-join it. Spark
     // broadcasts the 1-row side. Calc totals are recomputed via their own formulas, so
@@ -1231,7 +1231,7 @@ final case class SemanticAggregateOp(
         Some(resolve)
       } else None
 
-    // --- Pass 2: calc measures one select per topological layer (Phase 2a) ---
+    // --- Pass 2: calc measures one select per topological layer ---
     // Recompute calcDeps and layers from calcMeasuresFixed (may include misclassified base calcs)
     val calcDepsFixed: Map[String, Set[String]] =
       calcMeasuresFixed.map(m => m.name -> classifications.getOrElse(m.name, Classification(Set.empty, Set.empty)).deps).toMap
@@ -1294,7 +1294,7 @@ final case class SemanticAggregateOp(
     }
   }
 
-  // --- Transitive closure (Phase 2a) ---
+  // --- Transitive closure ---
 
   /** Transitive closure of requested measures over the calc dependency graph.
     * `baseDf` is the compiled source DataFrame (batch source or joined result). */
@@ -1325,7 +1325,7 @@ final case class SemanticAggregateOp(
           resolved(dep) = dm; queue.enqueue(dep)
         }
       }
-      // Phase 3: a `t.all(dep)` reference also requires `dep` to be aggregated (so its
+      // a `t.all(dep)` reference also requires `dep` to be aggregated (so its
       // grand total can be computed). Pull it into the closure just like a normal dep.
       probe.referencedTotals.foreach { dep =>
         if (!resolved.contains(dep)) {
@@ -1341,7 +1341,7 @@ final case class SemanticAggregateOp(
     resolved.values.toSeq
   }
 
-  // --- Topological calc layering (Phase 2a) ---
+  // --- Topological calc layering ---
 
   /** Group measure names into topological layers (Kahn's algorithm). */
   private def topologicalLayers(
@@ -1370,7 +1370,7 @@ final case class SemanticAggregateOp(
   // --- Classification ---
 
   /** Classify a single measure: known-measure names it references (deps, non-empty →
-    * calc) and measure names it references via `t.all(...)` (totals, Phase 3).
+    * calc) and measure names it references via `t.all(...)` (totals).
     *
     * The measure's OWN name is excluded from the dependency probe: a measure that
     * references a column sharing its name (the common `Measure("x", t => sum(t("x")))`
@@ -1394,14 +1394,14 @@ final case class SemanticAggregateOp(
 }
 
 // ---------------------------------------------------------------------------
-// Classification scope (Phase 2a)
+// Classification scope
 // ---------------------------------------------------------------------------
 
 /** Classification-only scope: records which known-measure names a lambda touches.
   * Base columns resolve to the real column; known measures resolve to a placeholder
   * and are recorded. Never executed. Powers dependency discovery.
   *
-  * Also records `t.all(name)` references (Phase 3) so the planner knows which grand
+  * Also records `t.all(name)` references (percent-of-total) so the planner knows which grand
   * totals to compute and cross-join. */
 private[semanticdf] final class ClassificationScope(
     df: DataFrame,

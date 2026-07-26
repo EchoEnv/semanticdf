@@ -194,7 +194,7 @@ object Main {
 
   /** validate-joined-manifest — read a joined manifest, surface identity + digest.
     * Source-free (no Spark session required). Mirrors validate-manifest but
-    * for the joined wire shape introduced in PR #151. */
+    * for the joined wire shape. */
   private def runValidateJoinedManifest(args: Array[String]): Unit = {
     val parser = new CliParser(args)
     val file   = parser.require("--file", "Usage: validate-joined-manifest --file <manifest.json>")

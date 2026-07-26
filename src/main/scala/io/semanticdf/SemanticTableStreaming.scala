@@ -29,7 +29,7 @@ import org.apache.spark.sql.{Column, DataFrame, SparkSession}
   *     anywhere under `op`? Used by `substituteStreamingLeaf`'s
   *     join branch.
   *   - `emitStreamingAudit` — private; emits an audit event with the
-  *     actual per-batch rowCount (PR #190's per-batch rowCount
+  *     actual per-batch rowCount (per-batch rowCount
   *     fix). Used by both foreachBatch branches.
   *
   * == Cross-trait dependencies ==

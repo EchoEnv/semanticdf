@@ -62,7 +62,7 @@ object SDFAdapter extends SemanticMetadataAdapter[NioPath, SDFProject] {
 
   private val mapper: ObjectMapper = new ObjectMapper()
 
-  /** Phase 1 — pure parse. Reads the file, extracts the `kind` and
+  /** Pure parse. Reads the file, extracts the `kind` and
     * the source-table name(s) so `toSemanticTables` doesn't re-parse.
     * The full JSON text is preserved verbatim and passed to the
     * existing reader. */
@@ -95,7 +95,7 @@ object SDFAdapter extends SemanticMetadataAdapter[NioPath, SDFProject] {
     }
   }
 
-  /** Phase 2 — bind to Spark. Routes to the right reader based on
+  /** Bind to Spark. Routes to the right reader based on
     * the `kind` field. Calls the existing `fromJson` /
     * `fromJoinedJson` with `df` from the `resolve` callback — no
     * behavior change vs. calling those methods directly. */

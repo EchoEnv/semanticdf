@@ -2,7 +2,7 @@ package io.semanticdf
 
 import org.apache.spark.sql.Column
 
-/** Generic typed measure support (Phase E2/E3, see `docs/phase-E-plan.md`).
+/** Generic typed measure support ().
   *
   * Lets the user write a typed measure via `Measure[T](name, fn)`. The phantom
   * `T` is the static return type of the lambda. The typed form composes

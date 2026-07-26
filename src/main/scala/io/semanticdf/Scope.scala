@@ -10,7 +10,7 @@ import org.apache.spark.sql.{Column, DataFrame}
   * scopes differ only in *where* columns come from.
   *
   * `all(name)` (percent-of-total) is declared here but is **not implemented until
-  * Phase 3** — it throws to make premature use loud.
+  * the streaming terminal introduces the totals mechanism** — it throws to make premature use loud.
   */
 trait SemanticScope {
 
@@ -53,7 +53,7 @@ final case class BaseScope(df: DataFrame) extends SemanticScope {
     else throw new SemanticScope.UnknownFieldError(name, df.columns)
 }
 
-/** Scope over an *aggregated* DataFrame (Phase 1b — calc-measure compilation).
+/** Scope over an *aggregated* DataFrame (calc-measure compilation).
   *
   * Columns on an aggregated DataFrame are the group-by keys plus the measure names.
   * `apply(name)` resolves by name against that DataFrame. This is the load-bearing
@@ -65,7 +65,7 @@ final case class BaseScope(df: DataFrame) extends SemanticScope {
   * measure that is not yet a real column resolves to a placeholder `lit(0.0)` so the
   * lambda typechecks; classification never executes the result.
   *
-  * `totalsResolver` (Phase 3) maps a measure name to its grand-total column — the same
+  * `totalsResolver` maps a measure name to its grand-total column — the same
   * measure aggregated with no group keys, cross-joined into this DataFrame under a
   * `__total__` prefix. When present, `all(name)` resolves to it (percent-of-total).
   */
@@ -81,7 +81,7 @@ final case class MeasureScope(
     else if (knownMeasures.contains(name)) org.apache.spark.sql.functions.lit(0.0)
     else throw new SemanticScope.UnknownFieldError(name, valid)
 
-  /** Percent-of-total reference (Phase 3). Resolves to the grand-total column when a
+  /** Percent-of-total reference. Resolves to the grand-total column when a
     * `totalsResolver` was supplied by [[SemanticAggregateOp]] (i.e. the aggregation
     * detected `t.all(...)` usage and cross-joined a totals table). Throws otherwise. */
   override def all(name: String): Column = totalsResolver match {

@@ -12,7 +12,7 @@ import scala.util.chaining._
   * cached rows. Length-prefixing every field disambiguates the
   * parser regardless of what characters appear inside values.
   *
-  * PR #187 added length prefixes to the time fields; PR #188
+  * Length prefixes were added to the time fields first, then
   * extended the pattern to the rest of the request shape. This
   * object centralizes the encoding rules so future hash-keyed
   * storage can reuse them without duplicating the convention.
