@@ -20,6 +20,8 @@ import java.io.{ByteArrayInputStream, ByteArrayOutputStream, ObjectInputStream, 
   *   - `SemanticScope` family (passed to those lambdas)
   *   - `AuditEvent` (serialized in the cache; the audit sink runs on the driver)
   *   - `QueryRequest` (the cache key source)
+  *   - `Predicate` family (DSL + wire format, used in the cache key hash)
+  *   - `SortKey` (used in `orderBy` and the `QueryRequest` cache key)
   *
   * This spec round-trips each through Java serialization and asserts
   * that the deserialized value preserves identity. Any failure here is
@@ -223,5 +225,91 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
     // The internal op tree structure is preserved.
     assert(round.root.getClass == model.root.getClass,
       s"op tree class changed: ${round.root.getClass} vs ${model.root.getClass}")
+  }
+
+  // ----------------------------------------------------------------
+  // Predicate family — the moved predicate types and the cache
+  // auto-invalidation contract. PR #203 moved the predicate files to
+  // the `predicate/` sub-package; this section guards the
+  // Serializable contract on each shape and the `@volatile @transient`
+  // annotation on `PredicateAst.Predicate.cache` (PR #202's cluster-
+  // safety fix). The `cache` field is a driver-side memoization local
+  // to one `toColumn` invocation; rebuilding it on the next call
+  // costs one extra `Column` build, but on the round-trip it must
+  // drop (so the mutable.Map and the Column values don't go through
+  // Java serialization).
+  // ----------------------------------------------------------------
+
+  test("Predicate.Compare.Eq: Java-serializable (the cache-key source)") {
+    import io.semanticdf.predicate.Predicate
+    val p = Predicate.Compare.Eq("carrier", "AA")
+    val round = roundTrip(p)
+    assert(round == p, s"Compare.Eq round-trip mismatch: $round vs $p")
+  }
+
+  test("Predicate.In: Java-serializable (the `in` operator used in MCP filters)") {
+    import io.semanticdf.predicate.Predicate
+    val p = Predicate.In("carrier", Seq("AA", "UA", "DL"))
+    val round = roundTrip(p)
+    assert(round == p, s"In round-trip mismatch: $round vs $p")
+  }
+
+  test("Predicate.And: Java-serializable (composed predicates)") {
+    import io.semanticdf.predicate.Predicate
+    val p = Predicate.And(
+      Predicate.Compare.Eq("carrier", "AA"),
+      Predicate.Compare.Gt("distance", 1000),
+    )
+    val round = roundTrip(p)
+    assert(round == p, s"And round-trip mismatch: $round vs $p")
+  }
+
+  test("PredicateAst.Predicate: Java-serializable with cache dropped on round-trip") {
+    import io.semanticdf.predicate.{Predicate, PredicateAst}
+    import io.semanticdf.JoinSide
+    // Build an AST: `left.carrier === right.carrier` (both sides reference
+    // a column that exists in the fixture so toColumn can populate the cache).
+    val ast = PredicateAst.Predicate(
+      op    = PredicateAst.Op.Eq,
+      left  = PredicateAst.Operand.ColumnRef("left",  "carrier"),
+      right = PredicateAst.Operand.ColumnRef("right", "carrier"),
+    )
+    // Populate the cache by calling toColumn with two JoinSide scopes.
+    // After this call, the `@volatile @transient private var cache`
+    // field holds a `mutable.Map[(Any, Any), Column]` entry.
+    val leftSide  = new JoinSide("left",  flightsDf, Map.empty, scala.collection.mutable.Map.empty)
+    val rightSide = new JoinSide("right", flightsDf, Map.empty, scala.collection.mutable.Map.empty)
+    val preCacheColumn = ast.toColumn(leftSide, rightSide)  // populates the cache
+    // The pre-roundtrip toColumn result equals a re-built column.
+    // (We can't observe `cache` directly — it's a private field — but
+    // the post-round-trip call rebuilding the cache is the contract.)
+
+    // Round-trip through Java serialization. The `cache` field is
+    // `@transient`, so it MUST be dropped on the way out. We can
+    // observe the drop by checking that the round-trip itself doesn't
+    // throw (it would if the mutable.Map or Column went through the
+    // wire) and that the round-tripped AST is still functional — the
+    // `@transient` annotation means the cache is rebuilt on the next
+    // `toColumn` call.
+    val round = roundTrip(ast)
+    // The AST structure is preserved (sealed Product round-trips cleanly).
+    assert(round == ast, s"PredicateAst.Predicate round-trip mismatch: $round vs $ast")
+    // The round-tripped AST is still functional — `toColumn` rebuilds the cache.
+    val postRoundTripColumn = round.toColumn(leftSide, rightSide)
+    assert(postRoundTripColumn != null, "toColumn should rebuild the cache on the round-tripped AST")
+    // The cache-rebuilt column should be structurally equal to the pre-roundtrip
+    // column. Spark's `Column` doesn't override `equals`, so we compare expressions.
+    assert(postRoundTripColumn.expr.toString == preCacheColumn.expr.toString,
+      s"rebuilt column should match the pre-roundtrip column: " +
+      s"${postRoundTripColumn.expr} vs ${preCacheColumn.expr}")
+  }
+
+  test("SortKey: Java-serializable (sealed trait with private case classes)") {
+    val asc  = SortKey.asc("carrier")
+    val desc = SortKey.desc("distance")
+    val roundAsc  = roundTrip(asc)
+    val roundDesc = roundTrip(desc)
+    assert(SortKey.nameOf(roundAsc)  == "carrier",  "asc round-trip should preserve the column name")
+    assert(SortKey.nameOf(roundDesc) == "distance", "desc round-trip should preserve the column name")
   }
 }
