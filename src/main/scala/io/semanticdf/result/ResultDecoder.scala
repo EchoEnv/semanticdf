@@ -1,4 +1,4 @@
-package io.semanticdf
+package io.semanticdf.result
 
 import scala.language.experimental.macros
 import org.apache.spark.sql.Row

@@ -1,5 +1,6 @@
 package io.semanticdf
 
+import io.semanticdf.result.ResultDecoder
 import org.apache.spark.sql.{Dataset, Row, SparkSession}
 import org.apache.spark.sql.types.{LongType, StringType, StructField, StructType}
 import org.apache.spark.sql.functions._

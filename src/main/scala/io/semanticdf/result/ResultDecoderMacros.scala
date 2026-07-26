@@ -1,4 +1,4 @@
-package io.semanticdf
+package io.semanticdf.result
 
 import org.apache.spark.sql.Row
 
@@ -110,7 +110,7 @@ object ResultDecoderMacros {
     val decodeArgName = TermName(c.freshName("row"))
     c.Expr[ResultDecoder[T]](
       q"""
-        new _root_.io.semanticdf.ResultDecoder[$tpe] {
+        new _root_.io.semanticdf.result.ResultDecoder[$tpe] {
           def decode($decodeArgName: _root_.org.apache.spark.sql.Row): $tpe = {
             val row: _root_.org.apache.spark.sql.Row = $decodeArgName
             $newInstance
