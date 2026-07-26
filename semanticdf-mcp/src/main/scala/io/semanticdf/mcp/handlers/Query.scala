@@ -165,7 +165,7 @@ object Query {
       .filter(_ >= 0)
       .getOrElse(DefaultTimeoutMs)
 
-  /** Merge the two predicate sources into one [[io.semanticdf.Predicate]]
+  /** Merge the two predicate sources into one [[io.semanticdf.predicate.Predicate]]
     * for the library's `where` parameter. The structured `ast_where`
     * field (if present) takes precedence over the flat `where` array; if
     * both are present, they are AND-combined (and a `nil` AST plus an
@@ -180,13 +180,13 @@ object Query {
     *   3. Neither present    -> None.
     *
     * Symmetric for `having`. */
-  private[handlers] def mergedWhere(req: QueryRequest): Option[io.semanticdf.Predicate] =
+  private[handlers] def mergedWhere(req: QueryRequest): Option[io.semanticdf.predicate.Predicate] =
     Query.mergePredicates(
       ast  = req.ast_where,
       flat = req.where,
     )
 
-  private[handlers] def mergedHaving(req: QueryRequest): Option[io.semanticdf.Predicate] =
+  private[handlers] def mergedHaving(req: QueryRequest): Option[io.semanticdf.predicate.Predicate] =
     Query.mergePredicates(
       ast  = req.ast_having,
       flat = req.having,
@@ -195,14 +195,14 @@ object Query {
   private def mergePredicates(
       ast:  Option[Any],
       flat: Option[Seq[Any]],
-  ): Option[io.semanticdf.Predicate] = {
+  ): Option[io.semanticdf.predicate.Predicate] = {
     val astPred  = ast.map(AstPredicates.parse)
     val flatPred = flat.flatMap(JsonPredicates.parseAll)
     (astPred, flatPred) match {
       case (None,    None)    => None
       case (Some(a), None)    => Some(a)
       case (None,    Some(f)) => Some(f)
-      case (Some(a), Some(f)) => Some(io.semanticdf.Predicate.And(a, f))
+      case (Some(a), Some(f)) => Some(io.semanticdf.predicate.Predicate.And(a, f))
     }
   }
 

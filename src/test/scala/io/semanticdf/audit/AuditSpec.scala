@@ -1,6 +1,7 @@
 package io.semanticdf.audit
+import io.semanticdf.predicate._
 
-import io.semanticdf.{Dimension, FlightsFixture, Measure, Predicate, SparkSessionFixture, toSemanticTable}
+import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, toSemanticTable}
 import org.apache.spark.sql.functions.{count, lit}
 
 import org.scalatest.funsuite.AnyFunSuite

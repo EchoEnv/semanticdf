@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import io.semanticdf.audit.{AuditEvent, AuditSink, QueryRequest => AuditQueryRequest}
 
@@ -6,79 +7,6 @@ import org.apache.spark.sql.{Column, Dataset, DataFrame, SparkSession}
 import org.apache.spark.sql.types.StructType
 import org.apache.spark.sql.functions._
 import scala.jdk.CollectionConverters._
-
-/** Sort-key DSL for [[SemanticTable.orderBy]] / [[SemanticTable.query]] (Phase 5 completion).
-  *
-  * A bare string is ascending; wrap in [[SortKey.desc]] for descending:
-  * {{{
-  * st.orderBy("carrier", SortKey.desc("total_passengers"))
-  * }}} */
-sealed trait SortKey {
-  private[semanticdf] def toColumn: Column
-}
-object SortKey {
-
-  /** Wrap a column name in backticks if it contains characters that
-    * Spark's `col(...)` would misinterpret — notably `.` (treated as a
-    * table/struct qualifier). Joined dimensions are named `alias.column`
-    * (e.g. `customers.signup_date`); without quoting, `col("customers.x")`
-    * looks for a nested struct field instead of the literal column.
-    * Names already wrapped in backticks (by the caller) are left as-is,
-    * so this is backward-compatible with manual `` SortKey.asc(s"`x`") ``.
-    * Simple identifiers are returned unchanged. */
-  private def quote(name: String): String =
-    if (name.startsWith("`")) name
-    else if (name.matches("[a-zA-Z_][a-zA-Z0-9_]*")) name
-    else s"`$name`"
-
-  private[semanticdf] final case class Asc(name: String)  extends SortKey { def toColumn = col(quote(name)).asc }
-  private[semanticdf] final case class Desc(name: String) extends SortKey { def toColumn = col(quote(name)).desc }
-
-  /** Explicit ascending key. */
-  def asc(name: String): SortKey = Asc(name)
-  /** Explicit descending key. */
-  def desc(name: String): SortKey = Desc(name)
-
-  /** Typed ascending key — reads the column name directly from the
-    * [[SemanticField]] witness. Works for any field (dimension or measure),
-    * so `SortKey.asc(carrier)`, `SortKey.desc(pax)` are both valid.
-    *
-    * The parameter is the typeclass instance itself (not a `FieldRef`), so
-    * `SemanticDimension[F]` / `SemanticMeasure[F]` match by subtyping in
-    * Scala's phase-1 overload resolution — no implicit conversion is needed,
-    * and this overload is picked over `asc(name: String)` even from
-    * cross-package consumer code. */
-  def asc(field: SemanticField[_]): SortKey = Asc(field.name)
-
-  /** Typed descending key — see [[asc(field)*]]. */
-  def desc(field: SemanticField[_]): SortKey = Desc(field.name)
-
-  /** Read the column-name field of any SortKey (private to avoid exposing the sealed
-    * cases to public API). Used by [[SemanticTable.explainSemantic]]. */
-  private[semanticdf] def nameOf(k: SortKey): String = k match {
-    case Asc(n)  => n
-    case Desc(n) => n
-    case _       => ""
-  }
-
-  /** Implicit `String => SortKey` so `orderBy("carrier", SortKey.desc("x"))` works. */
-  implicit def strToSortKey(name: String): SortKey = Asc(name)
-}
-
-/** Structured result of a [[SemanticTable.validate]] call.
-  *
-  * - `errors`   are conditions that would cause `execute()` to throw at runtime.
-  * - `warnings` are conditions that are legal but worth surfacing (e.g. a time
-  *              dimension with no `smallestTimeGrain` would surprise `atTimeGrain()`).
-  *
-  * `isValid` is the boolean summary; CI checks use that directly. */
-final case class ValidationResult(
-    errors: Seq[String],
-    warnings: Seq[String],
-) {
-  def isValid: Boolean = errors.isEmpty
-  def hasIssues: Boolean = errors.nonEmpty || warnings.nonEmpty
-}
 
 /** Immutable facade over the root of a semantic op tree (DESIGN §4.1).
   *
@@ -161,53 +89,3 @@ final class SemanticTable private[semanticdf] (
     val resultCache: Option[io.semanticdf.cache.ResultCache] = None,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }
-
-
-/** A row-level filter declared on a model via YAML `filters:` block.
-  *
-  * Read-only value type. The library maintains these internally as op-tree
-  * entries (`SemanticRowFilterOp`), and exposes them through this type for
-  * catalog consumers: MCP `describe_model.filters` and OKF `# Filters`.
-  */
-final case class SemanticFilter(
-    name: String,
-    description: Option[String],
-    expr: String,
-    metadata: Map[String, String],
-)
-
-/** Classification of a measure within a semantic model.
-  *
-  * - `Base`: aggregates source columns directly (e.g. `sum(amount)`, `count(1)`).
-  * - `Calc`: lambda references other declared measures in the same model
-  *   (e.g. `total_revenue / event_count`).
-  *
-  * Surfaced as MCP `describe_model.measures[].kind` so consumers can reason
-  * about aggregation costs and dependencies without re-classifying locally. */
-sealed trait MeasureKind
-object MeasureKind {
-  case object Base extends MeasureKind
-  case object Calc extends MeasureKind
-}
-
-/** Summary of one join in a semantic model — exposed for MCP `describe_model`.
-  *
-  * Captures the cardinality, side names, grain (join-key) columns, and any
-  * dimensions/measures added via `withDimensions` / `withMeasures` after the
-  * join. Internalised `SemanticJoinOp` is kept private to the package; this
-  * DTO is the stable, MCP-facing shape. */
-final case class JoinInfo(
-    /** Cardinality as a string ("one" | "many" | "cross") — string not enum so
-      * it serializes cleanly to JSON without a sealed-trait encoder. */
-    cardinality: String,
-    /** Name of the left-side source model (e.g. "orders"). None if anonymous. */
-    leftName: Option[String],
-    /** Name of the right-side source model (e.g. "customers"). None if anonymous. */
-    rightName: Option[String],
-    /** Join-key column names — the equi-join keys. Empty for cross joins. */
-    keys: Seq[String],
-    /** Names of dimensions added via `withDimensions` after this join. */
-    extraDimensions: Seq[String],
-    /** Names of measures added via `withMeasures` after this join. */
-    extraMeasures: Seq[String],
-)

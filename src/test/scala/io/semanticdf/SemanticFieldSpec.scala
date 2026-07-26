@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import java.io.{File, PrintWriter}
 import org.apache.spark.sql.DataFrame

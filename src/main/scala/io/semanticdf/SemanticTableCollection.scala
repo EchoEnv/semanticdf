@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import io.semanticdf.audit.{AuditSink, QueryRequest => AuditQueryRequest}
 import io.semanticdf.result.ResultDecoder

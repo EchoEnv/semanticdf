@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions._
@@ -60,7 +61,7 @@ class SemanticOpTraversalSpec extends AnyFunSuite with Matchers with SparkSessio
     // Build a tree with filter → aggregate → tableOp, then JOIN with items.
     // Use the fluent API: groupBy wraps the source in an aggregate, where
     // wraps that in a filter.
-    import io.semanticdf.Predicate._
+    import io.semanticdf.predicate.Predicate._
     joined
       .where(Predicate.Compare("eq", "status", "shipped"))
       .groupBy("order_id")

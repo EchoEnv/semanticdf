@@ -1,6 +1,7 @@
 package io.semanticdf.adapters
+import io.semanticdf.predicate._
 
-import io.semanticdf.{Predicate, SemanticTable}
+import io.semanticdf.SemanticTable
 import io.semanticdf.{Dimension, Measure, FlightsFixture, SparkSessionFixture, toSemanticTable}
 import io.semanticdf.adapters.{DbtAdapter, OssieReader}
 

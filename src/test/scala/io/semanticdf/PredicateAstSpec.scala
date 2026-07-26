@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import org.apache.spark.sql.Column
 import org.scalatest.funspec.AnyFunSpec

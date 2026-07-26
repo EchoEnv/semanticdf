@@ -1,4 +1,5 @@
 package io.semanticdf.cache
+import io.semanticdf.predicate._
 
 import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, toSemanticTable}
 import io.semanticdf.audit.PredicateHasher
@@ -58,15 +59,15 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   test("forRequest: different where => different key") {
-    val p1 = io.semanticdf.Predicate.Compare.Eq("carrier", "AA")
-    val p2 = io.semanticdf.Predicate.Compare.Eq("carrier", "UA")
+    val p1 = io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA")
+    val p2 = io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "UA")
     val a = CacheKey.forRequest(makeReq(where = Some(p1)))
     val b = CacheKey.forRequest(makeReq(where = Some(p2)))
     assert(a != b)
   }
 
   test("forRequest: same where => same key") {
-    val p = io.semanticdf.Predicate.Compare.Eq("carrier", "AA")
+    val p = io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA")
     val a = CacheKey.forRequest(makeReq(where = Some(p)))
     val b = CacheKey.forRequest(makeReq(where = Some(p)))
     assert(a == b)
@@ -80,13 +81,13 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   test("forRequest: where with same content but different shape => same key") {
     // And(A, B) vs And(B, A) — PredicateHasher is commutative, so the
     // cache key for the equivalent predicate is the same.
-    val p1 = io.semanticdf.Predicate.And(
-      io.semanticdf.Predicate.Compare.Eq("carrier", "AA"),
-      io.semanticdf.Predicate.Compare.Gt("distance", 500),
+    val p1 = io.semanticdf.predicate.Predicate.And(
+      io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA"),
+      io.semanticdf.predicate.Predicate.Compare.Gt("distance", 500),
     )
-    val p2 = io.semanticdf.Predicate.And(
-      io.semanticdf.Predicate.Compare.Gt("distance", 500),
-      io.semanticdf.Predicate.Compare.Eq("carrier", "AA"),
+    val p2 = io.semanticdf.predicate.Predicate.And(
+      io.semanticdf.predicate.Predicate.Compare.Gt("distance", 500),
+      io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA"),
     )
     val a = CacheKey.forRequest(makeReq(where = Some(p1)))
     val b = CacheKey.forRequest(makeReq(where = Some(p2)))
@@ -400,12 +401,12 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     val q1 = t.query(
       measures   = Seq("flight_count"),
       dimensions = Seq("carrier"),
-      where      = Some(io.semanticdf.Predicate.Compare.Eq("carrier", "AA")),
+      where      = Some(io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA")),
     )
     val q2 = t.query(
       measures   = Seq("flight_count"),
       dimensions = Seq("carrier"),
-      where      = Some(io.semanticdf.Predicate.Compare.Eq("carrier", "UA")),
+      where      = Some(io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "UA")),
     )
     q1.toDataFrame(spark).collect()
     q2.toDataFrame(spark).collect()
@@ -419,7 +420,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     val q = t.query(
       measures   = Seq("flight_count"),
       dimensions = Seq("carrier"),
-      where      = Some(io.semanticdf.Predicate.Compare.Eq("carrier", "AA")),
+      where      = Some(io.semanticdf.predicate.Predicate.Compare.Eq("carrier", "AA")),
     )
     q.toDataFrame(spark).collect()
     q.toDataFrame(spark).collect()
@@ -610,8 +611,8 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       version: Int = 0,
       measures: Seq[String] = Seq("flight_count"),
       dimensions: Seq[String] = Seq("carrier"),
-      where: Option[io.semanticdf.Predicate] = None,
-      having: Option[io.semanticdf.Predicate] = None,
+      where: Option[io.semanticdf.predicate.Predicate] = None,
+      having: Option[io.semanticdf.predicate.Predicate] = None,
       orderBy: Seq[(String, String)] = Seq.empty,
       limit: Option[Int] = None,
       timeGrain: Option[String] = None,

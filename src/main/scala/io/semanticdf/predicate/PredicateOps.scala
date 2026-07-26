@@ -1,4 +1,7 @@
-package io.semanticdf
+package io.semanticdf.predicate
+
+import io.semanticdf.{SemanticField, SemanticScope}
+import io.semanticdf.FieldRef
 
 /** Infix typed-predicate operators on typed field references.
   *
@@ -46,7 +49,7 @@ package io.semanticdf
   * To use, import once:
   *
   * {{{
-  *   import io.semanticdf.PredicateOps._
+  *   import io.semanticdf.predicate.PredicateOps._
   * }}}
   */
 object PredicateOps {

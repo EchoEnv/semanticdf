@@ -1,6 +1,6 @@
 package io.semanticdf.audit
 
-import io.semanticdf.Predicate
+import io.semanticdf.predicate.Predicate
 
 /** Audit-side capture of a user's query request.
   *

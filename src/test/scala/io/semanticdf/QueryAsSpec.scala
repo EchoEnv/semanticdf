@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import io.semanticdf.result.ResultDecoder
 import org.apache.spark.sql.{Dataset, Row, SparkSession}

@@ -1,6 +1,6 @@
 package io.semanticdf.mcp.handlers
 
-import io.semanticdf.Predicate
+import io.semanticdf.predicate.Predicate
 
 import scala.jdk.CollectionConverters._
 

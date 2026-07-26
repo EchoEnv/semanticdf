@@ -1,6 +1,7 @@
 package io.semanticdf.tools
+import io.semanticdf.predicate._
 
-import io.semanticdf.{Predicate, SemanticTable, SortKey}
+import io.semanticdf.{SemanticTable, SortKey}
 
 /** Minimal SQL adapter for the `semanticdf query` CLI.
   *

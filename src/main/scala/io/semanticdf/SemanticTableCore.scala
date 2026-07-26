@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import io.semanticdf.audit.{AuditEvent, AuditSink, QueryRequest => AuditQueryRequest}
 import org.apache.spark.sql.{Column, DataFrame, SparkSession}

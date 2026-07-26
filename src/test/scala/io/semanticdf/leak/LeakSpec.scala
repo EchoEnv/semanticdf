@@ -1,7 +1,8 @@
 package io.semanticdf.leak
+import io.semanticdf.predicate._
 
 import io.semanticdf.audit.{AuditSink, AuditEvent, PredicateHasher}
-import io.semanticdf.{Dimension, FlightsFixture, Measure, Predicate, SparkSessionFixture, toSemanticTable}
+import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, toSemanticTable}
 import io.semanticdf.cache.{CachedResult, ResultCache}
 
 import org.apache.spark.sql.Row

@@ -1,4 +1,5 @@
 package io.semanticdf
+import io.semanticdf.predicate._
 
 import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, LongType, StringType, StructField, StructType}
@@ -46,7 +47,7 @@ class PredicateOpsSpec extends AnyFunSuite with SparkSessionFixture {
     implicit val avgPax:   SemanticMeasure[AvgPax]       = SemanticMeasure.of[AvgPax]("avg_pax")
   }
   import Refs._
-  import io.semanticdf.PredicateOps._
+  import io.semanticdf.predicate.PredicateOps._
 
   private def tinyDf(spark: SparkSession) = {
     val schema = StructType(Seq(
