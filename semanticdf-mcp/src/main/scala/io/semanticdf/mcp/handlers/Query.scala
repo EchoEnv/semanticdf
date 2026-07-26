@@ -256,7 +256,13 @@ object Query {
       groupId: String,
       description: String,
   )(body: => T): T = {
-    spark.sparkContext.setJobGroup(groupId, description, interruptOnCancel = true)
+    // Spark 3.5+ deprecates `setJobGroup / cancelJobGroup / clearJobGroup`
+    // in favor of the tag-based API. The tag API is also the one that
+    // works under Spark Connect (job groups are client-side; tags
+    // propagate to the server). See SPARK-37928.
+    val sc = spark.sparkContext
+    sc.addJobTag(groupId)
+    sc.setJobDescription(description)
     try {
       val future = Future { body }(ExecutionContext.global)
       try {
@@ -264,11 +270,15 @@ object Query {
         Await.result(future, deadline)
       } catch {
         case _: TimeoutException =>
-          spark.sparkContext.cancelJobGroup(groupId)
+          sc.cancelJobsWithTag(groupId)
           throw QueryErrors.QueryTimeout(timeoutMs)
       }
     } finally {
-      spark.sparkContext.clearJobGroup()
+      // Pop our tag from the thread-local tag stack so the next request
+      // on this thread starts clean. We can't `clearJobTags()` because
+      // that wipes ALL tags (including the Spark Connect server's
+      // session tag), which would break concurrent requests.
+      sc.removeJobTag(groupId)
     }
   }
 

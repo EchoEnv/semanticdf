@@ -203,6 +203,42 @@ class QuerySpec extends AnyFunSuite with io.semanticdf.mcp.SparkFixture {
   }
 
   // ---------------------------------------------------------------------------
+  // Tag-based cancellation actually works against a real Spark query.
+  //
+  // The Thread.sleep-based tests above are deterministic; this one
+  // exercises the new addJobTag / cancelJobsWithTag path end-to-end
+  // against the Spark scheduler. The query (`range(1L << 24).crossJoin`)
+  // is heavy enough to be cancellable mid-execution on `local[2]`.
+  // ---------------------------------------------------------------------------
+  test("QUERY_TIMEOUT: withTimeout cancels a real Spark query via the tag-based API") {
+    val ex = intercept[QueryErrors.QueryTimeout] {
+      Query.withTimeout(spark, timeoutMs = 50, groupId = "cancel-test", "test") {
+        // ~16M-row self-cross-join: heavy enough to be in-flight when
+        // the 50ms timeout fires.
+        import org.apache.spark.sql.functions._
+        val heavy = spark.range(1L << 12).crossJoin(spark.range(1L << 12))
+        val agg   = heavy.agg(sum(lit(1L)))
+        agg.collect()
+        42  // unreachable — query should be cancelled
+      }
+    }
+    assert(ex.timeoutMs == 50, s"expected timeoutMs=50, got ${ex.timeoutMs}")
+  }
+
+  test("QUERY_TIMEOUT: withTimeout cleans up the tag after success (no leaked tags)") {
+    // Run a fast query inside the timeout window. After it returns, the
+    // tag must be removed from the SparkContext — otherwise the next
+    // request on the same thread would inherit the stale tag.
+    Query.withTimeout(spark, timeoutMs = 5000, groupId = "leak-check", "test") {
+      42
+    }
+    val remaining = spark.sparkContext.getJobTags()
+    assert(!remaining.contains("leak-check"),
+      s"expected 'leak-check' tag to be removed after success, got: $remaining")
+  }
+
+
+  // ---------------------------------------------------------------------------
   // AMBIGUOUS_MEASURE / AMBIGUOUS_DIMENSION — case-insensitive name collisions
   // ---------------------------------------------------------------------------
   //
