@@ -482,6 +482,121 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   // ----------------------------------------------------------------
+  // Cache auto-invalidation: model version (v0.2.0, PR #199)
+  // ----------------------------------------------------------------
+
+  test("forRequest: model version 0 (default) produces key without an mv segment") {
+    // The default `version = 0` is the "pre-versioning era" sentinel.
+    // We don't pollute the cache key with `mv=0` because every model
+    // before v0.2.0 had version=0 — making the segment mandatory would
+    // invalidate every pre-existing cache entry on upgrade.
+    val a = CacheKey.forRequest(makeReq(model = "flights", version = 0))
+    val b = CacheKey.forRequest(makeReq(model = "flights"))  // also version = 0 by default
+    assert(a == b)
+  }
+
+  test("forRequest: same model + same shape but different version => different keys") {
+    // This is the auto-invalidation contract: a version bump produces a
+    // different cache key, so old-version entries become unreachable.
+    val v1 = CacheKey.forRequest(makeReq(model = "flights", version = 1))
+    val v2 = CacheKey.forRequest(makeReq(model = "flights", version = 2))
+    assert(v1.isDefined && v2.isDefined)
+    assert(v1 != v2, "different versions must produce different cache keys")
+  }
+
+  test("forRequest: version 10 vs version 100 are not prefix-collisions under length-prefix encoding") {
+    // PR #188 fixed prefix collisions by length-prefixing every segment.
+    // Verify the version segment doesn't reintroduce them when version
+    // numbers cross a digit boundary.
+    val v10  = CacheKey.forRequest(makeReq(model = "m", version = 10))
+    val v100 = CacheKey.forRequest(makeReq(model = "m", version = 100))
+    val v1   = CacheKey.forRequest(makeReq(model = "m", version = 1))
+    val v9   = CacheKey.forRequest(makeReq(model = "m", version = 9))
+    assert(v10 != v100, s"version 10 vs 100 must not collide: $v10 vs $v100")
+    assert(v1  != v10,  s"version 1 vs 10 must not collide: $v1 vs $v10")
+    assert(v9  != v100, s"version 9 vs 100 must not collide: $v9 vs $v100")
+  }
+
+  test("inMemory: invalidateByModelAndVersion removes only matching entries") {
+    // The explicit hook for active eviction of old-version entries
+    // (e.g. on persistent backends like Redis where LRU doesn't
+    // naturally release memory).
+    val c = ResultCache.inMemory(maxEntries = 16).asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val v = CachedResult(Array.empty[Row], schema)
+    c.putWithModelAndVersion("a", v, "orders", 1)
+    c.putWithModelAndVersion("b", v, "orders", 1)
+    c.putWithModelAndVersion("c", v, "orders", 2)  // same model, diff version
+    assert(c.invalidateByModelAndVersion("orders", 1) == 2,
+      "should evict the two v1 entries; leave the v2 entry alone")
+    // 'c' (v2) is still there; subsequent calls for v2 still hit:
+    assert(c.keys() == Seq("c"))
+    // Second call returns 0:
+    assert(c.invalidateByModelAndVersion("orders", 1) == 0)
+    // v2 still survives its own call:
+    assert(c.invalidateByModelAndVersion("orders", 2) == 1)
+    assert(c.keys().isEmpty)
+  }
+
+  test("inMemory: invalidateModel covers all versions of the model") {
+    val c = ResultCache.inMemory(maxEntries = 16).asInstanceOf[InMemoryResultCache]
+    val schema = StructType(Seq(StructField("x", IntegerType)))
+    val v = CachedResult(Array.empty[Row], schema)
+    c.putWithModelAndVersion("a", v, "orders", 1)
+    c.putWithModelAndVersion("b", v, "orders", 2)
+    c.putWithModelAndVersion("c", v, "orders", 3)
+    assert(c.invalidateModel("orders") == 3,
+      "invalidateModel must wipe all versions of the named model")
+    assert(c.keys().isEmpty)
+  }
+
+  test("end-to-end: cache miss after version bump is auto-invalidation") {
+    // The most important regression test: a user bumps the model
+    // version (e.g. flights.yml v1 → v2 with a schema change). Without
+    // the cache-key fix, the next query would HIT a stale cache entry
+    // from v1. With the fix, the v2 cache key is different (mv=2), so
+    // the lookup misses, the query runs fresh, and the v1 entry becomes
+    // LRU garbage that ages out.
+    val cache = ResultCache.inMemory().asInstanceOf[InMemoryResultCache]
+    val v1 = baseModel.version(1).withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    val v2 = baseModel.version(2).withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    // First, fill the cache with v1.
+    v1.toDataFrame(spark).collect()
+    assert(cache.keys().length == 1, "v1 query should populate the cache")
+    val v1KeysBefore = cache.keys().toSet
+    // Now bump to v2 and query. Cache miss → fresh execution.
+    v2.toDataFrame(spark).collect()
+    assert(cache.keys().length == 2,
+      "v2 query should add a NEW cache entry (different key), " +
+      "leaving the v1 entry to age out via LRU")
+    assert(v1KeysBefore != cache.keys().toSet,
+      "the v1 cache key must not match the v2 cache key")
+  }
+
+  test("end-to-end: AuditEvent now carries the model version") {
+    // The audit log is the "natural trigger" per the v0.1.17 review's
+    // standing recommendation: it should record the model state at
+    // query time so consumers (MCP, agents) can correlate events with
+    // model versions.
+    val sink = io.semanticdf.audit.AuditSink.inMemory(maxEvents = 32)
+    val q = baseModel.version(7).withAuditSink(sink)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    q.toDataFrame(spark).collect()
+    // Read the events via the AuditSink default snapshot (returns any
+    // concrete subtype's events; cast through the trait).
+    // The sink's public surface returns Seq[AuditEvent].
+    val events: Seq[io.semanticdf.audit.AuditEvent] = sink.snapshot()
+    assert(events.nonEmpty, "audit sink should receive at least one event")
+    assert(events.last.version == 7,
+      s"AuditEvent should carry the model's version; got ${events.last.version}")
+    // Streaming path: same expectation.
+    // (Skipped here: streaming terminal needs a streaming source; covered by
+    // the streaming audit tests in v0.1.17 / v0.2.0.)
+  }
+
+  // ----------------------------------------------------------------
   // Fixtures
   // ----------------------------------------------------------------
 
@@ -492,6 +607,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
 
   private def makeReq(
       model: String = "flights",
+      version: Int = 0,
       measures: Seq[String] = Seq("flight_count"),
       dimensions: Seq[String] = Seq("carrier"),
       where: Option[io.semanticdf.Predicate] = None,
@@ -504,6 +620,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   ): io.semanticdf.audit.QueryRequest =
     io.semanticdf.audit.QueryRequest(
       model      = model,
+      version    = version,
       measures   = measures,
       dimensions = dimensions,
       where      = where,

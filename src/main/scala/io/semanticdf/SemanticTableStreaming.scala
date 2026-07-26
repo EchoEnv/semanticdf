@@ -463,12 +463,13 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
         val rowCount   = batchDf.count()
         val elapsedMs  = (System.nanoTime() - t0) / 1000000L
         val model      = this.name.getOrElse(sourceTable.getOrElse("unknown"))
-        val req        = auditRequest.getOrElse(AuditQueryRequest(model = model))
+        val req        = auditRequest.getOrElse(AuditQueryRequest(model = model, version = this.version))
         val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
         val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
         auditSink.get.emit(AuditEvent(
           ts         = java.time.Instant.now(),
           model      = model,
+          version    = req.version,
           measures   = req.measures,
           dimensions = req.dimensions,
           whereHash  = whereHash,

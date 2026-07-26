@@ -85,7 +85,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       // hash and the cached value would be wrong. Skip the cache
       // entirely in this case. The cache only makes sense for
       // repeated IDENTICAL queries.
-      val req   = auditRequest.getOrElse(AuditQueryRequest(model = model))
+      val req   = auditRequest.getOrElse(AuditQueryRequest(model = model, version = this.version))
       val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
       val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
 
@@ -147,9 +147,9 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
                 // (catching OOM/SOE was wrong — it would silently
                 // report a successful query).
                 try {
-                  resultCache.get.putWithModel(key,
+                  resultCache.get.putWithModelAndVersion(key,
                     io.semanticdf.cache.CachedResult(rows, fresh.schema),
-                    model)
+                    model, req.version)
                 } catch { case scala.util.control.NonFatal(_) => () }
                 // Step 3: rebuild the DataFrame from the collected
                 // rows so the caller is decoupled from the source.
@@ -176,6 +176,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           try auditSink.get.emit(AuditEvent(
             ts         = java.time.Instant.now(),
             model      = model,
+            version    = req.version,
             measures   = req.measures,
             dimensions = req.dimensions,
             whereHash  = whereHash,
@@ -193,6 +194,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
             try auditSink.get.emit(AuditEvent(
               ts         = java.time.Instant.now(),
               model      = model,
+              version    = req.version,
               measures   = req.measures,
               dimensions = req.dimensions,
               whereHash  = whereHash,
@@ -566,6 +568,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     val model = this.name.getOrElse(sourceTable.getOrElse("unknown"))
     val captured = AuditQueryRequest(
       model      = model,
+      version    = this.version,
       measures   = measures.toSeq,
       dimensions = dimensions.toSeq,
       where      = where,

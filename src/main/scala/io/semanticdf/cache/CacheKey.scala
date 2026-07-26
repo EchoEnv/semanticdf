@@ -6,6 +6,10 @@ import io.semanticdf.audit.{PredicateHasher, QueryRequest => AuditQueryRequest}
   *
   * Two queries share a cache entry iff they ask for the same data:
   *   - same model
+  *   - same model `version` (auto-invalidation: a version bump produces
+  *     a different cache key, so old entries become unreachable and
+  *     LRU evicts them; this is the v0.1.17-review's recommended
+  *     auto-invalidation mechanism)
   *   - same measures (in the order the user asked — the measure
   *     order doesn't change the result but is part of the request
   *     contract; a future refactor that puts measures in a different
@@ -59,7 +63,11 @@ object CacheKey {
       val grainPart  = LengthPrefixed.encodeOptString(req.timeGrain)
       val grainsPart = LengthPrefixed.encodeMap(req.timeGrains)
       val rangePart  = LengthPrefixed.encodeOptPair(req.timeRange)
-      val canonical = s"m=$modelPart|me=$measuresPart|dim=$dimsPart" +
+      // `mv` is the model-version segment — included as a length-prefixed
+      // int so it gets the same prefix handling as other int-valued fields
+      // (version 10 vs version 100 will not collide).
+      val versionPart = LengthPrefixed.encodeOptString(Option(req.version).filter(_ != 0).map(_.toString))
+      val canonical = s"m=$modelPart|mv=$versionPart|me=$measuresPart|dim=$dimsPart" +
         s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart"
       Some(LengthPrefixed.sha256(canonical))

@@ -72,11 +72,35 @@ trait ResultCache {
     * name to keys for O(1) lookup. */
   def putWithModel(key: String, value: CachedResult, model: String): Unit = put(key, value)
 
+  /** 4-arg variant: also record the model version for sidecar-based
+    * invalidation. Default delegates to [[putWithModel]] with
+    * `version = 0`. Concrete caches are encouraged to override
+    * this to track (model, version) → keys for [[invalidateByModelAndVersion]]
+    * lookups. */
+  def putWithModelAndVersion(
+      key: String, value: CachedResult, model: String, version: Int): Unit =
+    putWithModel(key, value, model)
+
   /** Drop every entry tagged with the given model name. Returns
     * the number of entries actually removed. Default: 0 (no-op
     * for caches that don't track models). The lookup is O(1) for
     * caches that maintain a model→keys sidecar; O(n) otherwise. */
   def invalidateModel(name: String): Int = 0
+
+  /** Drop every entry tagged with the given model name AND version.
+    *
+    * Used by the v0.2.0 auto-invalidation mechanism: after a model
+    * version bump, the cache key naturally differs (mv= section in
+    * the canonical form), so old-version entries become unreachable
+    * and LRU evicts them eventually. This hook lets operators
+    * actively release memory for old-version entries (e.g. on
+    * persistent backends like Redis) instead of waiting for LRU.
+    *
+    * Returns the number of entries actually removed. Default: 0
+    * (no-op for caches that don't track versions). The default
+    * implementation does an O(n) scan over all entries; concrete
+    * caches are encouraged to maintain a sidecar for O(1). */
+  def invalidateByModelAndVersion(name: String, version: Int): Int = 0
 
   /** Return the keys currently held by this cache, in LRU order
     * (oldest first). Default: empty (non-retentive caches have no
