@@ -280,6 +280,7 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
     val leftSide  = new JoinSide("left",  flightsDf, Map.empty, scala.collection.mutable.Map.empty)
     val rightSide = new JoinSide("right", flightsDf, Map.empty, scala.collection.mutable.Map.empty)
     val preCacheColumn = ast.toColumn(leftSide, rightSide)  // populates the cache
+    val preCacheSql = io.semanticdf.ColumnSql.of(preCacheColumn)
     // The pre-roundtrip toColumn result equals a re-built column.
     // (We can't observe `cache` directly — it's a private field — but
     // the post-round-trip call rebuilding the cache is the contract.)
@@ -298,10 +299,14 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
     val postRoundTripColumn = round.toColumn(leftSide, rightSide)
     assert(postRoundTripColumn != null, "toColumn should rebuild the cache on the round-tripped AST")
     // The cache-rebuilt column should be structurally equal to the pre-roundtrip
-    // column. Spark's `Column` doesn't override `equals`, so we compare expressions.
-    assert(postRoundTripColumn.expr.toString == preCacheColumn.expr.toString,
+    // column. Spark's `Column` doesn't override `equals`, so we compare via SQL.
+    // Use `ColumnSql.of` for cross-version compatibility (Spark 3.x exposes
+    // `column.expr`; Spark 4.x exposes `column.node` — the library's
+    // `ColumnSql` helper abstracts both via reflection).
+    val postRoundTripSql = io.semanticdf.ColumnSql.of(postRoundTripColumn)
+    assert(postRoundTripSql == preCacheSql,
       s"rebuilt column should match the pre-roundtrip column: " +
-      s"${postRoundTripColumn.expr} vs ${preCacheColumn.expr}")
+      s"'$postRoundTripSql' vs '$preCacheSql'")
   }
 
   test("SortKey: Java-serializable (sealed trait with private case classes)") {
