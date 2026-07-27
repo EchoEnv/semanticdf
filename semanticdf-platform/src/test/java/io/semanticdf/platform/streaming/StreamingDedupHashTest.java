@@ -101,6 +101,67 @@ class StreamingDedupHashTest {
     assertNotEquals(started, stopped, "different event types must produce different hashes");
   }
 
+  // --- streaming.restarted (PR #231 reconciliation feature) ---
+
+  @Test
+  void streamingRestarted_eventTypeConstant() {
+    assertEquals("streaming.restarted", StreamingDedupHash.STREAMING_RESTARTED);
+    assertNotEquals(
+        StreamingDedupHash.STREAMING_STARTED,
+        StreamingDedupHash.STREAMING_RESTARTED,
+        "restarted must be a distinct event type so audit log shows both");
+  }
+
+  @Test
+  void streamingRestarted_isWellFormed() {
+    String hash = StreamingDedupHash.streamingRestarted("s1", "orders", 1L, "/ckpt");
+    assertEquals(64, hash.length(), "SHA-256 hex is 64 chars");
+    assertTrue(hash.matches("[0-9a-f]{64}"));
+  }
+
+  @Test
+  void streamingRestarted_differsFromStreamingStarted() {
+    // Same identity inputs, different event types → different hashes.
+    // This is the property that lets the audit log retain BOTH the
+    // original streaming.started (replayed from journal) AND the
+    // streaming.restarted (post-crash) without dedup collapsing them.
+    String started =
+        StreamingDedupHash.streamingStarted("s1", "orders", "sum(amount)", "/ckpt");
+    String restarted = StreamingDedupHash.streamingRestarted("s1", "orders", 1L, "/ckpt");
+    assertNotEquals(started, restarted);
+  }
+
+  @Test
+  void streamingRestarted_streamIdSensitivity() {
+    // Different stream-ids must produce different hashes — protects against the
+    // cross-stream dedup bug the DE subagent caught in PR #221.
+    String a = StreamingDedupHash.streamingRestarted("stream-A", "orders", 1L, "/ckpt");
+    String b = StreamingDedupHash.streamingRestarted("stream-B", "orders", 1L, "/ckpt");
+    assertNotEquals(a, b);
+  }
+
+  @Test
+  void streamingRestarted_countSensitivity() {
+    // Each restart ordinal must produce a distinct hash. Operators see
+    // each restart as a distinct event in the audit log even though
+    // streamId/modelName/checkpointLocation are identical across retries.
+    // This is the property that fixes the DE finding #H3 ("restart
+    // events collapsed to first attempt").
+    String first = StreamingDedupHash.streamingRestarted("s1", "orders", 1L, "/ckpt");
+    String second = StreamingDedupHash.streamingRestarted("s1", "orders", 2L, "/ckpt");
+    String third = StreamingDedupHash.streamingRestarted("s1", "orders", 3L, "/ckpt");
+    assertNotEquals(first, second);
+    assertNotEquals(second, third);
+    assertNotEquals(first, third);
+  }
+
+  @Test
+  void streamingRestarted_sameInputsProduceSameHash() {
+    String a = StreamingDedupHash.streamingRestarted("s1", "orders", 1L, "/ckpt");
+    String b = StreamingDedupHash.streamingRestarted("s1", "orders", 1L, "/ckpt");
+    assertEquals(a, b);
+  }
+
   private static String toHex(byte[] hash) {
     StringBuilder sb = new StringBuilder(hash.length * 2);
     for (byte b : hash) {
