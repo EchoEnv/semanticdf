@@ -7,6 +7,12 @@ import io.semanticdf.platform.audit.AuditEventStore;
 import io.semanticdf.platform.audit.AuditService;
 import io.semanticdf.platform.audit.NoOpAuditEventStore;
 import io.semanticdf.platform.audit.PostgresAuditEventStore;
+import io.semanticdf.platform.model.ModelService;
+import io.semanticdf.platform.model.ModelStore;
+import io.semanticdf.platform.model.NoOpModelStore;
+import io.semanticdf.platform.model.PostgresModelStore;
+import io.semanticdf.platform.catalog.CatalogService;
+import io.semanticdf.cache.ResultCache;
 import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
 import io.semanticdf.platform.query.QueryService;
@@ -111,6 +117,48 @@ public final class PlatformApplication {
             + "durable in " + AuditEventStore.class.getSimpleName()
             + " against " + redactConnectUrl(jdbcUrl));
     return new PostgresAuditEventStore(jdbcUrl, user, password);
+  }
+
+  /**
+   * Build the {@link ModelStore} from env vars. Visible-for-testing
+   * pattern — mirrors {@link #buildAuditEventStoreFromEnv}.
+   *
+   * <p>Env vars:
+   * <ul>
+   *   <li>{@code SEMANTICDF_MODELS_PERSIST=true|false} —
+   *       default false (preserves pre-PR-B behavior: register()
+   *       updates the journal but no Postgres row is written).
+   *   <li>{@code SEMANTICDF_CATALOG_JDBC_URL} +
+   *       {@code SEMANTICDF_CATALOG_USER} +
+   *       {@code SEMANTICDF_CATALOG_PASSWORD} — Postgres
+   *       connection (shared with the stream catalog + audit
+   *       event store).
+   * </ul>
+   */
+  static ModelStore buildModelStoreFromEnv() {
+    String persist = System.getenv().getOrDefault("SEMANTICDF_MODELS_PERSIST", "false");
+    if (!"true".equalsIgnoreCase(persist)) {
+      System.out.println(
+          "semanticdf-platform: SEMANTICDF_MODELS_PERSIST not set to true — "
+              + "model registry journal-only (no Postgres writes). Set "
+              + "SEMANTICDF_MODELS_PERSIST=true with SEMANTICDF_CATALOG_JDBC_URL "
+              + "to enable durable model storage.");
+      return new NoOpModelStore();
+    }
+    String jdbcUrl = System.getenv("SEMANTICDF_CATALOG_JDBC_URL");
+    if (jdbcUrl == null || jdbcUrl.isBlank()) {
+      throw new IllegalStateException(
+          "SEMANTICDF_MODELS_PERSIST=true but SEMANTICDF_CATALOG_JDBC_URL is unset \u2014 "
+              + "either set both, or unset SEMANTICDF_MODELS_PERSIST to disable model persistence");
+    }
+    String user = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
+    String password =
+        System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
+    System.out.println(
+        "semanticdf-platform: SEMANTICDF_MODELS_PERSIST=true \u2014 model registry "
+            + "durable in " + ModelStore.class.getSimpleName()
+            + " against " + redactConnectUrl(jdbcUrl));
+    return new PostgresModelStore(jdbcUrl, user, password);
   }
 
   public static void main(String[] args) throws IOException {
@@ -261,13 +309,34 @@ public final class PlatformApplication {
     //   Requires SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD.
     final AuditEventStore auditStore = buildAuditEventStoreFromEnv();
 
+    // --- Model registry store (PR-B: durable model YAML + lineage) ---
+    //
+    // Configuration:
+    //   SEMANTICDF_MODELS_PERSIST=true|false (default: false)
+    //     false = NoOpModelStore; the journal's CURRENT_VERSION /
+    //             MANIFEST_HASH are updated but no Postgres row
+    //             is written. Existing behavior preserved.
+    //     true  = PostgresModelStore against the platform's
+    //             existing Postgres (shares the JDBC URL with the
+    //             stream catalog).
+    //   Requires SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD.
+    final ModelStore modelStore = buildModelStoreFromEnv();
+
+    // Cache seam for ModelService — when a successful register()
+    // bumps CURRENT_VERSION, ModelService calls
+    // cache.invalidateByModelAndVersion(name, version). For P1,
+    // the default is ResultCache.NoOp (no cache active until
+    // PR-C wires it for QueryService); v0.2.3+ can pass the
+    // library's InMemoryResultCache.
+    final ResultCache resultCache = ResultCache.NoOp();
+
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
-        .bind(new ModelService())
+        .bind(new ModelService(modelStore, spark, resultCache))
         .bind(new QueryService())
         .bind(new StreamingService(models, launcher, handles, catalog))
         .bind(new AuditService(auditStore))
-        .bind(new CatalogService())
+        .bind(new CatalogService(modelStore))
         .build();
 
     // Start the HTTP server on port 8080 (or $PORT). The same process
@@ -405,6 +474,18 @@ public final class PlatformApplication {
         } catch (Throwable t) {
           System.err.println(
               "semanticdf-platform: AuditEventStore close() failed: " + t.getMessage());
+        }
+      }
+      // PR-B: release the model store's HikariCP pool (only
+      // meaningful when SEMANTICDF_MODELS_PERSIST=true). NoOp store
+      // has nothing to close.
+      if (modelStore != null) {
+        try {
+          modelStore.close();
+          System.out.println("semanticdf-platform: ModelStore closed");
+        } catch (Throwable t) {
+          System.err.println(
+              "semanticdf-platform: ModelStore close() failed: " + t.getMessage());
         }
       }
     }, "semanticdf-platform-shutdown"));

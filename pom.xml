@@ -30,6 +30,10 @@
 
     <scala.maven.plugin.version>4.9.2</scala.maven.plugin.version>
     <scalatest.maven.plugin.version>2.2.0</scalatest.maven.plugin.version>
+
+    <!-- Library version (semanticdf_2.13): consumed by the platform
+         module as a Maven dep. Bump on library release. -->
+    <semanticdf.version>0.2.1</semanticdf.version>
     <maven.compiler.plugin.version>3.13.0</maven.compiler.plugin.version>
 
     <!-- Spark needs reflective access to internal JDK modules (sun.nio.ch.DirectBuffer, etc.),

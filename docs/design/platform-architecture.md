@@ -173,6 +173,45 @@ URL the stream catalog uses) and runs monthly-partition
 {@code CREATE TABLE IF NOT EXISTS} bootstrap at startup. Partition
 coverage is current-month + next-2-months; older data requires a
 separate retention/ingestion path.
+
+### 2.5.2 Model registry persistence (PR-B, v0.2.2)
+
+The {@code ModelService} writes the runtime-registered model
+manifest to Postgres via the {@code ModelStore}:
+
+- **Journal tier (Restate):** holds {@code CURRENT_VERSION},
+  {@code MANIFEST_HASH}, {@code LAST_INVALIDATED_AT},
+  {@code REGISTRATION_STATUS} — coordination only.
+- **Postgres tier (the {@code ModelStore}):** keyed on
+  {@code (model_name, version)}; stores the YAML body verbatim,
+  the SHA-256 manifest hash, and the canonical
+  {@code Lineage.workspaceJsonFor(model)} output.
+
+Compilation steps run inside {@code Restate.run(...)} so a JVM
+crash mid-register replays the cached compile + persist without
+re-executing side effects. The compile uses the library's
+{@code YamlLoader.load(path, spark)} entry point via a temp file
+that's deleted in a {@code finally} block (no FD leak).
+
+A successful registration invalidates the result cache via
+{@code ResultCache.invalidateByModelAndVersion(name, version)}
+after the journal bookkeeping, OUTSIDE any {@code Restate.run}
+block — cache state is observable but not coordination, so a
+re-invocation can re-emit without double-invalidating.
+
+For P1 the cache is {@code ResultCache.NoOp} (no PR-C query cache
+yet); PR-C will swap to a real cache.
+
+The {@code CatalogService} (read-only) reads from the same
+{@code ModelStore}: {@code listModels} returns all
+{@code (model_name, version)} rows ordered; {@code describeModel}
+returns the latest version's YAML body + lineage JSON + manifest
+hash. Caffeine L1 in the platform's REST layer sits in front of
+the Catalog for cache hits.
+
+Opt-in via {@code SEMANTICDF_MODELS_PERSIST=true} (default false).
+Schema additions are pure additive — existing deployments with
+the stream catalog + audit event store upgrade cleanly.
 - **Synchronous PostgreSQL replication** across the 3 AZs. Now
   serving two roles: platform metadata AND Restate's journal.
 - **Restate's per-key serialization** replaces the prior
