@@ -486,11 +486,12 @@ class StreamingServiceTest {
   }
 
   @Test
-  void reconcileAfterJvmCrash_auditSinkFailureMarksFailedRestart() {
-    // Critical finding C1 from PR #232 review: audit-sink failures
-    // must propagate to STATUS=failed-restart so operators see them.
-    // Previously the catch swallowed the audit exception, leaving
-    // STATUS=running while the audit event was silently lost.
+  void reconcileAfterJvmCrash_auditSinkFailureIncrementsAuditLossCounter() {
+    // PR #233 finding from senior reviewers (Architect-C3): audit
+    // failure AFTER successful recreation does NOT block the
+    // workflow — it would orphan the live query. Instead, the
+    // workflow continues normally and increments AUDIT_LOSS_COUNT so
+    // operators can detect silent audit-log gaps via getAuditLossCount().
     RecordingState state = new RecordingState(0L);
     org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
     StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
@@ -506,25 +507,55 @@ class StreamingServiceTest {
         new StreamingService.StreamRunRequest(
             "orders", "sum(amount)", "/ckpt/orders");
 
+    // Audit failure does NOT throw — the workflow continues normally.
+    service.reconcileAfterJvmCrash("stream-1", null, req, state, 1_700_000_000_000L);
+
+    // Query is registered and alive. Workflow is NOT marked failed-restart.
+    assertSame(freshQuery, reg.get("stream-1"));
+    assertNullValue(state.store.get("status"));
+    // AUDIT_LOSS_COUNT incremented.
+    assertEquals(1L, state.store.get("auditLossCount"));
+    // The counters (RESTART_COUNT, LAST_RESTART_AT) were journaled
+    // successfully because the audit failure happened after the
+    // state.set calls (Architect-C3 redesign).
+    assertEquals(1L, state.store.get("restartCount"));
+    assertEquals(1_700_000_000_000L, state.store.get("lastRestartAt"));
+  }
+
+  @Test
+  void reconcileAfterJvmCrash_recreationFailureSetsBlockedFlag() {
+    // Critical finding DE-M1 / Architect-C1 from PR #232 review:
+    // a recreation failure (e.g., launcher throws persistently)
+    // must set RECONCILE_BLOCKED=true so the next run() invocation
+    // throws a TerminalException and stops the infinite retry loop.
+    RecordingState state = new RecordingState(0L);
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    StreamingQueryLauncher failingLauncher =
+        (model, request) -> {
+          throw new RuntimeException("checkpoint mismatch");
+        };
+    StreamingService service =
+        new StreamingService(
+            new StubModelRegistry(null), failingLauncher, reg, new RecordingAuditSink());
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
     assertThrows(
         RuntimeException.class,
         () ->
             service.reconcileAfterJvmCrash(
                 "stream-1", null, req, state, 1_700_000_000_000L));
 
-    // Audit failure path must mark STATUS=failed-restart — operators
-    // see both the missed audit event AND a clear failure marker in
-    // the audit log.
     assertEquals(
         "failed-restart",
         state.store.get("status"),
-        "audit failure must surface as STATUS=failed-restart");
+        "STATUS=failed-restart surfaces operator visibility");
+    assertEquals(
+        Boolean.TRUE,
+        state.store.get("reconcileBlocked"),
+        "RECONCILE_BLOCKED must be set so next run() doesn't loop");
     assertEquals(1L, state.store.get("errorCount"));
-    // Recreation succeeded (state.set was already called for
-    // LAST_RESTART_AT and RESTART_COUNT), but the workflow is marked
-    // failed because the audit emit failed — operators can
-    // investigate.
-    assertSame(freshQuery, reg.get("stream-1"));
   }
 
   // --- Helpers ---
