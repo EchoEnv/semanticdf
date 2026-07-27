@@ -15,6 +15,12 @@ import io.semanticdf.platform.streaming.StreamingService;
 import io.semanticdf.platform.streaming.YamlModelRegistry;
 
 import java.io.IOException;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.streaming.StreamingQuery;
@@ -136,7 +142,14 @@ public final class PlatformApplication {
 
   /**
    * Stop every live {@link StreamingQuery} in the registry. Returns the
-   * number of queries that were drained.
+   * number of queries that were drained (attempts, not necessarily
+   * successful stops — operators want the full picture).
+   *
+   * <p>Each {@code query.stop()} is wrapped in a {@link Future#get(long, TimeUnit)}
+   * with a per-query timeout ({@link #DRAIN_TIMEOUT_MS}). If a query
+   * hangs past the timeout, the Future is cancelled (which interrupts
+   * the worker thread), and we log the timeout — the JVM's own shutdown
+   * hook timeout will eventually force-exit if many queries hang.
    *
    * <p>Visible-for-testing — package-private so unit tests can drive the
    * drain with a fake registry.
@@ -145,25 +158,105 @@ public final class PlatformApplication {
    * @return the number of queries we attempted to stop
    */
   static int drainQueries(StreamingQueryHandleRegistry handles) {
+    return drainQueries(handles, DRAIN_TIMEOUT_MS);
+  }
+
+  /**
+   * Per-query timeout for {@link #drainQueries(StreamingQueryHandleRegistry, long)}.
+   * Spark's own {@code spark.sql.streaming.stopTimeout} controls how long
+   * {@code query.stop()} blocks before throwing; this is a hard cap that
+   * bounds our shutdown sequence regardless of Spark's setting.
+   *
+   * <p>10s per query is the default. With N concurrent streams, the worst-
+   * case drain time is N×10s. Operators tune via the
+   * {@code SEMANTICDF_DRAIN_TIMEOUT_MS} env var.
+   */
+  static final long DEFAULT_DRAIN_TIMEOUT_MS = 10_000L;
+
+  /** Resolved at class-load from the env var; falls back to the default. */
+  static final long DRAIN_TIMEOUT_MS = resolveDrainTimeoutMs();
+
+  private static long resolveDrainTimeoutMs() {
+    String raw = System.getenv("SEMANTICDF_DRAIN_TIMEOUT_MS");
+    if (raw == null || raw.isBlank()) {
+      return DEFAULT_DRAIN_TIMEOUT_MS;
+    }
+    try {
+      long v = Long.parseLong(raw.trim());
+      return v > 0 ? v : DEFAULT_DRAIN_TIMEOUT_MS;
+    } catch (NumberFormatException e) {
+      System.err.println(
+          "semanticdf-platform: invalid SEMANTICDF_DRAIN_TIMEOUT_MS='"
+              + raw
+              + "', using default "
+              + DEFAULT_DRAIN_TIMEOUT_MS
+              + "ms");
+      return DEFAULT_DRAIN_TIMEOUT_MS;
+    }
+  }
+
+  /**
+   * Drain with an explicit per-query timeout. Visible-for-testing.
+   */
+  static int drainQueries(StreamingQueryHandleRegistry handles, long perQueryTimeoutMs) {
     AtomicInteger count = new AtomicInteger(0);
-    handles.forEach(
-        (streamId, query) -> {
-          // Count BEFORE attempting — operators want to see the total
-          // drain attempts, not just the successful stops.
-          count.incrementAndGet();
-          try {
-            query.stop();
-          } catch (Throwable t) {
-            // query.stop() can throw TimeoutException, StreamingQueryException,
-            // or any runtime exception. We log and continue — we're shutting
-            // down anyway; missing one query is better than hanging the JVM.
-            System.err.println(
-                "semanticdf-platform: drain failed for stream-id="
-                    + streamId
-                    + ": "
-                    + t.getMessage());
-          }
-        });
+    ExecutorService executor =
+        Executors.newSingleThreadExecutor(
+            r -> {
+              Thread t = new Thread(r, "semanticdf-platform-drain");
+              t.setDaemon(true);
+              return t;
+            });
+    try {
+      handles.forEach(
+          (streamId, query) -> {
+            // Count BEFORE attempting — operators want to see the total
+            // drain attempts, not just the successful stops.
+            count.incrementAndGet();
+            Future<Void> future =
+                executor.submit(
+                    (Callable<Void>)
+                        () -> {
+                          query.stop();
+                          return null;
+                        });
+            try {
+              future.get(perQueryTimeoutMs, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException te) {
+              // The query is hung. Cancel the future (interrupts the
+              // worker thread); Spark may or may not honor the interrupt
+              // but cancelling the future prevents the executor's queue
+              // from blocking on this task forever.
+              future.cancel(true);
+              System.err.println(
+                  "semanticdf-platform: drain timed out for stream-id="
+                      + streamId
+                      + " after "
+                      + perQueryTimeoutMs
+                      + "ms; JVM shutdown hook timeout will force-exit");
+            } catch (InterruptedException ie) {
+              // The shutdown hook itself was interrupted — re-set the
+              // interrupt flag and stop draining.
+              Thread.currentThread().interrupt();
+              System.err.println(
+                  "semanticdf-platform: drain interrupted; "
+                      + "remaining queries will be killed by spark.stop()");
+              return;
+            } catch (Throwable t) {
+              // query.stop() can throw TimeoutException (Spark's internal
+              // stop timeout), StreamingQueryException, or any runtime
+              // exception. We log and continue — we're shutting down
+              // anyway; missing one query is better than hanging the JVM.
+              System.err.println(
+                  "semanticdf-platform: drain failed for stream-id="
+                      + streamId
+                      + ": "
+                      + t.getMessage());
+            }
+          });
+    } finally {
+      executor.shutdownNow();
+    }
     return count.get();
   }
 }
