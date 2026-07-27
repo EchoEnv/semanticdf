@@ -109,7 +109,7 @@ They diverged on:
 ## 10. What this audit does NOT cover
 
 - **The platform's own non-determinism** (the `Restate.instantNow()` call in `PlatformApplication.java` is replay-stable; that's the point of using it). Out of scope.
-- **`semanticdf-mcp/handlers/Lineage.scala`** (the MCP lineage handlers from PR #213). Their determinism is governed by the platform's Restate rules, not the library's. Out of scope here.
+- **`semanticdf-mcp/handlers/Lineage.scala`** (the MCP lineage handlers). Their determinism is governed by the platform's Restate rules, not the library's. Out of scope here.
 - **The `examples/`** directory. Out of scope.
 
 ## 11. Recommended next step

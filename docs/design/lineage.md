@@ -213,11 +213,7 @@ on `SemanticTable` is a future-version concern, not an MVP concern.
 
 ## Effort estimate
 
-| PR | Surface | LOC | Time |
+| Phase | Surface | LOC | Time |
 |---|---|---|---|
-| #207 | library + tests + this design doc | ~510 | 2-3 days |
-| #208 | CLI subcommand (`semanticdf lineage …`) | ~80 | 1 day |
-
-The library PR covers the data model, the SQL extractor, the 4
-transforms, the JSON round-trip, the 4 unit test suites, and the
-golden-fixture integration tests. The CLI PR is a small add-on.
+| Library + tests + this design doc | data model, SQL extractor, 4 transforms, JSON round-trip, 4 unit suites, golden fixtures | ~510 | 2-3 days |
+| CLI subcommand (`semanticdf lineage …`) | small add-on | ~80 | 1 day |

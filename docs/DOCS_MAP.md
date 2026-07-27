@@ -15,6 +15,7 @@ trying to do.
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
 | Drive the framework as a CLI client over REST | [`examples/cli-consumer/README.md`](../examples/cli-consumer/README.md) |
 | Understand how a query compiles to a Spark plan | [`docs/guide.md`](../docs/guide.md) — narrative walkthrough, or [`DESIGN.md`](../DESIGN.md) §4 (architecture) for the formal version |
+| Run queries through the long-running platform runtime (post-crash recovery, draining, audit) | [`semanticdf-platform/README.md`](../semanticdf-platform/README.md), [`docs/design/platform-architecture.md`](design/platform-architecture.md), [`docs/design/platform-determinism-audit.md`](design/platform-determinism-audit.md) |
 | Learn why we made a particular design call | [`docs/adr/`](adr/) — three ADRs, each short |
 | Find an unfamiliar term | [`docs/GLOSSARY.md`](GLOSSARY.md) |
 | See what's in scope and what's on the roadmap | [`docs/known-limitations.md`](known-limitations.md) (current scope + guardrails + roadmap hints) |
@@ -45,6 +46,9 @@ Each document has *one* job. We're migrating toward that structure.
 | `RELEASE.md` | Changelog. Version-by-version. | Returning readers |
 | `examples/README.md` | Central index for the example templates. | Anyone learning by running |
 | `examples/*/README.md` | One per example template — what it demonstrates, how to run it. | Anyone learning by running |
+| `semanticdf-platform/` | The standalone Restate-native platform runtime. Long-running JVM, hosting the 5 services, with post-crash query reconciliation. | Operators deploying the platform |
+| `docs/design/platform-architecture.md` | Architecture of the platform runtime: state placement rule (Restate journal vs Postgres), service topology, lifecycle. | Platform contributors |
+| `docs/design/platform-determinism-audit.md` | Determinism guarantees of the library when called from a Restate handler (determinism boundary + out-of-scope calls in the platform). | Platform contributors reasoning about replay safety |
 
 ## Reading order suggestions
 
