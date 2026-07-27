@@ -133,6 +133,11 @@ For a query:
 5. Platform streams results back to agent via Arrow Flight (or REST
    chunks for the BI consumer).
 
+**The engine call is NOT routed through Restate.** Restate is the
+coordination/integration protocol, not a data-plane protocol.
+Spark Connect (gRPC) and Arrow Flight serve that role for the engine
+boundary — see §5 below.
+
 For metadata reads (list models, get_field_lineage,
 get_dependencies): the platform reads from the Caffeine L1 (or
 Postgres on miss). **No Spark action. Sub-100ms p99.**
@@ -216,16 +221,24 @@ inside the platform.**
 
 ## 5. Engine interop
 
-**REST for humans/agents, Restate protocol for engines** (Option C).
+**REST for agents, Restate for engine coordination, engine-native
+protocol (Spark Connect, Trino client) for the data plane.** (Option C,
+revised by PR #240 — the engine call is NOT Restate.)
 
 - **Agents (LLM, BI):** REST. Short-lived, stateless, JSON-shaped. Same
   surface as the prior design.
-- **Engines (Spark, Trino):** Two paths. Default is REST (the platform
-  wraps Restate internally). Engines that want lower latency and
-  exactly-once submit-attempt semantics can speak Restate's ingress
-  directly using the platform's service classes as the wire contract.
-  Spark SDK (in-process JVM) probably wants Restate; Trino plugin
-  (separate JVM) probably stays on REST.
+- **Engine data plane (Spark, Trino):** Native engine protocol.
+  - Spark: **Spark Connect (gRPC)** — `sc://host:port` form. The platform
+    becomes a thin control-plane JVM that submits queries to a
+    long-running Spark cluster. PR #240 added `SEMANTICDF_SPARK_CONNECT_URL`
+    env var to `PlatformApplication.main`; the library's `SdfSession.createFromEnv`
+    routes through the right factory branch based on the env var.
+  - Trino: JDBC (legacy) or Trino Client (newer). Either is engine-native,
+    not Restate-shaped.
+  - Without the env var, the platform falls back to in-process Spark via
+    `master("local[*]")` for tests and quickstart — *not* a production
+    topology. Flag is on the env var, not a code path switch, so we
+    never fork the runtime shape.
 - **What "engine-agnostic" means:** Engines depend on the platform's
   *service surface* (the set of Restate handlers), not on a specific
   engine adapter. The Restate services are the contract.
