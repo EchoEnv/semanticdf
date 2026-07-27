@@ -1,6 +1,7 @@
 package io.semanticdf.platform.streaming;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -46,6 +47,9 @@ class StartupReconcilerTest {
       new ConcurrentHashMap<>();
   /** Configurable status response per stream-id ("running" by default). */
   private final Map<String, String> statusByStreamId = new ConcurrentHashMap<>();
+  /** Captures raw request URIs (URL-encoded form, not decoded). */
+  private final java.util.List<String> rawRequestUris =
+      java.util.Collections.synchronizedList(new java.util.ArrayList<>());
 
   @BeforeEach
   void setUp() throws IOException {
@@ -55,6 +59,11 @@ class StartupReconcilerTest {
     httpServer.createContext(
         "/StreamingService",
         exchange -> {
+          // Capture the raw path BEFORE routing — used by tests
+          // that want to verify URL encoding was applied (the
+          // path-based dispatcher below can't decode %2F for
+          // matching against the test catalog keys).
+          rawRequestUris.add(exchange.getRequestURI().getRawPath());
           String[] parts = exchange.getRequestURI().getPath().split("/");
           // /StreamingService/{streamId}/{handler}/{method}
           // /StreamingService/s1/run/send
@@ -194,10 +203,53 @@ class StartupReconcilerTest {
             catalog, URI.create("http://127.0.0.1:" + port), HttpClient.newHttpClient(), HTTP_TIMEOUT)
         .run();
 
+    // The mock's path-based routing treats 'tenant-prod%2Forders-stream'
+
     String body = sentBodiesByStreamId.get("s1").get(0);
     assertTrue(body.contains("orders-model"));
     assertTrue(body.contains("sum(amount)"));
     assertTrue(body.contains("/ckpt/orders"));
+  }
+
+  @Test
+  void run_urlEncodesStreamIdContainingSpecialChars() throws Exception {
+    // PR #236 (reclassified URL safety): stream-id may contain URL-
+    // unsafe characters like '/'. Without encoding, the ingress
+    // path would route to a different workflow key (silent cross-
+    // stream corruption) or 404. This test pins the URL-encoding
+    // contract — the URL hit the server with the encoded form, so
+    // the upstream routing can rely on stream-id decoding rules.
+    String trickyStreamId = "tenant-prod/orders-stream";
+    catalog.register(trickyStreamId, "m", "q", "/ckpt");
+    statusByStreamId.put(trickyStreamId, "running");
+
+    rawRequestUris.clear();
+
+    new StartupReconciler(
+            catalog, URI.create("http://127.0.0.1:" + port), HttpClient.newHttpClient(), HTTP_TIMEOUT)
+        .run();
+
+    // The mock's path-based routing treats the encoded stream-id as
+    // one segment (it can't decode %2F for status lookup, so it
+    // reports 'unknown' and the sweep skips). What matters is the
+    // RAW request URI — verify the URL was constructed with %2F
+    // encoding. Raw '/' in stream-id would route to wrong key in
+    // production (silent cross-stream contamination: catalog says
+    // reconcile stream A, but ingress invokes run() on stream B).
+    boolean sawEncoded = false;
+    boolean sawUnencodedRawId = false;
+    for (String rawPath : rawRequestUris) {
+      if (rawPath.contains("%2F")) sawEncoded = true;
+      // Look for the raw stream-id literal "tenant-prod/orders-stream"
+      // appearing in the URL — that's the bad case (un-encoded slash).
+      if (rawPath.contains("tenant-prod/orders-stream")) {
+        sawUnencodedRawId = true;
+      }
+    }
+    assertTrue(sawEncoded,
+        "URL must use %2F for stream-id containing '/' (prevents cross-stream contamination)");
+    assertFalse(sawUnencodedRawId,
+        "raw '/' in stream-id path would route to wrong key in production");
   }
 
   /**

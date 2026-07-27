@@ -2,9 +2,11 @@ package io.semanticdf.platform.streaming;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -236,7 +238,16 @@ public final class StartupReconciler {
         throw new SkippedException(status);
     }
 
-    String runUrl = localIngress.toString() + "/StreamingService/" + streamId + "/run/send";
+    // PR #236 (reclassified URL safety): stream-id may contain
+    // URL-unsafe characters ('/', '?', '#', '+', '%', space,
+    // non-ASCII). Without encoding, the URL would route to a
+    // WRONG workflow key (silent cross-stream contamination) or
+    // 404. URLEncoder is no-op on UUIDs and similar safe chars.
+    String runUrl =
+        localIngress.toString()
+            + "/StreamingService/"
+            + URLEncoder.encode(streamId, StandardCharsets.UTF_8).replace("+", "%20")
+            + "/run/send";
     String body =
         "{"
             + "\"modelName\":\""
@@ -273,7 +284,11 @@ public final class StartupReconciler {
    * {@code Void}-returning handler accepts an empty JSON body.
    */
   private String readStatus(String streamId) throws IOException, InterruptedException {
-    String url = localIngress.toString() + "/StreamingService/" + streamId + "/getStatus/send";
+    String url =
+        localIngress.toString()
+            + "/StreamingService/"
+            + URLEncoder.encode(streamId, StandardCharsets.UTF_8).replace("+", "%20")
+            + "/getStatus/send";
     HttpRequest req =
         HttpRequest.newBuilder()
             .uri(URI.create(url))
@@ -295,24 +310,9 @@ public final class StartupReconciler {
     return resp.body();
   }
 
-  /** Minimal JSON string escaper (for run() body's three fields). */
+  /** Minimal JSON string escaper — see {@link JsonEscaper#escape(String)}. */
   private static String jsonEscape(String s) {
-    if (s == null) {
-      return "";
-    }
-    StringBuilder sb = new StringBuilder(s.length());
-    for (int i = 0; i < s.length(); i++) {
-      char c = s.charAt(i);
-      switch (c) {
-        case '"' -> sb.append("\\\"");
-        case '\\' -> sb.append("\\\\");
-        case '\n' -> sb.append("\\n");
-        case '\r' -> sb.append("\\r");
-        case '\t' -> sb.append("\\t");
-        default -> sb.append(c);
-      }
-    }
-    return sb.toString();
+    return JsonEscaper.escape(s);
   }
 
   /** A stream was deliberately skipped (terminal status). */
