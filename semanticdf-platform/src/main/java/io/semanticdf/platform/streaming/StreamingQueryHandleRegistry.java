@@ -19,7 +19,7 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * populated on first execution and consumed by {@code stop()} within the
  * same JVM.
  */
-public final class StreamingQueryHandleRegistry {
+public class StreamingQueryHandleRegistry {
 
   private final ConcurrentHashMap<String, StreamingQuery> handles = new ConcurrentHashMap<>();
 
