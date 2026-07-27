@@ -283,17 +283,39 @@ public class StreamingService {
       throw e;
     }
 
-    // 3. Start the query inside Restate.run. The side effect (Spark starting
-    //    the query) is journaled as a completion; on replay the lambda is
-    //    skipped, so the query is NOT re-started. The handle is stored
-    //    runtime-local — it cannot be journaled (not serializable).
+    // 3. Start the query inside Restate.run. The side effect (Spark
+    //    starting the query) is journaled as a completion; on replay
+    //    the lambda is skipped, so the query is NOT re-started. The
+    //    handle is stored runtime-local — it cannot be journaled (not
+    //    serializable).
+    //
+    // PR #237 (architect-flagged ship-blocker): WITHOUT the try/catch
+    // below, a persistent launcher failure (Spark misconfigured,
+    // checkpoint path unwritable, etc.) throws out of Restate.run
+    // and propagates. Restate retries the entire handler, but step 0
+    // (the BLOCKED guard) only halts retries if BLOCKED is set —
+    // and step 3 doesn't set it. NET EFFECT: the journal grows
+    // unboundedly until operators manually /restart, defeating
+    // PR #233's RECONCILE_BLOCKED contract.
+    //
+    // Wrap in try/catch mirroring step 2's pattern. Throw a
+    // TerminalException directly so Restate doesn't even attempt
+    // one retry (the BLOCKED guard would catch the retry, but the
+    // retry itself is wasted journal entries).
+    // PR #237 (architect-flagged ship-blocker): startQueryWithFailureTracking
+    // wraps Restate.run in a try/catch that sets STATUS=failed and
+    // RECONCILE_BLOCKED=true on launcher errors, then throws a
+    // TerminalException so Restate doesn't retry. See the helper's
+    // javadoc for the full rationale.
     final SemanticTable resolvedModel = model;
-    Restate.run(
-        "start-streaming-query",
-        () -> {
-          StreamingQuery query = launcher.start(resolvedModel, request);
-          handles.put(streamId, query);
-        });
+    startQueryWithFailureTracking(streamId, resolvedModel, request, state);
+
+    // 4. Emit the dedupHash audit event. This is a synchronous cross-service
+    //    call — Restate journals the invocation and the response. On replay,
+    //    the response is replayed without re-invoking AuditService, so the
+    //    event is emitted exactly once. The dedupHash is belt-and-suspenders
+    //    for the (rare) case where two different workflows share the same
+    //    query shape but somehow land in the same audit key.
 
     // 4. Emit the dedupHash audit event. This is a synchronous cross-service
     //    call — Restate journals the invocation and the response. On replay,
@@ -952,6 +974,66 @@ public class StreamingService {
       String streamId, SemanticTable model, StreamRunRequest request) {
     StreamingQuery fresh = launcher.start(model, request);
     handles.put(streamId, fresh);
+  }
+
+  /**
+   * Step 3 of {@link #run} extracted for testability. Wraps
+   * {@code Restate.run("start-streaming-query", ...)} in a try/catch
+   * that protects against the PR #237 ship-blocker.
+   *
+   * <p><b>Without the catch (the PR #237 bug):</b> a persistent
+   * launcher failure (Spark misconfigured, checkpoint path
+   * unwritable, etc.) throws out of {@code Restate.run} and the
+   * handler exits with a raw exception. Restate retries the entire
+   * handler from step 1. Step 0's BLOCKED guard won't halt retries
+   * — because step 3 didn't set BLOCKED. NET EFFECT: the journal
+   * grows unboundedly and operators see no signal, defeating the
+   * PR #233 {@code RECONCILE_BLOCKED} contract.
+   *
+   * <p><b>The catch behavior:</b>
+   * <ul>
+   *   <li>{@code STATUS = "failed"} + {@code RECONCILE_BLOCKED = true}
+   *       + {@code ERROR_COUNT++} — operators see {@code STATUS=failed}
+   *       via {@code getStatus()}.
+   *   <li>Throw a {@link dev.restate.sdk.common.TerminalException}
+   *       with HTTP 400 (BAD_REQUEST_CODE) so Restate marks the
+   *       invocation as terminally failed rather than retrying.
+   *   <li>The query registry is consistent: the closure threw
+   *       before {@code handles.put}, so no live handle exists
+   *       for an orphan query.
+   * </ul>
+   *
+   * <p>To retry after the operator fixes the underlying cause, they
+   * invoke {@code /clearReconcileBlock} (or simply {@code /restart}
+   * which clears the block at entry).
+   *
+   * <p>Visible-for-testing — package-private so unit tests can drive
+   * the failure path with a stub launcher.
+   */
+  void startQueryWithFailureTracking(
+      String streamId,
+      SemanticTable model,
+      StreamRunRequest request,
+      dev.restate.sdk.Restate.State state) {
+    try {
+      Restate.run(
+          "start-streaming-query",
+          () -> {
+            StreamingQuery query = launcher.start(model, request);
+            handles.put(streamId, query);
+          });
+    } catch (RuntimeException launcherFailure) {
+      state.set(STATUS, "failed");
+      state.set(RECONCILE_BLOCKED, true);
+      state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
+      throw new dev.restate.sdk.common.TerminalException(
+          dev.restate.sdk.common.TerminalException.BAD_REQUEST_CODE,
+          "StreamingService.run: launcher.start failed (stream-id="
+              + streamId
+              + ", cause="
+              + launcherFailure.getMessage()
+              + "). Operators must invoke /restart after fixing the underlying cause.");
+    }
   }
 
   /** Build the JSON payload for the streaming.started audit event. */
