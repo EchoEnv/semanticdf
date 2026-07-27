@@ -436,6 +436,29 @@ object Lineage {
     }
   }
 
+  /** Convenience for callers registering one model in isolation:
+    * builds the canonical {@link WorkspaceLineage} JSON by wrapping
+    * a single model in a singleton map and routing through
+    * {@link #workspaceOf} + {@link #toJson}. Equivalent to:
+    *
+    * {{{
+    *   val wl = Lineage.workspaceOf(Map(model.name.getOrElse("unknown") -> model))
+    *   Lineage.toJson(wl, prettyPrint = false)
+    * }}}
+    *
+    * <p>Use this for runtime model-registration paths (e.g. the
+    * semanticdf-platform's {@code ModelService.register}) where the
+    * registration request carries ONE model's YAML, and the
+    * workspace graph (joins, upstream IDs, downstream IDs) is
+    * correspondingly trivial. For multi-model registration, use
+    * {@link #workspaceOf} + {@link #toJson} directly on the full map.
+    */
+  def workspaceJsonFor(model: io.semanticdf.SemanticTable, prettyPrint: Boolean = false): String = {
+    val key = model.name.getOrElse("unknown")
+    val wl  = workspaceOf(Map(key -> model))
+    toJson(wl, prettyPrint)
+  }
+
   /** Adapter so the same `buildColumnLineage` overload handles both
     * the typed `Dimension` / `Measure` and the simpler `Transform`
     * shape. Avoids scattering the field-shape access. */
