@@ -15,7 +15,9 @@ import io.semanticdf.platform.streaming.StreamingService;
 import io.semanticdf.platform.streaming.YamlModelRegistry;
 
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.spark.sql.SparkSession;
+import org.apache.spark.sql.streaming.StreamingQuery;
 
 /**
  * PlatformApplication — main entry point for the semanticdf-platform daemon.
@@ -94,6 +96,25 @@ public final class PlatformApplication {
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       System.out.println("semanticdf-platform: shutdown hook firing; bound port "
           + boundPort + " will be released");
+
+      // Graceful drain — stop active streaming queries BEFORE spark.stop().
+      //
+      // Without this, queries are killed mid-batch when spark.stop() tears
+      // down the SparkContext. The query's writer may have unflushed data
+      // (Kafka producer, in-progress file write, etc.); losing that data
+      // silently is worse than a slower shutdown.
+      //
+      // query.stop() blocks until the query stops (Spark's internal stop
+      // timeout applies). We iterate the registry's snapshot — if a query
+      // is added concurrently, it may be missed, but the next SIGTERM
+      // catches it. The drain is best-effort; exceptions from individual
+      // queries don't block the JVM exit.
+      int drained = drainQueries(handles);
+      if (drained > 0) {
+        System.out.println("semanticdf-platform: drained " + drained
+            + " active streaming query/queries");
+      }
+
       // Stop the SparkSession to release driver memory, daemon threads,
       // and the SparkContext's RPC clients. Without this the JVM leaks
       // ~1-2GB heap and a half-dozen threads per platform instance
@@ -111,5 +132,38 @@ public final class PlatformApplication {
     }, "semanticdf-platform-shutdown"));
 
     System.out.println("semanticdf-platform listening on http://localhost:" + port);
+  }
+
+  /**
+   * Stop every live {@link StreamingQuery} in the registry. Returns the
+   * number of queries that were drained.
+   *
+   * <p>Visible-for-testing — package-private so unit tests can drive the
+   * drain with a fake registry.
+   *
+   * @param handles the runtime-local handle registry
+   * @return the number of queries we attempted to stop
+   */
+  static int drainQueries(StreamingQueryHandleRegistry handles) {
+    AtomicInteger count = new AtomicInteger(0);
+    handles.forEach(
+        (streamId, query) -> {
+          // Count BEFORE attempting — operators want to see the total
+          // drain attempts, not just the successful stops.
+          count.incrementAndGet();
+          try {
+            query.stop();
+          } catch (Throwable t) {
+            // query.stop() can throw TimeoutException, StreamingQueryException,
+            // or any runtime exception. We log and continue — we're shutting
+            // down anyway; missing one query is better than hanging the JVM.
+            System.err.println(
+                "semanticdf-platform: drain failed for stream-id="
+                    + streamId
+                    + ": "
+                    + t.getMessage());
+          }
+        });
+    return count.get();
   }
 }

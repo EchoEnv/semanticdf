@@ -1,6 +1,8 @@
 package io.semanticdf.platform.streaming;
 
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.BiConsumer;
 import org.apache.spark.sql.streaming.StreamingQuery;
 
 /**
@@ -18,6 +20,11 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * from the same checkpoint) is a follow-up concern; for P1 the handle is
  * populated on first execution and consumed by {@code stop()} within the
  * same JVM.
+ *
+ * <p>The {@link #forEach(BiConsumer)} method is weakly consistent (per
+ * {@link ConcurrentHashMap#forEach}) — safe to call from a single thread at
+ * shutdown time, but the snapshot is not guaranteed if concurrent
+ * modifications are happening.
  */
 public class StreamingQueryHandleRegistry {
 
@@ -41,5 +48,20 @@ public class StreamingQueryHandleRegistry {
   /** Number of live handles (for diagnostics / tests). */
   public int size() {
     return handles.size();
+  }
+
+  /**
+   * Iterate over every (streamId, query) pair currently in the registry.
+   *
+   * <p>Used by the graceful-drain shutdown hook in
+   * {@code PlatformApplication.main()} to call {@code query.stop()} on every
+   * live handle before {@code spark.stop()}. Weakly consistent per
+   * {@link ConcurrentHashMap#forEach} — the drain may miss a handle that's
+   * added concurrently, but the iteration itself never throws.
+   *
+   * @param action the consumer invoked for each entry
+   */
+  public void forEach(BiConsumer<String, StreamingQuery> action) {
+    handles.forEach(action);
   }
 }
