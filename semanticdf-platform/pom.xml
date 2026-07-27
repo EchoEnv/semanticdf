@@ -63,7 +63,15 @@
             <version>${semanticdf.version}</version>
         </dependency>
 
-        <!-- Restate SDK — durable async/await runtime. -->
+        <!--
+          Restate SDK — durable async/await runtime.
+
+          Cross-service calls (e.g. StreamingService.run → AuditService.append)
+          use the in-handler API Restate.virtualObject(...) / Restate.service(...),
+          which lives in sdk-api (transitive from sdk-java-http). No separate
+          client module is needed — the proxy is created at runtime via
+          bytebuddy (a runtimeOnly transitive dep of sdk-api).
+        -->
         <dependency>
             <groupId>dev.restate</groupId>
             <artifactId>sdk-java-http</artifactId>
