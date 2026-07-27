@@ -42,6 +42,14 @@ public final class StreamingDedupHash {
   /** The event type emitted when a streaming query transitions to running. */
   public static final String STREAMING_STARTED = "streaming.started";
 
+  /** The event type emitted when a streaming query is recreated after
+   * a JVM crash (the platform's reconciliation path). Operators can
+   * grep for this to find streams that survived an outage; it is
+   * distinct from {@link #STREAMING_STARTED} so the original
+   * "started" event (replayed from journal) and the "restarted"
+   * event both appear in the audit log without being collapsed. */
+  public static final String STREAMING_RESTARTED = "streaming.restarted";
+
   private static final byte SEP = 0x1f;
 
   private StreamingDedupHash() {}
@@ -58,6 +66,38 @@ public final class StreamingDedupHash {
   public static String streamingStarted(
       String streamId, String modelName, String queryShape, String checkpointLocation) {
     return compute(STREAMING_STARTED, streamId, modelName, queryShape, checkpointLocation);
+  }
+
+  /**
+   * Compute the dedup hash for a streaming-restarted audit event.
+   * Distinct from {@link #streamingStarted} so the original event
+   * (replayed from Restate's journal) and the post-crash restart
+   * event are both retained in the audit log without being
+   * collapsed by dedup.
+   *
+   * <p>The hash inputs include {@code restartCount} so multiple
+   * restart attempts on the SAME stream (rare, but possible if
+   * the JVM crashes again during reconciliation) produce distinct
+   * hashes — operators see each restart individually in the audit
+   * log instead of seeing only the first attempt with a stale count.
+   *
+   * @param streamId the workflow key (unique per stream execution)
+   * @param modelName the semantic model driving the stream
+   * @param restartCount the journaled restart ordinal (1, 2, 3, ...)
+   * @param checkpointLocation the durable checkpoint path
+   * @return a lowercase-hex SHA-256 digest
+   */
+  public static String streamingRestarted(
+      String streamId,
+      String modelName,
+      long restartCount,
+      String checkpointLocation) {
+    return compute(
+        STREAMING_RESTARTED,
+        streamId,
+        modelName,
+        /* queryShape */ Long.toString(restartCount),
+        checkpointLocation);
   }
 
   /**

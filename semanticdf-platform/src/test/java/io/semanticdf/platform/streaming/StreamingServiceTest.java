@@ -255,6 +255,200 @@ class StreamingServiceTest {
     assertNotNull(shared, "StreamingService.stop must be @Shared");
   }
 
+  @Test
+  void restart_isNotSharedAnnotated() throws Exception {
+    // Architectural correction: restart must NOT be @Shared because it
+    // writes workflow state (RESTART_COUNT, LAST_RESTART_AT, audit emit).
+    // @Shared handlers are read-only by Restate contract. Without the
+    // correction, invoking restart would throw at runtime.
+    //
+    // The trade-off: restart serializes against in-flight run for the
+    // same stream-id, which is the correct ordering (don't restart
+    // while the original handler is still mid-flight).
+    java.lang.reflect.Method restartMethod =
+        StreamingService.class.getDeclaredMethod("restart", Void.class);
+    Shared shared = restartMethod.getAnnotation(Shared.class);
+    org.junit.jupiter.api.Assertions.assertNull(
+        shared, "StreamingService.restart must NOT be @Shared (it writes state)");
+  }
+
+  // --- Post-crash reconciliation (PR feature) ---
+
+  /** A launcher that records the request it was started with and
+   * returns a fresh proxy each call. Used to verify that
+   * reconcileAfterJvmCrash calls launcher.start exactly once with
+   * the right args. */
+  private static final class RecordingLauncher implements StreamingQueryLauncher {
+    final java.util.List<StreamingService.StreamRunRequest> started = new java.util.ArrayList<>();
+    final java.util.concurrent.atomic.AtomicInteger callCount =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+    final org.apache.spark.sql.streaming.StreamingQuery toReturn;
+
+    RecordingLauncher(org.apache.spark.sql.streaming.StreamingQuery toReturn) {
+      this.toReturn = toReturn;
+    }
+
+    @Override
+    public org.apache.spark.sql.streaming.StreamingQuery start(
+        io.semanticdf.SemanticTable model, StreamingService.StreamRunRequest request) {
+      started.add(request);
+      callCount.incrementAndGet();
+      return toReturn;
+    }
+  }
+
+  /** A model registry that returns a fixed model. */
+  private static final class StubModelRegistry implements ModelRegistry {
+    private final io.semanticdf.SemanticTable model;
+
+    StubModelRegistry(io.semanticdf.SemanticTable model) {
+      this.model = model;
+    }
+
+    @Override
+    public io.semanticdf.SemanticTable get(String name) {
+      return model;
+    }
+  }
+
+  @Test
+  void recreateQueryForResume_startsQueryAndRegistersIt() {
+    // The simple, testable core of reconciliation: launcher.start is
+    // called exactly once with the original request, and the new
+    // handle is registered so the monitor loop can find it.
+    org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    RecordingLauncher launcher = new RecordingLauncher(freshQuery);
+    StreamingService service =
+        new StreamingService(
+            new StubModelRegistry(null), launcher, reg);
+
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    service.recreateQueryForResume("stream-1", null, req);
+
+    assertEquals(1, launcher.callCount.get(), "launcher.start called exactly once");
+    assertSame(req, launcher.started.get(0), "launcher called with the original request");
+    assertSame(
+        freshQuery,
+        reg.get("stream-1"),
+        "new handle is registered in the local registry");
+  }
+
+  @Test
+  void recreateQueryForResume_propagatesLauncherException() {
+    // If launcher.start throws, the exception must propagate unchanged
+    // and the registry must NOT be touched. The caller's catch block
+    // (in reconcileAfterJvmCrash) marks the workflow as failed-restart
+    // and the failed-start side effect is all-or-nothing.
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    StreamingQueryLauncher failingLauncher =
+        (model, request) -> {
+          throw new RuntimeException("Spark checkpoint not found");
+        };
+    StreamingService service =
+        new StreamingService(new StubModelRegistry(null), failingLauncher, reg);
+
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    RuntimeException thrown =
+        assertThrows(
+            RuntimeException.class,
+            () -> service.recreateQueryForResume("stream-1", null, req));
+    assertEquals("Spark checkpoint not found", thrown.getMessage());
+    // Registry must NOT have been touched — the recreation is all-or-nothing.
+    assertNullValue(reg.get("stream-1"));
+  }
+
+  @Test
+  void reconcileAfterJvmCrash_updatesJournalState() {
+    // The journal state updates (RESTART_COUNT, LAST_RESTART_AT) must
+    // happen even outside a Restate context (the try/catch around
+    // Restate.instantNow() falls back to System.currentTimeMillis()).
+    // This pins the contract: any time reconcileAfterJvmCrash runs,
+    // the operator-visible counters increment.
+    RecordingState state = new RecordingState(0L);
+    org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    RecordingLauncher launcher = new RecordingLauncher(freshQuery);
+    StreamingService service =
+        new StreamingService(new StubModelRegistry(null), launcher, reg);
+
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    long beforeMs = System.currentTimeMillis();
+    service.reconcileAfterJvmCrash("stream-1", null, req, state);
+    long afterMs = System.currentTimeMillis();
+
+    // Restart count: 0 → 1
+    assertEquals(1L, state.store.get("restartCount"));
+    // Last restart at: wall clock between before and after.
+    long restartAt = (long) state.store.get("lastRestartAt");
+    assertTrue(
+        restartAt >= beforeMs && restartAt <= afterMs,
+        "lastRestartAt must be in [before, after], got " + restartAt);
+    // Handle is in the registry.
+    assertSame(freshQuery, reg.get("stream-1"));
+  }
+
+  @Test
+  void reconcileAfterJvmCrash_bumpsExistingCount() {
+    // Multiple sequential reconciliations must accumulate, not reset.
+    RecordingState state = new RecordingState(0L);
+    org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    RecordingLauncher launcher = new RecordingLauncher(freshQuery);
+    StreamingService service =
+        new StreamingService(new StubModelRegistry(null), launcher, reg);
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    // Pre-populate restart count to simulate a stream that has been
+    // through N reconciliations already.
+    state.store.put("restartCount", 5L);
+
+    service.reconcileAfterJvmCrash("stream-1", null, req, state);
+    assertEquals(6L, state.store.get("restartCount"));
+  }
+
+  @Test
+  void reconcileAfterJvmCrash_marksFailedRestartOnException() {
+    // If the launcher throws, the workflow must end up in
+    // STATUS=failed-restart and ERROR_COUNT incremented so operators
+    // can detect the condition via getStatus() + journal inspection.
+    RecordingState state = new RecordingState(2L); // existing error count
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    StreamingQueryLauncher failingLauncher =
+        (model, request) -> {
+          throw new RuntimeException("checkpoint mismatch");
+        };
+    StreamingService service =
+        new StreamingService(new StubModelRegistry(null), failingLauncher, reg);
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    assertThrows(
+        RuntimeException.class,
+        () -> service.reconcileAfterJvmCrash("stream-1", null, req, state));
+
+    assertEquals(
+        "failed-restart",
+        state.store.get("status"),
+        "STATUS must be 'failed-restart' for operator visibility");
+    assertEquals(
+        3L,
+        state.store.get("errorCount"),
+        "ERROR_COUNT must increment by exactly 1");
+  }
+
   // --- Helpers ---
 
   /** A {@link StreamingQuery} whose {@code stop()} throws the given exception. */
