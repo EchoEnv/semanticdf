@@ -147,24 +147,59 @@ public final class PlatformApplication {
     // Best-effort: a sweep failure logs but doesn't abort startup.
     // Operators can manually invoke /restart on individual
     // stream-ids if the sweep has issues.
+    //
+    // CRITICAL: the sweep runs on a DAEMON thread so it does NOT
+    // block main(). Reasons (PR #235 senior review):
+    //  1. With SEMANTICDF_RECONCILE_TIMEOUT_MS=30s default and a slow
+    //     Postgres or N×5s swept HTTP calls, a synchronous sweep
+    //     could delay readiness past kubelet's 30s liveness probe.
+    //  2. RestateHttpServer.listen() is fire-and-forget — a
+    //     synchronous sweep's first POSTs race with Vert.x finishing
+    //     its bind/registration. Daemonizing gives Vert.x time to
+    //     settle before the sweep begins (we add a small fixed
+    //     delay).
+    //  3. Operators don't see startup as "failed" just because the
+    //     sweep was slow — readiness is independent of recovery.
     if (catalog != null) {
-      try {
-        URI localIngress = URI.create("http://localhost:" + boundPort);
-        StartupReconciler.Summary sweepSummary =
-            new StartupReconciler(catalog, localIngress).run();
-        System.out.println(
-            "semanticdf-platform: startup reconciliation summary — total="
-                + sweepSummary.total()
-                + " acted="
-                + sweepSummary.actedOn()
-                + " failed="
-                + sweepSummary.failed());
-      } catch (RuntimeException sweepRe) {
-        System.err.println(
-            "semanticdf-platform: startup reconciliation failed: "
-                + sweepRe.getMessage()
-                + " (operators must invoke /restart manually)");
-      }
+      final StreamCatalog catalogForSweep = catalog;
+      final URI localIngress = URI.create("http://localhost:" + boundPort);
+      Thread sweepThread =
+          new Thread(
+              () -> {
+                // Brief settle delay — let Restate's Vert.x handler
+                // registration finish before issuing HTTP. The
+                // listen() call returned the bound port, but the
+                // Vert.x runtime may still be wiring up handlers.
+                try {
+                  Thread.sleep(200);
+                } catch (InterruptedException ie) {
+                  Thread.currentThread().interrupt();
+                  return;
+                }
+                try {
+                  StartupReconciler.Summary sweepSummary =
+                      new StartupReconciler(catalogForSweep, localIngress).run();
+                  System.out.println(
+                      "semanticdf-platform: startup reconciliation complete — "
+                          + "total="
+                          + sweepSummary.total()
+                          + " acted="
+                          + sweepSummary.actedOn()
+                          + " failed="
+                          + sweepSummary.failed());
+                } catch (RuntimeException sweepRe) {
+                  System.err.println(
+                      "semanticdf-platform: startup reconciliation failed: "
+                          + sweepRe.getMessage()
+                          + " (operators must invoke /restart manually)");
+                }
+              },
+              "semanticdf-platform-reconcile");
+      sweepThread.setDaemon(true);
+      sweepThread.start();
+      System.out.println(
+          "semanticdf-platform: startup reconciliation scheduled (daemon thread); "
+              + "main continues without blocking.");
     }
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
