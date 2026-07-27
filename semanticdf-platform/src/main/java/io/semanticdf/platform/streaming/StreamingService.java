@@ -131,14 +131,33 @@ public class StreamingService {
   private final ModelRegistry models;
   private final StreamingQueryLauncher launcher;
   private final StreamingQueryHandleRegistry handles;
+  private final AuditSink auditSink;
 
+  /**
+   * Production constructor — wires the default Restate-backed audit sink
+   * so audit emits are journaled as cross-service calls.
+   */
   public StreamingService(
       ModelRegistry models,
       StreamingQueryLauncher launcher,
       StreamingQueryHandleRegistry handles) {
+    this(models, launcher, handles, new RestateAuditSink());
+  }
+
+  /**
+   * Test constructor — allows injecting a recording or no-op audit sink
+   * so handlers can be exercised without a Restate handler context.
+   * Visible-for-testing.
+   */
+  StreamingService(
+      ModelRegistry models,
+      StreamingQueryLauncher launcher,
+      StreamingQueryHandleRegistry handles,
+      AuditSink auditSink) {
     this.models = java.util.Objects.requireNonNull(models, "models");
     this.launcher = java.util.Objects.requireNonNull(launcher, "launcher");
     this.handles = java.util.Objects.requireNonNull(handles, "handles");
+    this.auditSink = java.util.Objects.requireNonNull(auditSink, "auditSink");
   }
 
   /**
@@ -215,16 +234,14 @@ public class StreamingService {
             request.queryShape(),
             request.checkpointLocation());
     String payload = auditPayload(streamId, request);
-    long ts = Restate.instantNow().toEpochMilli();
+    long ts = journaledNow();
 
-    Restate.virtualObject(AuditService.class, DEFAULT_TENANT)
-        .append(
-            new AuditService.AuditEventRequest(
-                DEFAULT_TENANT,
-                StreamingDedupHash.STREAMING_STARTED,
-                ts,
-                dedupHash,
-                payload));
+    auditSink.emit(
+        DEFAULT_TENANT,
+        StreamingDedupHash.STREAMING_STARTED,
+        ts,
+        dedupHash,
+        payload);
 
     // 5. Mark running.
     state.set(STATUS, "running");
@@ -255,7 +272,21 @@ public class StreamingService {
     // a non-deterministic side effect outside any Restate.run block.
     // Same-JVM replay never enters this branch (registry non-empty),
     // so determinism is preserved in the common case.
+    //
+    // H2 from PR #232 review: if the previous JVM died AFTER the
+    // STOP_SIGNAL was resolved (operator hit /stop) but BEFORE the
+    // STATUS=stopped journal entry was written, naive reconciliation
+    // would create a fresh query just to immediately stop it again
+    // — operator noise (a spurious streaming.restarted audit event
+    // followed by STATUS=stopped). Skip reconciliation in this case
+    // and just mark STATUS=stopped.
     if (handles.get(streamId) == null) {
+      if (Restate.promise(STOP_SIGNAL).peek().isReady()) {
+        // Previous JVM resolved /stop but didn't finish journaling
+        // STATUS=stopped. Honor the stop intent — don't recreate.
+        state.set(STATUS, "stopped");
+        return;
+      }
       reconcileAfterJvmCrash(streamId, resolvedModel, request, state);
     }
 
@@ -423,22 +454,47 @@ public class StreamingService {
       return;
     }
 
+    // Refuse to restart a workflow that was cleanly stopped — creating
+    // a new query without an active monitor loop would orphan it (no
+    // one observes it for termination or restart signals). Operators
+    // who want to resume a stopped stream must invoke run() with the
+    // full request, which starts a fresh lifecycle.
+    String currentStatus = state.get(STATUS).orElse("unknown");
+    if ("stopped".equals(currentStatus) || "failed".equals(currentStatus)) {
+      throw new IllegalStateException(
+          "StreamingService.restart: cannot restart a "
+              + currentStatus
+              + " workflow (stream-id="
+              + streamId
+              + "). Operators must invoke run() with a fresh request.");
+    }
+
     // If the journal has no model + checkpoint recorded, the workflow
-    // never executed run() — nothing to recreate. Operators should
-    // invoke run() instead.
+    // never executed run() — fail loud instead of silently doing nothing.
+    // Operators get a clear "no prior run() to reconcile from" signal
+    // they can act on, rather than a 200 OK with no effect.
     String modelName = state.get(MODEL_NAME).orElse(null);
     String checkpointLocation = state.get(CHECKPOINT_LOCATION).orElse(null);
     String queryShape = state.get(QUERY_SHAPE).orElse(null);
     if (modelName == null || checkpointLocation == null || queryShape == null) {
-      // No prior run() to reconcile from — leave the workflow in its
-      // current state. Operators see this as "unknown" from getStatus().
-      return;
+      throw new IllegalStateException(
+          "StreamingService.restart: no prior run() recorded (stream-id="
+              + streamId
+              + "). Operators must invoke run() to start a fresh stream.");
     }
 
     // Resolve the model from the registry. If the model file has been
-    // deleted since the original run(), this throws — operators see
-    // STATUS=failed-restart and can take corrective action.
-    SemanticTable model = models.get(modelName);
+    // deleted since the original run(), mark STATUS=failed-restart so
+    // operators see it via getStatus(), and re-throw so Restate
+    // surfaces the failure (same pattern as run() step 2).
+    SemanticTable model;
+    try {
+      model = models.get(modelName);
+    } catch (RuntimeException e) {
+      state.set(STATUS, "failed-restart");
+      state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
+      throw e;
+    }
 
     // Reconstruct the request from journaled state. Note: this loses
     // any custom streaming options the caller passed at run-time;
@@ -594,6 +650,28 @@ public class StreamingService {
       SemanticTable model,
       StreamRunRequest request,
       dev.restate.sdk.Restate.State state) {
+    // Delegate to the testable overload with the journaled "now".
+    // Production callers don't pass nowMs explicitly — they rely on
+    // journaled time. Tests use the overload below.
+    reconcileAfterJvmCrash(streamId, model, request, state, journaledNow());
+  }
+
+  /**
+   * Testable overload of {@link #reconcileAfterJvmCrash(String, SemanticTable, StreamRunRequest, dev.restate.sdk.Restate.State)}
+   * that takes an explicit {@code nowMs} instead of calling
+   * {@code Restate.instantNow()}. Package-private so unit tests can
+   * drive the full reconciliation logic without a Restate runtime.
+   *
+   * <p>The {@code AuditSink} used is whatever was wired at construction
+   * time — production uses {@link RestateAuditSink}, tests use a
+   * no-op or recording sink.
+   */
+  void reconcileAfterJvmCrash(
+      String streamId,
+      SemanticTable model,
+      StreamRunRequest request,
+      dev.restate.sdk.Restate.State state,
+      long nowMs) {
     try {
       // 1. Recreate the query and register it.
       recreateQueryForResume(streamId, model, request);
@@ -602,7 +680,7 @@ public class StreamingService {
       long prevCount = state.get(RESTART_COUNT).orElse(0L);
       long newCount = prevCount + 1L;
       state.set(RESTART_COUNT, newCount);
-      state.set(LAST_RESTART_AT, journaledNow(state));
+      state.set(LAST_RESTART_AT, nowMs);
 
       // 3. Emit the restart audit event. The dedupHash includes
       //    restartCount so each attempt produces a distinct event.
@@ -624,23 +702,18 @@ public class StreamingService {
               + "\",\"restartCount\":"
               + newCount
               + "}";
-      // The audit cross-service call requires a Restate handler context.
-      // The try/catch below is a TEST SEAM — production paths always
-      // run inside a handler. The unit tests for state updates +
-      // launcher interaction remain useful; full audit-emission is
-      // covered by the integration test (Testcontainers).
-      try {
-        Restate.virtualObject(AuditService.class, DEFAULT_TENANT)
-            .append(
-                new AuditService.AuditEventRequest(
-                    DEFAULT_TENANT,
-                    StreamingDedupHash.STREAMING_RESTARTED,
-                    journaledNow(state),
-                    dedupHash,
-                    payload));
-      } catch (RuntimeException auditRe) {
-        // No Restate context — swallow for unit tests only.
-      }
+      // Audit failures (network blip, AuditService back-pressure, NPE
+      // in payload) propagate to the outer catch, which marks
+      // STATUS=failed-restart. Operators see BOTH the missed audit AND
+      // a clear failure marker — silent audit-log gaps are no longer
+      // possible. The audit sink abstraction (AuditSink interface)
+      // makes this production path testable without swallowing.
+      auditSink.emit(
+          DEFAULT_TENANT,
+          StreamingDedupHash.STREAMING_RESTARTED,
+          nowMs,
+          dedupHash,
+          payload);
     } catch (RuntimeException e) {
       // Recreation failed — mark the workflow as failed-restart so
       // operators see it in getStatus(). The exception propagates
@@ -653,17 +726,19 @@ public class StreamingService {
   }
 
   /**
-   * Returns the journaled "now" as epoch-millis, or wall-clock millis
-   * if called outside a Restate handler context (only happens in unit
-   * tests). Production code paths always run inside a handler, so the
-   * fallback is unreachable in production — kept as a test seam.
+   * Returns the journaled "now" as epoch-millis. Requires a Restate
+   * handler context — callers are inside handlers' bodies.
+   *
+   * <p>No fallback to {@code System.currentTimeMillis()}: that's a
+   * non-deterministic side effect that violates Restate's journal
+   * determinism contract. Use {@code Restate.instantNow()} inside the
+   * handler; if your code is in a test without a handler context,
+   * restructure it to use a deterministic test double (the AuditSink
+   * interface replaces what was previously the need for a wall-clock
+   * fallback).
    */
-  private static long journaledNow(dev.restate.sdk.Restate.State state) {
-    try {
-      return Restate.instantNow().toEpochMilli();
-    } catch (RuntimeException re) {
-      return System.currentTimeMillis();
-    }
+  private static long journaledNow() {
+    return Restate.instantNow().toEpochMilli();
   }
 
   /**
