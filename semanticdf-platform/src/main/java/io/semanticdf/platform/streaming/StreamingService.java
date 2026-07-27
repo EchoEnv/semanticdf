@@ -16,7 +16,7 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * <p>Key: <b>stream-id</b> (client-supplied). One workflow execution per
  * streaming query.
  *
- * <h2>Lifecycle model: Option A (controller, not data path)</h2>
+ * <h2>Lifecycle model: Option A controller + Option B active-monitor loop</h2>
  *
  * The workflow <em>owns the lifecycle</em> of a Spark streaming query — it
  * starts, observes, and stops it — but it is <b>not</b> the data path. Spark's
@@ -24,14 +24,23 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * facts (status, checkpoint location, started-at, error count) and drives the
  * query handle via the {@link StreamingQueryHandleRegistry}.
  *
- * <p>{@code run} is a <b>start-and-record</b> handler: it validates the
- * request, resolves the model, starts the query (inside {@code Restate.run}\n * so the decision is journaled), emits a dedupHash audit event, sets
- * {@code STATUS = "running"}, and returns. The query keeps running in the
- * driver after {@code run} returns.
+ * <p>{@code run} is a <b>start-and-monitor</b> handler:
+ * <ol>
+ *   <li>validates the request (checkpoint non-blank)
+ *   <li>resolves the model via {@link ModelRegistry}
+ *   <li>starts the query inside {@code Restate.run} (decision is journaled)
+ *   <li>emits a dedupHash audit event via {@link AuditService}
+ *   <li>transitions {@code STATUS} to "running"
+ *   <li>enters the <b>active-monitor loop</b> — checks {@code STOP_SIGNAL}
+ *       and the query's termination status in a bounded 5-second tick
+ * </ol>
  *
- * <p>{@code stop} looks up the live handle (runtime-local), calls
- * {@code query.stop()}, sets {@code STATUS = "stopped"}, and resolves the
- * {@code STOP_SIGNAL} promise for future active-loop coordination.
+ * <p>{@code stop} is a <b>signal-only</b> handler: it resolves the
+ * {@code STOP_SIGNAL} DurablePromise. The active-monitor loop inside
+ * {@code run} is the <b>sole owner of physical query shutdown</b>
+ * ({@code query.stop()}) — this prevents races between two handlers
+ * both calling {@code query.stop()}. {@code stop} is annotated
+ * {@code @Shared} so it can fire concurrently with {@code run}'s loop.
  *
  * <h2>Journaled vs runtime-local state</h2>
  *
@@ -46,18 +55,34 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  *       <td>Spark runtime object — not serializable, lost on JVM death</td></tr>
  *   <tr><td>STOP_SIGNAL promise</td>
  *       <td>Restate journal (DurablePromise)</td>
- *       <td>Cross-handler signal — resolves when stop() is called</td></tr>
+ *       <td>Cross-handler signal — resolves when {@code stop()} is called</td></tr>
  * </table>
  *
  * <h2>Replay semantics</h2>
  *
  * On JVM failure, Restate replays the workflow from the journal. The query
  * start (wrapped in {@code Restate.run}) is <b>not re-executed</b> — Restate
- * replays the journaled completion. The runtime-local handle is gone. The
- * reconciliation logic (re-start the query from the same checkpoint) is a
- * follow-up concern; for P1, {@code stop()} after a replay is a no-op on the
- * handle (the query died with the JVM) but still transitions {@code STATUS}
- * in the journal.
+ * replays the journaled completion. The runtime-local handle is gone, so
+ * the monitor loop's first tick returns {@code true} (handle absent) and
+ * the loop exits with {@code STATUS = "stopped"}. Auto-restart from
+ * checkpoint is a follow-up concern; for P1, JVM death = stream death
+ * (operator restarts manually).
+ *
+ * <h2>Journal cost</h2>
+ *
+ * Per 5-second tick, the loop journals two entries:
+ * <ol>
+ *   <li>{@code Restate.promise(STOP_SIGNAL).peek()} — a journaled READ
+ *       (one {@code PeekPromiseCommandMessage})
+ *   <li>{@code Restate.run("tick", () -> q.awaitTermination(5000))} — a
+ *       journaled RUN (one {@code RunCommandMessage}, plus the journaled
+ *       boolean return value)
+ * </ol>
+ *
+ * That is approximately 34,560 entries/day/stream (~1M/month). Acceptable
+ * for P1; the Option C batched-ticks optimization is documented but not
+ * implemented (would reduce by ~50% at the cost of weaker per-tick
+ * observability).
  *
  * <h2>Checkpoint-location guard</h2>
  *
@@ -199,49 +224,123 @@ public class StreamingService {
 
     // 5. Mark running.
     state.set(STATUS, "running");
+
+    // 6. Active-monitor loop. The loop stays alive until one of:
+    //    a) STOP_SIGNAL is resolved by a concurrent {@link #stop(Void)} call
+    //    b) The query terminates (naturally or abnormally)
+    //    c) The runtime-local handle disappears (post-replay or pre-run)
+    //
+    // Loop body uses Option B (awaitTermination inside Restate.run) per the
+    // active-monitor design validated by parallel senior subagent review.
+    // Journal cost: 2 entries per 5s = ~34,560/day/stream. Acceptable for v1;
+    // optimize to Option C (batched ticks) only if journal cost becomes a
+    // measured problem.
+    //
+    // The loop is the SOLE owner of physical query shutdown — {@link #stop}
+    // only resolves the STOP_SIGNAL promise; the loop calls safeStop(). This
+    // prevents races between two handlers both calling query.stop().
+    monitorLoop(streamId, state);
   }
 
   /**
-   * Stop the streaming query for this stream-id.
+   * The active-monitor loop body. Extracted as a package-private method so
+   * unit tests can verify the per-iteration decision logic without booting
+   * a Restate runtime.
    *
-   * <p>Looks up the live handle in the runtime-local registry and calls
-   * {@code query.stop()}. Sets {@code STATUS = "stopped"} and resolves the
-   * {@code STOP_SIGNAL} promise. If the handle is absent (e.g. after a JVM
-   * failure + replay), the query is already dead — the handler logs the
-   * condition and still transitions the journaled status.
+   * <p>Returns when one of:
+   * <ul>
+   *   <li>STOP_SIGNAL is resolved → stop the query, STATUS=stopped
+   *   <li>{@code awaitTermination} returns true (naturally or via the
+   *       5000ms timeout) → STATUS=stopped
+   *   <li>The runtime-local handle is absent → STATUS=stopped
+   * </ul>
+   *
+   * <p>The loop is deterministic on replay: {@code peek()} replays the
+   * journaled promise state, {@code Restate.run("tick", ...)} replays the
+   * journaled return value. On replay with no handle (post-JVM-death), the
+   * first tick returns {@code true} (terminated) and the loop exits cleanly.
+   */
+  private void monitorLoop(String streamId, dev.restate.sdk.Restate.State state) {
+    while (true) {
+      // Check stop signal — peek() returns Output<Void>; isReady() is the
+      // completion check. peek() is a journaled READ (1 entry/call), so no
+      // need to wrap it in Restate.run.
+      boolean stopSignaled = Restate.promise(STOP_SIGNAL).peek().isReady();
+
+      // Wait up to 5s for query termination. Restate.run journals the call;
+      // on replay the journaled boolean is returned without re-running the
+      // closure. awaitTermination throws StreamingQueryException if the
+      // query terminated abnormally — we catch and treat as terminated.
+      // The closure also returns true if the handle is absent (post-replay
+      // or stop called before run).
+      boolean terminated =
+          Restate.run(
+              "tick",
+              Boolean.class,
+              () -> {
+                StreamingQuery q = handles.get(streamId);
+                if (q == null) {
+                  return Boolean.TRUE;
+                }
+                try {
+                  return Boolean.valueOf(q.awaitTermination(5000));
+                } catch (org.apache.spark.sql.streaming.StreamingQueryException e) {
+                  // Abnormal termination — exit loop.
+                  return Boolean.TRUE;
+                }
+              });
+
+      boolean handlePresent = handles.get(streamId) != null;
+      LoopAction action = decideNextAction(stopSignaled, handlePresent, terminated);
+
+      switch (action) {
+        case STOP_ON_SIGNAL:
+          // Stop requested — the active loop owns the physical shutdown.
+          Restate.run(
+              "stop-on-signal",
+              () -> {
+                StreamingQuery q = handles.remove(streamId);
+                if (q != null) {
+                  safeStop(q, state);
+                }
+              });
+          state.set(STATUS, "stopped");
+          return;
+        case EXIT_TERMINATED:
+          // Query terminated (naturally, abnormally, or handle gone).
+          handles.remove(streamId);
+          state.set(STATUS, "stopped");
+          return;
+        case CONTINUE:
+          // 5s elapsed, query still running, no stop signal. Loop again.
+          break;
+      }
+    }
+  }
+
+  /**
+   * Signal stop — resolves the {@code STOP_SIGNAL} DurablePromise. The
+   * active-monitor loop (running inside {@link #run}) is the sole owner
+   * of the physical {@code query.stop()} call; this handler is a
+   * fire-and-forget signal.
+   *
+   * <p><b>Concurrency:</b> annotated {@code @Shared} so it can fire
+   * concurrently with the {@code run} handler's active-monitor loop.
+   * Without {@code @Shared}, the loop would block the {@code run} handler
+   * for up to 5s per tick (inside {@code awaitTermination}), and the
+   * stop signal would not be observed during those windows.
+   *
+   * <p>Idempotent — resolving an already-resolved promise is a no-op in
+   * Restate. If {@code stop} is called before {@code run} (or after a
+   * JVM-death replay), the promise is resolved; the loop's next tick
+   * sees it and exits with {@code STATUS=stopped}.
    *
    * @param ignored unused (the stream-id comes from the workflow key)
    */
+  @dev.restate.sdk.annotation.Shared
   @Handler
   public void stop(Void ignored) {
-    String streamId = Restate.key();
-    var state = Restate.state();
-
-    // Stop the live query handle (runtime-local — not journaled).
-    // Wrap in Restate.run so the stop decision is journaled and
-    // idempotent across replays. The lambda wraps query.stop() in
-    // a try/catch because Spark's stop() can throw TimeoutException
-    // when the query doesn't stop within its internal deadline —
-    // without the catch, the exception would propagate as a journaled
-    // failure, but the handle is already removed from the registry,
-    // so the Spark query would be orphaned (running in the driver
-    // with no platform reference). We swallow the exception and
-    // record the failure in ERROR_COUNT instead; the next restart
-    // cycle reconciles via checkpoint.
-    StreamingQuery query = handles.remove(streamId);
-    if (query != null) {
-      Restate.run(
-          "stop-streaming-query",
-          () -> {
-            safeStop(query, state);
-          });
-    }
-    // else: handle absent (post-replay, or stop called before run). The
-    // query is not running in this JVM; transition the journaled status only.
-
-    state.set(STATUS, "stopped");
-
-    // Resolve the STOP_SIGNAL promise for future active-loop coordination.
+    // Signal-only — the active loop owns the physical shutdown.
     Restate.promiseHandle(STOP_SIGNAL).resolve(null);
   }
 
@@ -261,6 +360,37 @@ public class StreamingService {
   }
 
   // --- Helpers ---
+
+  /**
+   * The per-iteration decision of the active-monitor loop. Pure function
+   * — given the three observed signals, returns the action to take.
+   *
+   * <p>Extracted as a package-private static method so unit tests can
+   * verify the decision matrix without booting a Restate runtime or a
+   * Spark session. The loop body delegates to this method after
+   * collecting the three signals.
+   *
+   * @param stopSignaled  true if {@code STOP_SIGNAL.peek().isReady()}
+   * @param handlePresent true if {@code handles.get(streamId) != null}
+   * @param terminated    true if {@code awaitTermination} returned true
+   *                      (or the handle was absent at tick time)
+   * @return the action the loop should take this iteration
+   */
+  enum LoopAction { STOP_ON_SIGNAL, EXIT_TERMINATED, CONTINUE }
+
+  static LoopAction decideNextAction(
+      boolean stopSignaled, boolean handlePresent, boolean terminated) {
+    if (stopSignaled) {
+      return LoopAction.STOP_ON_SIGNAL;
+    }
+    // Treat handle-absent OR query-terminated as "exit". The tick closure
+    // already returns true when handle is absent, so this collapses to one
+    // exit condition at the loop level.
+    if (terminated || !handlePresent) {
+      return LoopAction.EXIT_TERMINATED;
+    }
+    return LoopAction.CONTINUE;
+  }
 
   /**
    * Stop a {@link StreamingQuery}, swallowing any exception thrown by

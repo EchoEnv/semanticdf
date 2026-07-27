@@ -1,6 +1,7 @@
 package io.semanticdf.platform.streaming;
 
 import dev.restate.sdk.Restate;
+import dev.restate.sdk.annotation.Shared;
 import dev.restate.sdk.common.StateKey;
 import org.junit.jupiter.api.Test;
 
@@ -199,6 +200,59 @@ class StreamingServiceTest {
     assertDoesNotThrow(() -> StreamingService.safeStop(query, state));
     org.junit.jupiter.api.Assertions.assertNull(
         state.lastSetValue, "ERROR_COUNT must not be touched on success");
+  }
+
+  // --- Active-monitor loop decision matrix ---
+
+  @Test
+  void decide_nextAction_stopSignaledWins() {
+    // Stop signal takes priority over termination and handle state.
+    assertEquals(
+        StreamingService.LoopAction.STOP_ON_SIGNAL,
+        StreamingService.decideNextAction(true, true, false));
+    assertEquals(
+        StreamingService.LoopAction.STOP_ON_SIGNAL,
+        StreamingService.decideNextAction(true, false, true));
+    assertEquals(
+        StreamingService.LoopAction.STOP_ON_SIGNAL,
+        StreamingService.decideNextAction(true, true, true));
+  }
+
+  @Test
+  void decide_nextAction_terminatedExits() {
+    // No stop signal, terminated (true) → exit.
+    assertEquals(
+        StreamingService.LoopAction.EXIT_TERMINATED,
+        StreamingService.decideNextAction(false, true, true));
+  }
+
+  @Test
+  void decide_nextAction_handleAbsentExits() {
+    // No stop signal, handle gone, query still alive at tick → exit.
+    // (handlePresent=false is the "JVM death" condition — we cannot recover.)
+    assertEquals(
+        StreamingService.LoopAction.EXIT_TERMINATED,
+        StreamingService.decideNextAction(false, false, false));
+  }
+
+  @Test
+  void decide_nextAction_aliveContinues() {
+    // No stop signal, handle present, query still running → continue.
+    assertEquals(
+        StreamingService.LoopAction.CONTINUE,
+        StreamingService.decideNextAction(false, true, false));
+  }
+
+  @Test
+  void stop_isSharedAnnotated() throws Exception {
+    // The @Shared annotation is critical: without it, stop() cannot fire
+    // while run() is blocked in awaitTermination(5000), so the loop would
+    // never see the stop signal during the 5-second blocks. This test
+    // pins the contract.
+    java.lang.reflect.Method stopMethod =
+        StreamingService.class.getDeclaredMethod("stop", Void.class);
+    Shared shared = stopMethod.getAnnotation(Shared.class);
+    assertNotNull(shared, "StreamingService.stop must be @Shared");
   }
 
   // --- Helpers ---
