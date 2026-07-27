@@ -94,6 +94,20 @@ public final class PlatformApplication {
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       System.out.println("semanticdf-platform: shutdown hook firing; bound port "
           + boundPort + " will be released");
+      // Stop the SparkSession to release driver memory, daemon threads,
+      // and the SparkContext's RPC clients. Without this the JVM leaks
+      // ~1-2GB heap and a half-dozen threads per platform instance
+      // (matches the leak the MCP server's Main.scala explicitly guards
+      // against — see semanticdf-mcp/src/main/scala/io/semanticdf/mcp/Main.scala).
+      //
+      // Best-effort: if spark.stop() throws, the JVM exits anyway. We log
+      // so operators can see the failure.
+      try {
+        spark.stop();
+        System.out.println("semanticdf-platform: SparkSession stopped");
+      } catch (Throwable t) {
+        System.err.println("semanticdf-platform: spark.stop() failed: " + t.getMessage());
+      }
     }, "semanticdf-platform-shutdown"));
 
     System.out.println("semanticdf-platform listening on http://localhost:" + port);
