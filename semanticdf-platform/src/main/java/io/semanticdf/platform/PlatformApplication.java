@@ -15,13 +15,14 @@ import io.semanticdf.platform.streaming.StreamingService;
 import io.semanticdf.platform.streaming.YamlModelRegistry;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.streaming.StreamingQuery;
 
@@ -197,85 +198,180 @@ public final class PlatformApplication {
 
   /**
    * Drain with an explicit per-query timeout. Visible-for-testing.
+   *
+   * <p>All queries are stopped <b>in parallel</b> via a fixed-size thread
+   * pool capped at {@link #DRAIN_MAX_PARALLEL}. The global drain time is
+   * bounded by {@code perQueryTimeoutMs} (not N × {@code perQueryTimeoutMs}),
+   * because the queries run concurrently.
+   *
+   * <p>The implementation uses {@link ExecutorService#invokeAll} with the
+   * per-query timeout. Each task runs {@code query.stop()}; tasks that
+   * don't complete within the timeout are cancelled when {@code invokeAll}
+   * returns. We then iterate the resulting {@link Future}s to report
+   * per-query outcomes (success / timeout / exception).
    */
   static int drainQueries(StreamingQueryHandleRegistry handles, long perQueryTimeoutMs) {
-    AtomicInteger count = new AtomicInteger(0);
+    // Snapshot the registry into a list so we can size the pool against
+    // the actual stream count. forEach is weakly consistent — a snapshot
+    // is what we want for a parallel drain (no growth-during-iteration).
+    List<Map.Entry<String, StreamingQuery>> snapshot = new ArrayList<>();
+    handles.forEach(
+        (streamId, query) -> snapshot.add(Map.entry(streamId, query)));
+
+    int count = snapshot.size();
+    if (count == 0) {
+      return 0;
+    }
+
+    int poolSize = Math.min(count, DRAIN_MAX_PARALLEL);
     ExecutorService executor =
-        Executors.newSingleThreadExecutor(
+        Executors.newFixedThreadPool(
+            poolSize,
             r -> {
               Thread t = new Thread(r, "semanticdf-platform-drain");
               t.setDaemon(true);
               return t;
             });
-    // Volatile flag: set true when the shutdown hook thread itself is
-    // interrupted (e.g., JVM's shutdown hook timeout fires). The forEach
-    // lambda checks this flag at the start of each iteration to bail out
-    // early — without it, the drain continues iterating after the JVM
-    // has already given up on us, which wastes time on queries that will
-    // be killed by spark.stop() anyway.
-    java.util.concurrent.atomic.AtomicBoolean interrupted =
-        new java.util.concurrent.atomic.AtomicBoolean(false);
-    try {
-      handles.forEach(
-          (streamId, query) -> {
-            // If the shutdown hook thread was interrupted (e.g., JVM's
-            // own shutdown hook timeout fired), skip remaining queries —
-            // spark.stop() will tear them down anyway.
-            if (interrupted.get()) {
-              return;
-            }
-            // Count BEFORE attempting — operators want to see the total
-            // drain attempts, not just the successful stops.
-            count.incrementAndGet();
-            Future<Void> future =
-                executor.submit(
-                    (Callable<Void>)
-                        () -> {
-                          query.stop();
-                          return null;
-                        });
-            try {
-              future.get(perQueryTimeoutMs, TimeUnit.MILLISECONDS);
-            } catch (TimeoutException te) {
-              // The query is hung. Cancel the future (interrupts the
-              // worker thread); Spark may or may not honor the interrupt
-              // but cancelling the future prevents the executor's queue
-              // from blocking on this task forever.
-              future.cancel(true);
-              System.err.println(
-                  "semanticdf-platform: drain timed out for stream-id="
-                      + streamId
-                      + " after "
-                      + perQueryTimeoutMs
-                      + "ms; JVM shutdown hook timeout will force-exit");
-            } catch (InterruptedException ie) {
-              // The shutdown hook itself was interrupted — re-set the
-              // interrupt flag (best practice), set our early-exit flag
-              // so the forEach lambda bails out on subsequent iterations,
-              // and skip this query.
-              Thread.currentThread().interrupt();
-              interrupted.set(true);
-              System.err.println(
-                  "semanticdf-platform: drain interrupted at stream-id="
-                      + streamId
-                      + "; remaining queries will be killed by spark.stop()");
-              future.cancel(true);
-              return;
-            } catch (Throwable t) {
-              // query.stop() can throw TimeoutException (Spark's internal
-              // stop timeout), StreamingQueryException, or any runtime
-              // exception. We log and continue — we're shutting down
-              // anyway; missing one query is better than hanging the JVM.
-              System.err.println(
-                  "semanticdf-platform: drain failed for stream-id="
-                      + streamId
-                      + ": "
-                      + t.getMessage());
-            }
+
+    // Build the task list — each task is a single query.stop() call.
+    List<Callable<Void>> tasks = new ArrayList<>(count);
+    for (Map.Entry<String, StreamingQuery> entry : snapshot) {
+      tasks.add(
+          () -> {
+            entry.getValue().stop();
+            return null;
           });
-    } finally {
-      executor.shutdownNow();
     }
-    return count.get();
+
+    List<Future<Void>> futures;
+    try {
+      // invokeAll blocks until ALL tasks complete OR the timeout elapses.
+      // Unfinished tasks are cancelled when it returns. This is exactly
+      // the parallel-drain semantics we want: every query gets up to
+      // perQueryTimeoutMs (because they're concurrent), and the global
+      // drain time is bounded by that same number.
+      futures = executor.invokeAll(tasks, perQueryTimeoutMs, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException ie) {
+      // The shutdown hook thread itself was interrupted. Re-set the
+      // interrupt flag (best practice), cancel any in-flight tasks, and
+      // bail out — spark.stop() will tear down the rest.
+      Thread.currentThread().interrupt();
+      System.err.println(
+          "semanticdf-platform: drain interrupted; "
+              + "remaining queries will be killed by spark.stop()");
+      executor.shutdownNow();
+      return count;
+    } finally {
+      executor.shutdown();
+      // Brief await — enough for already-finished tasks to release
+      // their threads back to the pool. We do NOT block indefinitely
+      // because we're shutting down; daemon threads will be killed by
+      // the JVM exit anyway. A bounded wait just keeps the executor
+      // service object clean for tests that re-invoke drain().
+      try {
+        executor.awaitTermination(1, TimeUnit.SECONDS);
+      } catch (InterruptedException ie) {
+        Thread.currentThread().interrupt();
+      }
+    }
+
+    // Report per-query outcomes. The future's state tells us what
+    // happened: isDone (success or exception), isCancelled (timeout).
+    int succeeded = 0;
+    int timedOut = 0;
+    int failed = 0;
+    for (int i = 0; i < futures.size(); i++) {
+      Future<Void> f = futures.get(i);
+      String streamId = snapshot.get(i).getKey();
+      if (f.isCancelled()) {
+        timedOut++;
+        System.err.println(
+            "semanticdf-platform: drain timed out for stream-id="
+                + streamId
+                + " after "
+                + perQueryTimeoutMs
+                + "ms; JVM shutdown hook timeout will force-exit");
+      } else {
+        try {
+          f.get(); // re-throws ExecutionException wrapping the underlying error
+          succeeded++;
+        } catch (Exception e) {
+          failed++;
+          // ExecutionException always wraps the underlying cause; this
+          // defensive fallback handles other Exception types (the current
+          // call sites only produce ExecutionException, but we don't
+          // want to NPE if a future JDK call adds another type).
+          Throwable cause = e.getCause() != null ? e.getCause() : e;
+          System.err.println(
+              "semanticdf-platform: drain failed for stream-id="
+                  + streamId
+                  + ": "
+                  + cause.getMessage());
+        }
+      }
+    }
+    System.out.println(
+        "semanticdf-platform: drain complete — "
+            + succeeded
+            + " stopped, "
+            + timedOut
+            + " timed out, "
+            + failed
+            + " failed");
+    return count;
+  }
+
+  /**
+   * Maximum number of parallel drain workers. Bounds the thread-pool size
+   * so we don't spin up thousands of threads for platforms with many
+   * streams (each thread carries ~512KB-1MB of stack). Operators tune
+   * via {@code SEMANTICDF_DRAIN_MAX_PARALLEL}; default 16.
+   */
+  static final int DEFAULT_DRAIN_MAX_PARALLEL = 64;
+
+  /**
+   * Hard upper bound on {@link #DRAIN_MAX_PARALLEL} to prevent operator
+   * typos (e.g. {@code SEMANTICDF_DRAIN_MAX_PARALLEL=100000}) from
+   * spawning so many threads that the JVM OOMs on stack allocation.
+   * 256 threads × ~1MB stack ≈ 256MB worst case, well under the
+   * platform's 1GB heap budget.
+   */
+  static final int MAX_DRAIN_MAX_PARALLEL = 256;
+
+  static final int DRAIN_MAX_PARALLEL = resolveDrainMaxParallel();
+
+  private static int resolveDrainMaxParallel() {
+    String raw = System.getenv("SEMANTICDF_DRAIN_MAX_PARALLEL");
+    if (raw == null || raw.isBlank()) {
+      return DEFAULT_DRAIN_MAX_PARALLEL;
+    }
+    try {
+      int v = Integer.parseInt(raw.trim());
+      if (v <= 0) {
+        System.err.println(
+            "semanticdf-platform: non-positive SEMANTICDF_DRAIN_MAX_PARALLEL='"
+                + raw
+                + "', using default "
+                + DEFAULT_DRAIN_MAX_PARALLEL);
+        return DEFAULT_DRAIN_MAX_PARALLEL;
+      }
+      if (v > MAX_DRAIN_MAX_PARALLEL) {
+        System.err.println(
+            "semanticdf-platform: SEMANTICDF_DRAIN_MAX_PARALLEL='"
+                + raw
+                + "' exceeds max "
+                + MAX_DRAIN_MAX_PARALLEL
+                + ", clamping");
+        return MAX_DRAIN_MAX_PARALLEL;
+      }
+      return v;
+    } catch (NumberFormatException e) {
+      System.err.println(
+          "semanticdf-platform: invalid SEMANTICDF_DRAIN_MAX_PARALLEL='"
+              + raw
+              + "', using default "
+          + DEFAULT_DRAIN_MAX_PARALLEL);
+      return DEFAULT_DRAIN_MAX_PARALLEL;
+    }
   }
 }
