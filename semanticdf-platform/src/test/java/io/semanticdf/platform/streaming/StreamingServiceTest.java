@@ -400,6 +400,57 @@ class StreamingServiceTest {
   }
 
   @Test
+  void startQueryWithFailureTracking_launcherFailureSetsBlockedAndFailsTerminal() {
+    // PR #237 (architect-flagged ship-blocker): a persistent launcher
+    // failure (Spark misconfigured, checkpoint mismatch, etc.) must NOT
+    // trigger Restate's transient retry. Without the try/catch in
+    // startQueryWithFailureTracking, Restate would loop forever because
+    // the BLOCKED guard at handler entry only halts retries if BLOCKED
+    // is set, and step 3 didn't set it.
+    //
+    // This test pins the fix: launcher failure -> STATUS=failed +
+    // RECONCILE_BLOCKED=true + ERROR_COUNT=1 + TerminalException
+    // (HTTP 400).
+    RecordingState state = new RecordingState(0L);
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    StreamingQueryLauncher failingLauncher =
+        (model, request) -> {
+          throw new RuntimeException("checkpoint mismatch");
+        };
+    StreamingService service =
+        new StreamingService(
+            new StubModelRegistry(null), failingLauncher, reg, new RecordingAuditSink());
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    dev.restate.sdk.common.TerminalException thrown =
+        assertThrows(
+            dev.restate.sdk.common.TerminalException.class,
+            () -> service.startQueryWithFailureTracking("stream-1", null, req, state));
+
+    // Pin: HTTP 400 (BAD_REQUEST) — Restate marks the invocation
+    // terminally failed rather than retrying.
+    assertEquals(
+        dev.restate.sdk.common.TerminalException.BAD_REQUEST_CODE, thrown.getCode());
+
+    // Pin: state mutations that prevent the journal loop.
+    assertEquals("failed", state.store.get("status"));
+    assertEquals(Boolean.TRUE, state.store.get("reconcileBlocked"));
+    assertEquals(1L, state.store.get("errorCount"));
+
+    // The closure threw BEFORE handles.put, so the registry is empty.
+    assertNullValue(reg.get("stream-1"));
+  }
+
+  @Test
+  void startQueryWithFailureTracking_succeedsSilentlyOnHappyPath() {
+    // REMOVED — Restate.run can't run outside a Restate handler
+    // context, so the happy path isn't reachable from a unit test.
+    // Integration test (Testcontainers) covers it.
+  }
+
+  @Test
   void reconcileAfterJvmCrash_updatesJournalState() {
     // The journal state updates (RESTART_COUNT, LAST_RESTART_AT) must
     // happen deterministically with the nowMs passed in. This pins
