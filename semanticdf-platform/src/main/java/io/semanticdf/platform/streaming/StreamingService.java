@@ -329,25 +329,28 @@ public class StreamingService {
           state.get(AUDIT_LOSS_COUNT).orElse(0L) + 1L);
     }
 
-    // 5. Mark running.
-    state.set(STATUS, "running");
-
-    // 5b. CATALOG: register this stream-id in the durable catalog so
-    // the StartupReconciler can find it on next JVM startup. Done
-    // AFTER STATUS=running (operator-visible "the platform knows
-    // about this stream now") and AFTER the original run() has
-    // succeeded past the launcher / audit steps. The catalog.write
-    // is best-effort: a failure here means the next JVM's sweep
-    // will miss this stream — operators see it via the summary
-    // log line and can manually invoke /restart.
+    // 5. CATALOG: register this stream-id in the durable catalog so
+    // the StartupReconciler can find it on next JVM startup.
     //
-    // Sync-drift note (PR #234 review Architect-C1): the catalog
-    // duplicates metadata that also lives in the journal (modelName,
-    // queryShape, checkpointLocation). It's a SHALLOW projection —
-    // the journal is the source of truth for status. We accept the
-    // duplication because Restate's journal is not directly readable
-    // from Java without admin-client + per-key enumeration, which
-    // doesn't exist in 2.8.0.
+    // PR #236 (DE-H3 fix): moved BEFORE state.set(STATUS, "running")
+    // to eliminate the catalog/journal drift window. With this
+    // ordering, the journal's STATUS=running and the catalog row
+    // are written together at the same point in the handler —
+    // a JVM death either happens before both (rollback) or after
+    // both (committed), with no in-between state where the journal
+    // says running but the catalog has no row.
+    //
+    // Failure semantics: ON CONFLICT DO NOTHING (catalog, id:114)
+    // makes re-attempts idempotent. A JVM death after the catalog
+    // write but before STATUS=running means the catalog row
+    // exists for a workflow whose journal says STATUS=starting.
+    // On restart, the workflow replays from scratch: the catalog
+    // write retries idempotently (no-op via ON CONFLICT), and
+    // STATUS=running is set again on successful step 5.
+    //
+    // The catalog.write is wrapped in try/catch to keep the
+    // workflow healthy even if Postgres is unreachable: we'd
+    // lose auto-recovery but the workflow itself isn't broken.
     if (catalog != null) {
       try {
         catalog.registerIfAbsent(
@@ -356,9 +359,10 @@ public class StreamingService {
             request.queryShape(),
             request.checkpointLocation());
       } catch (RuntimeException catalogRe) {
-        // Non-fatal — log and continue. The workflow is already
-        // running; we just lost the auto-recovery on next JVM
-        // startup. Operators can manually invoke /restart.
+        // Non-fatal — log and continue. The workflow is healthy
+        // (we're past step 4); we just lost the auto-recovery on
+        // next JVM startup. Operators can manually invoke
+        // /restart after fixing the underlying Postgres issue.
         System.err.println(
             "semanticdf-platform: catalog write failed for stream-id="
                 + streamId
@@ -367,6 +371,10 @@ public class StreamingService {
                 + "). Auto-recovery on next JVM startup will be unavailable.");
       }
     }
+
+    // 5b. Mark running. (Catalog write was step 5 above; reordered
+    // in PR #236 so catalog and journal are written together.)
+    state.set(STATUS, "running");
 
     // 5a. RECONCILIATION: detect post-crash replay and recreate the query.
     //
@@ -959,24 +967,9 @@ public class StreamingService {
         + "\"}";
   }
 
-  /** Minimal JSON string escaper (avoids pulling a JSON builder for a 4-field payload). */
+  /** Minimal JSON string escaper — see {@link JsonEscaper#escape(String)}. */
   private static String escape(String s) {
-    if (s == null) {
-      return "";
-    }
-    StringBuilder sb = new StringBuilder(s.length());
-    for (int i = 0; i < s.length(); i++) {
-      char c = s.charAt(i);
-      switch (c) {
-        case '"' -> sb.append("\\\"");
-        case '\\' -> sb.append("\\\\");
-        case '\n' -> sb.append("\\n");
-        case '\r' -> sb.append("\\r");
-        case '\t' -> sb.append("\\t");
-        default -> sb.append(c);
-      }
-    }
-    return sb.toString();
+    return JsonEscaper.escape(s);
   }
 
   /**
