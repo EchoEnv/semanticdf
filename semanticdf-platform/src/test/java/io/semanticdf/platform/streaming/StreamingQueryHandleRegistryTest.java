@@ -70,6 +70,29 @@ class StreamingQueryHandleRegistryTest {
     assertNotNull(reg.get("s2"));
   }
 
+  @Test
+  void forEach_visitsAllEntries() {
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    StreamingQuery q1 = fakeQuery();
+    StreamingQuery q2 = fakeQuery();
+    reg.put("s1", q1);
+    reg.put("s2", q2);
+
+    java.util.Map<String, StreamingQuery> visited = new java.util.HashMap<>();
+    reg.forEach(visited::put);
+    assertEquals(2, visited.size());
+    assertSame(q1, visited.get("s1"));
+    assertSame(q2, visited.get("s2"));
+  }
+
+  @Test
+  void forEach_emptyRegistryDoesNothing() {
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    java.util.concurrent.atomic.AtomicInteger count = new java.util.concurrent.atomic.AtomicInteger(0);
+    reg.forEach((k, v) -> count.incrementAndGet());
+    assertEquals(0, count.get());
+  }
+
   private static void assertNotNull(Object o) {
     org.junit.jupiter.api.Assertions.assertNotNull(o);
   }
