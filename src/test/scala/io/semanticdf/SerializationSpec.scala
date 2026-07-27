@@ -156,6 +156,10 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
       rowCount   = 3L,
       elapsedMs  = 42L,
       status     = "ok",
+      dedupHash  = io.semanticdf.audit.AuditEvent.dedupHashOf(
+                    "flights", 7,
+                    Seq("flight_count"), Seq("carrier"),
+                    Some("abc123"), None),
     )
     val round = roundTrip(event)
     assert(round.model == "flights")

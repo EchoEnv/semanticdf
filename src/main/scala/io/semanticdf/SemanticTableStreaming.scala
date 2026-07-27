@@ -466,6 +466,12 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
         val req        = auditRequest.getOrElse(AuditQueryRequest(model = model, version = this.version))
         val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
         val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
+        // dedupHash is the replay-safe / dedup-safe contract key.
+        // The streaming foreachBatch runs in the Spark driver, not
+        // inside a Restate handler (per
+        // docs/design/platform-determinism-audit.md), so this is for
+        // general dedup-safety, not Restate replay-safety. Same
+        // query-shape dedups; different timestamp or batch does not.
         auditSink.get.emit(AuditEvent(
           ts         = java.time.Instant.now(),
           model      = model,
@@ -477,6 +483,9 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
           rowCount   = rowCount,
           elapsedMs  = elapsedMs,
           status     = "ok",
+          dedupHash  = AuditEvent.dedupHashOf(
+                        model, req.version, req.measures, req.dimensions,
+                        whereHash, havingHash),
         ))
       } catch { case scala.util.control.NonFatal(_) => () }
     }
