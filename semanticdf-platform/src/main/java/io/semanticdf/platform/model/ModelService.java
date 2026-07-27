@@ -52,7 +52,11 @@ public class ModelService {
       // Inside Restate.run("compile", () -> semanticdf.of(spark, request.yaml()))
       // For the skeleton, just initialize state.
       state.set(CURRENT_VERSION, 1);
-      state.set(LAST_INVALIDATED_AT, System.currentTimeMillis());
+      // Restate.instantNow() is replay-stable: on journal replay, the same
+      // value is returned as during the original execution. System.currentTimeMillis()
+      // would NOT be replay-stable (would be the wall-clock time of the replay,
+      // not the original) — violating the deterministic-purity requirement.
+      state.set(LAST_INVALIDATED_AT, Restate.instantNow().toEpochMilli());
       state.set(MANIFEST_HASH, "sha256:placeholder");
       state.set(REGISTRATION_STATUS, "idle");
     } catch (Exception e) {
@@ -70,7 +74,8 @@ public class ModelService {
     Integer current = state.get(CURRENT_VERSION).orElse(0);
     int next = current + 1;
     state.set(CURRENT_VERSION, next);
-    state.set(LAST_INVALIDATED_AT, System.currentTimeMillis());
+    // Restate.instantNow() is replay-stable; System.currentTimeMillis() is not.
+    state.set(LAST_INVALIDATED_AT, Restate.instantNow().toEpochMilli());
     return next;
   }
 

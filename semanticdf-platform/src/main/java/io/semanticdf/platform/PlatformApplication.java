@@ -39,7 +39,21 @@ public final class PlatformApplication {
     // Start the HTTP server on port 8080 (or $PORT). The same process
     // hosts the platform's REST surface and the Restate runtime.
     int port = Integer.parseInt(System.getenv().getOrDefault("PORT", "8080"));
-    RestateHttpServer.listen(endpoint, port);
+    RestateHttpServer server = RestateHttpServer.listen(endpoint, port);
+
+    // Register a JVM shutdown hook so SIGTERM (and Ctrl-C) drain the
+    // server cleanly — close the listening socket, finish in-flight
+    // requests, release the Vert.x event loop. Without this hook the
+    // JVM exits with the server still in the middle of an accept loop,
+    // and the kernel's TIME_WAIT connections linger on the next start.
+    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+      System.out.println("semanticdf-platform: shutdown hook firing");
+      try {
+        server.close();
+      } catch (Exception e) {
+        System.err.println("semanticdf-platform: error closing server: " + e.getMessage());
+      }
+    }, "semanticdf-platform-shutdown"));
 
     System.out.println("semanticdf-platform listening on http://localhost:" + port);
   }
