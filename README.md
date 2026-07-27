@@ -82,6 +82,7 @@ guarantee that they're asking for the right thing.
 
 - **[`docs/getting-started.md`](docs/getting-started.md) — 5-minute paste-and-run setup (Maven + SparkSession + first query)**
 - [`docs/guide.md`](docs/guide.md) — narrative walkthrough: how SemanticDF works, in plain English
+- **[`semanticdf-platform/README.md`](semanticdf-platform/README.md)** — the standalone Restate-native platform runtime (long-running JVM with a Restate ingress, post-crash query reconciliation, bulk-startup recovery). v0.2.1+ ships this as a separate Maven module that depends on the library.
 - [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
@@ -661,8 +662,7 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
   module flags, `scala:run` arg leak, deprecated import, version files).
 - **[`docs/known-limitations.md`](docs/known-limitations.md)** — current scope & guardrails (batch-only, per-session security, symmetric join keys, etc.) with workarounds and roadmap hints. Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
-- **[`docs/first-consumer-plan.md`](docs/first-consumer-plan.md)** — 3-week structured soak test plan with criteria for go/no-go.
-- **[`docs/feature-roadmap.md`](docs/feature-roadmap.md)** — T1-T4 prioritized list of features and performance improvements. T1 ships next; T2-T4 gated on real consumer demand.
+- **[`docs/backlog-type-safety.md`](docs/backlog-type-safety.md)** — the open list of deferred features and their priority ordering.
 - **[`docs/adr/`](docs/adr/)** — recorded decisions:
   - [0001](docs/adr/0001-adopt-karpathy-guidelines-not-app-design.md) — karpathy guidelines adopted (think-before-coding, simplicity-first, surgical changes, goal-driven execution); app-design plugin/portal rejected.
   - [0002](docs/adr/0002-streaming-batch-first-streaming-shaped.md) — batch-first, streaming-shaped (DSL/source-agnostic op tree; batch and streaming terminals share the model definition).
