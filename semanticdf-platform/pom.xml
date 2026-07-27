@@ -126,6 +126,19 @@
             <version>5.10.0</version>
             <scope>test</scope>
         </dependency>
+
+        <!--
+          Restate sdk-testing — boots a real Restate runtime via Testcontainers
+          for end-to-end integration tests of the Workflow lifecycle (start,
+          monitor loop, stop). Required to validate the @Shared + STOP_SIGNAL
+          concurrency contract that unit tests cannot prove.
+        -->
+        <dependency>
+            <groupId>dev.restate</groupId>
+            <artifactId>sdk-testing</artifactId>
+            <version>${restate.sdk.version}</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
