@@ -60,6 +60,17 @@ PORT=8080 \
 
 The platform's REST surface is on `http://localhost:8080`; the Restate server is on `http://localhost:9070`.
 
+### Spark engine mode
+
+The platform reads `SEMANTICDF_SPARK_CONNECT_URL` to choose how to obtain its `SparkSession`:
+
+| Mode | When | Where Spark runs |
+|---|---|---|
+| **Local** (default) | env var unset | In-process Spark driver, master from `SPARK_MASTER` (default `local[*]`) |
+| **Connect** (production) | env var set, e.g. `sc://spark-connect:15002` | Long-running Spark Connect cluster (separate JVM) |
+
+Connect mode turns the platform into a pure control plane — the engine's JVM lifetime is decoupled from the platform's, and the platform initiates nothing Spark-related beyond the gRPC client. Requires Spark 4.0+ (Spark Connect ships as a separate artifact on 3.x). Set the env var + restart; no platform code changes.
+
 ### Tests
 
 ```bash
