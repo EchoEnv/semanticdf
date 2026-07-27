@@ -54,6 +54,16 @@ object Main {
     }
   }
 
+  /** Build a SparkSession for a CLI subcommand. Uses [[SdfSession]],
+    * which honours `--remote sc://host:port` (Connect mode) or the
+    * `SEMANTICDF_SPARK_CONNECT_URL` env var; otherwise the default
+    * local mode. */
+  private def createSpark(appName: String, args: Array[String]): SparkSession = {
+    val parser = new CliParser(args)
+    val remote = parser.option("--remote", "")
+    SdfSession.createFromEnv(appName, if (remote.isEmpty) None else Some(remote))
+  }
+
   /** docsgen — no Spark needed, runs pure YAML → HTML. */
   private def runDocsGen(args: Array[String]): Unit = {
     val parser = new CliParser(args)
@@ -85,12 +95,7 @@ object Main {
 
   /** introspect — needs Spark session for DataFrame operations. */
   private def runIntrospect(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
-      .master("local[*]")
-      .appName("semanticdf-introspect")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.shuffle.partitions", "2")
-      .getOrCreate()
+    val spark = createSpark("semanticdf-introspect", args)
     try {
       val parser = new CliParser(args)
       val path        = parser.require("--path", "Usage: introspect --path <path> [--format parquet|csv|json] ...")
@@ -128,12 +133,7 @@ object Main {
     * `--metadata-author k=v --metadata-license k=v ...` (repeated inline
     * flags; no separate file convention). */
   private def runManifest(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
-      .master("local[*]")
-      .appName("semanticdf-manifest")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.shuffle.partitions", "2")
-      .getOrCreate()
+    val spark = createSpark("semanticdf-manifest", args)
     try {
       val parser = new CliParser(args)
       val yamlPath  = parser.require("--yaml", "Usage: manifest --yaml <file> --id <FQN> [--out FILE] [--namespace NS] [--metadata-K V ...]")
@@ -248,12 +248,7 @@ object Main {
     *
     * Output: prints the result rows as `col1\tcol2\t...` to stdout. */
   private def runQuery(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
-      .master("local[*]")
-      .appName("semanticdf-query")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.shuffle.partitions", "2")
-      .getOrCreate()
+    val spark = createSpark("semanticdf-query", args)
     try {
       val parser = new CliParser(args)
       val modelsPath = parser.require("--models", "Usage: query --models <dir-or-file> --sql '<SQL>'")
@@ -289,11 +284,7 @@ object Main {
     * files). We still create a SparkSession because the YamlLoader
     * signature requires one. */
   private def runLineage(args: Array[String]): Unit = {
-    val spark = SparkSession.builder()
-      .master("local[*]")
-      .appName("semanticdf-lineage")
-      .config("spark.ui.enabled", "false")
-      .getOrCreate()
+    val spark = createSpark("semanticdf-lineage", args)
     try {
       val parser = new CliParser(args)
       val yamlPath = parser.require("--yaml",

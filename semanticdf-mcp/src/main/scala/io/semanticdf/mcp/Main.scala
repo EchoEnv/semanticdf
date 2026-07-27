@@ -4,6 +4,7 @@ package io.semanticdf.mcp
 //  registers the Jackson Scala module so generic case classes
 //  like Envelope[T] serialize correctly.)
 import org.apache.spark.sql.SparkSession
+import io.semanticdf.tools.SdfSession
 import org.slf4j.LoggerFactory
 
 /** CLI entry point — `mvn scala:run -DmainClass=io.semanticdf.mcp.Main` or
@@ -46,13 +47,12 @@ object Main {
     System.setProperty("spark.executor.log.level", "WARN")
     System.setProperty("log4j2.rootLogger.level", "WARN")
 
-    val spark = SparkSession.builder()
-      .master("local[*]")
-      .appName(s"semanticdf-${parsed.transport}")
-      .config("spark.ui.enabled", "false")
-      .config("spark.sql.shuffle.partitions", "2")
-      .config("spark.sql.ansi.enabled", "false")  // match library test baseline
-      .getOrCreate()
+    // --remote sc://host:port → Spark Connect (server-side JVM).
+    // default → local in-process session (matches pre-Connect behavior).
+    val spark = SdfSession.createFromEnv(
+      appName       = s"semanticdf-${parsed.transport}",
+      flagOverride  = parsed.remote,
+    )
 
     // Register the shutdown hook IMMEDIATELY after spark is created so that
     // any throw between here and the try block still triggers spark.stop().
@@ -115,6 +115,9 @@ object Main {
       okfBundleDir: String,
       transport: String,
       restPort: Int,
+      /** Spark Connect URL (None → local). The MCP becomes a thin
+        * gRPC client to an external Spark Connect server when set. */
+      remote: Option[String] = None,
   )
 
   private def parseArgs(args: Seq[String]): Either[String, Config] = {
@@ -130,11 +133,18 @@ object Main {
           case Some(n) if n > 0 && n < 65536 => loop(rest, acc.copy(restPort = n))
           case _ => Left(s"--rest-port must be 1-65535, got '$v'")
         }
+      case "--remote"     :: v :: rest if v.nonEmpty =>
+        if (!v.startsWith("sc://"))
+          Left(s"--remote must use the 'sc://' scheme, got: $v")
+        else
+          loop(rest, acc.copy(remote = Some(v)))
+      case "--remote"     :: Nil => Left("--remote requires a value")
       case "--models"     :: Nil => Left("--models requires a value")
       case "--data"       :: Nil => Left("--data requires a value")
       case "--okf-bundle" :: Nil => Left("--okf-bundle requires a value")
       case "--transport"  :: Nil => Left("--transport requires a value")
       case "--rest-port"  :: Nil => Left("--rest-port requires a value")
+      case "--remote"     :: Nil => Left("--remote requires a value")
       case other :: _ => Left(s"unknown argument: $other")
     }
     val init = Config(modelsDir = "", dataConfig = "", okfBundleDir = "",
@@ -159,5 +169,13 @@ object Main {
       |  --transport {stdio,rest}
       |                      transport mode (default: stdio)
       |  --rest-port <N>     port for REST transport (default: 8080)
+      |  --remote sc://host:port
+      |                      Spark Connect URL. The MCP becomes a thin gRPC
+      |                      client to an external Spark server. Requires
+      |                      Spark 4.0+. Without this flag, the MCP runs
+      |                      an in-process local Spark session (the default
+      |                      since v0.1.x). Falls back to the
+      |                      SEMANTICDF_SPARK_CONNECT_URL env var if the
+      |                      flag is not set.
       |""".stripMargin
 }
