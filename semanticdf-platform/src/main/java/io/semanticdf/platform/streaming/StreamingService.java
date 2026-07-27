@@ -153,32 +153,63 @@ public class StreamingService {
   private final StreamingQueryLauncher launcher;
   private final StreamingQueryHandleRegistry handles;
   private final AuditSink auditSink;
+  private final StreamCatalog catalog;
 
   /**
    * Production constructor — wires the default Restate-backed audit sink
-   * so audit emits are journaled as cross-service calls.
+   * so audit emits are journaled as cross-service calls. No catalog
+   * (used by tests that don't care about bulk reconciliation).
    */
   public StreamingService(
       ModelRegistry models,
       StreamingQueryLauncher launcher,
       StreamingQueryHandleRegistry handles) {
-    this(models, launcher, handles, new RestateAuditSink());
+    this(models, launcher, handles, new RestateAuditSink(), null);
   }
 
   /**
-   * Test constructor — allows injecting a recording or no-op audit sink
-   * so handlers can be exercised without a Restate handler context.
-   * Visible-for-testing.
+   * Production constructor — wires the default Restate-backed audit sink
+   * AND the supplied catalog for bulk startup reconciliation.
+   * Used by {@link PlatformApplication}.
+   */
+  public StreamingService(
+      ModelRegistry models,
+      StreamingQueryLauncher launcher,
+      StreamingQueryHandleRegistry handles,
+      StreamCatalog catalog) {
+    this(models, launcher, handles, new RestateAuditSink(), catalog);
+  }
+
+  /**
+   * Backward-compat production constructor — supplies an explicit
+   * {@link AuditSink} but no catalog. Used by tests that pass a
+   * recording/no-op audit sink without caring about reconciliation.
+   */
+  public StreamingService(
+      ModelRegistry models,
+      StreamingQueryLauncher launcher,
+      StreamingQueryHandleRegistry handles,
+      AuditSink auditSink) {
+    this(models, launcher, handles, auditSink, null);
+  }
+
+  /**
+   * Test constructor — allows injecting a recording or no-op audit
+   * sink AND a catalog (or null) so handlers can be exercised
+   * without a Restate handler context. Visible-for-testing.
    */
   StreamingService(
       ModelRegistry models,
       StreamingQueryLauncher launcher,
       StreamingQueryHandleRegistry handles,
-      AuditSink auditSink) {
+      AuditSink auditSink,
+      StreamCatalog catalog) {
     this.models = java.util.Objects.requireNonNull(models, "models");
     this.launcher = java.util.Objects.requireNonNull(launcher, "launcher");
     this.handles = java.util.Objects.requireNonNull(handles, "handles");
     this.auditSink = java.util.Objects.requireNonNull(auditSink, "auditSink");
+    // catalog may be null — handlers that maintain it must null-check.
+    this.catalog = catalog;
   }
 
   /**
@@ -300,6 +331,42 @@ public class StreamingService {
 
     // 5. Mark running.
     state.set(STATUS, "running");
+
+    // 5b. CATALOG: register this stream-id in the durable catalog so
+    // the StartupReconciler can find it on next JVM startup. Done
+    // AFTER STATUS=running (operator-visible "the platform knows
+    // about this stream now") and AFTER the original run() has
+    // succeeded past the launcher / audit steps. The catalog.write
+    // is best-effort: a failure here means the next JVM's sweep
+    // will miss this stream — operators see it via the summary
+    // log line and can manually invoke /restart.
+    //
+    // Sync-drift note (PR #234 review Architect-C1): the catalog
+    // duplicates metadata that also lives in the journal (modelName,
+    // queryShape, checkpointLocation). It's a SHALLOW projection —
+    // the journal is the source of truth for status. We accept the
+    // duplication because Restate's journal is not directly readable
+    // from Java without admin-client + per-key enumeration, which
+    // doesn't exist in 2.8.0.
+    if (catalog != null) {
+      try {
+        catalog.registerIfAbsent(
+            streamId,
+            request.modelName(),
+            request.queryShape(),
+            request.checkpointLocation());
+      } catch (RuntimeException catalogRe) {
+        // Non-fatal — log and continue. The workflow is already
+        // running; we just lost the auto-recovery on next JVM
+        // startup. Operators can manually invoke /restart.
+        System.err.println(
+            "semanticdf-platform: catalog write failed for stream-id="
+                + streamId
+                + " ("
+                + catalogRe.getMessage()
+                + "). Auto-recovery on next JVM startup will be unavailable.");
+      }
+    }
 
     // 5a. RECONCILIATION: detect post-crash replay and recreate the query.
     //

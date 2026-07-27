@@ -42,6 +42,13 @@
         <!-- Restate SDK version (matches the local SDK at /tmp/sdk-java). -->
         <restate.sdk.version>2.8.0</restate.sdk.version>
 
+        <!--
+          Postgres + HikariCP for StreamCatalog (DE-H2 from PR #232
+          senior review).
+        -->
+        <postgres.version>42.7.4</postgres.version>
+        <hikari.version>5.1.0</hikari.version>
+
         <!-- semanticdf library version — the platform calls into it. -->
         <semanticdf.version>0.2.0</semanticdf.version>
 
@@ -88,6 +95,25 @@
             <groupId>com.fasterxml.jackson.module</groupId>
             <artifactId>jackson-module-scala_2.13</artifactId>
             <version>${jackson.version}</version>
+        </dependency>
+
+        <!--
+          Postgres driver + connection pool.
+
+          Used by StreamCatalog (bulk startup reconciliation, DE-H2
+          from PR #232 senior review) for the durable stream-id list.
+          We share the Postgres instance that Restate uses for its
+          journal — they're under different schemas, no conflict.
+        -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>${postgres.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>${hikari.version}</version>
         </dependency>
 
         <!-- Logging — minimal; the platform emits structured JSON to stdout. -->

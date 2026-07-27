@@ -8,13 +8,17 @@ import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
 import io.semanticdf.platform.query.QueryService;
 import io.semanticdf.platform.streaming.ModelRegistry;
+import io.semanticdf.platform.streaming.PostgresStreamCatalog;
 import io.semanticdf.platform.streaming.SparkStreamingQueryLauncher;
+import io.semanticdf.platform.streaming.StartupReconciler;
+import io.semanticdf.platform.streaming.StreamCatalog;
 import io.semanticdf.platform.streaming.StreamingQueryHandleRegistry;
 import io.semanticdf.platform.streaming.StreamingQueryLauncher;
 import io.semanticdf.platform.streaming.StreamingService;
 import io.semanticdf.platform.streaming.YamlModelRegistry;
 
 import java.io.IOException;
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -81,11 +85,45 @@ public final class PlatformApplication {
             + ": "
             + ((YamlModelRegistry) models).registeredModels());
 
+    // --- Stream catalog (DE-H2 — bulk startup reconciliation) ---
+    //
+    // Postgres-backed durable list of stream-ids. The
+    // StartupReconciler reads this at boot to re-invoke run() on
+    // each previously-active stream, triggering the auto-detect
+    // branch in StreamingService.run to recreate Spark queries
+    // lost with the previous JVM.
+    //
+    // Configuration via env vars (default = platform's docker-compose):
+    //   SEMANTICDF_CATALOG_JDBC_URL  — JDBC URL
+    //   SEMANTICDF_CATALOG_USER      — DB user
+    //   SEMANTICDF_CATALOG_PASSWORD  — DB password
+    //
+    // Pass catalog=null to disable startup reconciliation (P1
+    // single-replica without Postgres); StreamingService.register
+    // becomes a no-op.
+    final StreamCatalog catalog;
+    {
+      StreamCatalog built = null;
+      String catalogJdbcUrl = System.getenv("SEMANTICDF_CATALOG_JDBC_URL");
+      if (catalogJdbcUrl != null && !catalogJdbcUrl.isBlank()) {
+        String catalogUser = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
+        String catalogPassword =
+            System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
+        built = new PostgresStreamCatalog(catalogJdbcUrl, catalogUser, catalogPassword);
+      } else {
+        System.out.println(
+            "semanticdf-platform: SEMANTICDF_CATALOG_JDBC_URL not set — "
+                + "disabling bulk startup reconciliation. Operators must call "
+                + "/restart manually after JVM restarts.");
+      }
+      catalog = built;
+    }
+
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
         .bind(new ModelService())
         .bind(new QueryService())
-        .bind(new StreamingService(models, launcher, handles))
+        .bind(new StreamingService(models, launcher, handles, catalog))
         .bind(new AuditService())
         .bind(new CatalogService())
         .build();
@@ -99,6 +137,35 @@ public final class PlatformApplication {
     // releases the socket. The shutdown hook below logs so operators
     // see the shutdown sequence in their logs.
     int boundPort = RestateHttpServer.listen(endpoint, port);
+
+    // DE-H2: bulk startup reconciliation. After the HTTP server is
+    // listening (so the sweep's POSTs reach the ingress), walk the
+    // catalog and re-invoke run() on each previously-active stream.
+    // The run() handler's auto-detect branch will see the empty
+    // registry (this is a fresh JVM) and recreate the Spark query.
+    //
+    // Best-effort: a sweep failure logs but doesn't abort startup.
+    // Operators can manually invoke /restart on individual
+    // stream-ids if the sweep has issues.
+    if (catalog != null) {
+      try {
+        URI localIngress = URI.create("http://localhost:" + boundPort);
+        StartupReconciler.Summary sweepSummary =
+            new StartupReconciler(catalog, localIngress).run();
+        System.out.println(
+            "semanticdf-platform: startup reconciliation summary — total="
+                + sweepSummary.total()
+                + " acted="
+                + sweepSummary.actedOn()
+                + " failed="
+                + sweepSummary.failed());
+      } catch (RuntimeException sweepRe) {
+        System.err.println(
+            "semanticdf-platform: startup reconciliation failed: "
+                + sweepRe.getMessage()
+                + " (operators must invoke /restart manually)");
+      }
+    }
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
       System.out.println("semanticdf-platform: shutdown hook firing; bound port "
@@ -135,6 +202,21 @@ public final class PlatformApplication {
         System.out.println("semanticdf-platform: SparkSession stopped");
       } catch (Throwable t) {
         System.err.println("semanticdf-platform: spark.stop() failed: " + t.getMessage());
+      }
+
+      // Release Postgres connections. Done last so the platform
+      // doesn't interrupt itself mid-drain. The drain uses runtime
+      // queries (not Postgres), so this only affects the
+      // StreamCatalog's HikariCP pool.
+      final StreamCatalog catalogForShutdown = catalog;
+      if (catalogForShutdown != null) {
+        try {
+          catalogForShutdown.close();
+          System.out.println("semanticdf-platform: StreamCatalog closed");
+        } catch (Throwable t) {
+          System.err.println(
+              "semanticdf-platform: StreamCatalog close() failed: " + t.getMessage());
+        }
       }
     }, "semanticdf-platform-shutdown"));
 
