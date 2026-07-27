@@ -219,13 +219,21 @@ public class StreamingService {
 
     // Stop the live query handle (runtime-local — not journaled).
     // Wrap in Restate.run so the stop decision is journaled and
-    // idempotent across replays.
+    // idempotent across replays. The lambda wraps query.stop() in
+    // a try/catch because Spark's stop() can throw TimeoutException
+    // when the query doesn't stop within its internal deadline —
+    // without the catch, the exception would propagate as a journaled
+    // failure, but the handle is already removed from the registry,
+    // so the Spark query would be orphaned (running in the driver
+    // with no platform reference). We swallow the exception and
+    // record the failure in ERROR_COUNT instead; the next restart
+    // cycle reconciles via checkpoint.
     StreamingQuery query = handles.remove(streamId);
     if (query != null) {
       Restate.run(
           "stop-streaming-query",
           () -> {
-            query.stop();
+            safeStop(query, state);
           });
     }
     // else: handle absent (post-replay, or stop called before run). The
@@ -253,6 +261,39 @@ public class StreamingService {
   }
 
   // --- Helpers ---
+
+  /**
+   * Stop a {@link StreamingQuery}, swallowing any exception thrown by
+   * {@code query.stop()}. The handle has already been removed from the
+   * registry at the call site — if {@code stop()} throws, the query is
+   * orphaned (running in the Spark driver with no platform reference).
+   * We increment {@code ERROR_COUNT} so operators can detect the
+   * condition via {@code getStatus()} + journal inspection, and continue
+   * the workflow's shutdown (the next restart cycle reconciles via the
+   * durable checkpoint).
+   *
+   * <p>Visible-for-testing — invoked via reflection from
+   * {@code StreamingServiceTest} to verify the exception-swallowing
+   * behavior without a Restate runtime.
+   *
+   * @param query the live query to stop (non-null; the caller has already
+   *              removed it from the handle registry)
+   * @param state the workflow's state store for recording the error count
+   */
+  static void safeStop(StreamingQuery query, dev.restate.sdk.Restate.State state) {
+    try {
+      query.stop();
+    } catch (Exception e) {
+      // Spark's StreamingQuery.stop() can throw TimeoutException if the
+      // query doesn't terminate within its internal deadline, or
+      // StreamingQueryException for other failure modes. The handle is
+      // already removed; we can't do anything about the orphaned query
+      // here, so we record the error and continue.
+      state.set(
+          ERROR_COUNT,
+          state.get(ERROR_COUNT).orElse(0L) + 1);
+    }
+  }
 
   private static void requireCheckpoint(String checkpointLocation) {
     if (checkpointLocation == null || checkpointLocation.isBlank()) {
