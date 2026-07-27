@@ -457,7 +457,8 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
   private def emitStreamingAudit(
       batchDf: DataFrame,
       t0: Long,
-  )(implicit spark: SparkSession): Unit = {
+  )(implicit spark: SparkSession,
+                 clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault): Unit = {
     if (auditSink.isDefined) {
       try {
         val rowCount   = batchDf.count()
@@ -473,7 +474,7 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
         // general dedup-safety, not Restate replay-safety. Same
         // query-shape dedups; different timestamp or batch does not.
         auditSink.get.emit(AuditEvent(
-          ts         = java.time.Instant.now(),
+          ts         = clock(),
           model      = model,
           version    = req.version,
           measures   = req.measures,

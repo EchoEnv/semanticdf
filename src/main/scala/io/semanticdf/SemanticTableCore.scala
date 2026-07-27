@@ -72,7 +72,9 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * `implicit val spark: SparkSession` in scope can write `.toDataFrame()`
     * (no argument). Explicit `.toDataFrame(spark)` is fully backward-compatible.
     */
-  def toDataFrame(implicit spark: SparkSession): DataFrame = {
+  def toDataFrame(implicit spark: SparkSession): DataFrame = toDataFrameInternal(spark, io.semanticdf.audit.Clock.systemDefault)
+  def toDataFrame()(implicit spark: SparkSession, clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault): DataFrame = toDataFrameInternal(spark, clock)
+  private def toDataFrameInternal(spark: SparkSession, clock: () => java.time.Instant): DataFrame = {
     if (auditSink.isEmpty && resultCache.isEmpty) {
       // Fast path: no audit, no cache — same as the pre-#174 code.
       root.compile(spark)
@@ -175,7 +177,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           // but we wrap defensively so a misbehaving sink can't
           // break the query.
           val okEvent = AuditEvent(
-            ts         = java.time.Instant.now(),
+            ts         = clock(),
             model      = model,
             version    = req.version,
             measures   = req.measures,
@@ -201,7 +203,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           val elapsedMs = (System.nanoTime() - t0) / 1000000L
           if (auditSink.isDefined) {
             val errorEvent = AuditEvent(
-              ts         = java.time.Instant.now(),
+              ts         = clock(),
               model      = model,
               version    = req.version,
               measures   = req.measures,
@@ -227,7 +229,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
 
   /** Fluent-chain alias for [[toDataFrame]]. `spark` is implicit; see [[toDataFrame]].
     */
-  def execute(implicit spark: SparkSession): DataFrame = toDataFrame(spark)
+  def execute(implicit spark: SparkSession): DataFrame = toDataFrame()
+  def execute()(implicit spark: SparkSession, clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault): DataFrame = toDataFrame()
 
   // -------------------------------------------------------------------------
   // Setters (withRowFilter lives here because it's a query-time filter,

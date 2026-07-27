@@ -175,13 +175,14 @@ object SemanticManifest {
       model: SemanticTable,
       identity: Identity = Identity.empty,
       prettyPrint: Boolean = true,
+  )(implicit clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault
   ): String = {
     if (joinedRoot(model).isDefined)
       throw new IllegalStateException(
         "SemanticManifest.toJson: joined models (SemanticJoinOp root) are not supported. " +
         "See docs/design/manifest-artifact.md §10.")
 
-    val root = buildJsonTree(model, identity)
+    val root = buildJsonTree(model, identity)(clock)
     val out  = mapper.writeValueAsString(root)
     if (prettyPrint) out else out
   }
@@ -400,6 +401,7 @@ object SemanticManifest {
       model: SemanticTable,
       identity: Identity = Identity.empty,
       prettyPrint: Boolean = true,
+  )(implicit clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault
   ): String = {
     val op = model.root match {
       case j: SemanticJoinOp => j
@@ -425,8 +427,8 @@ object SemanticManifest {
     // identity via sideIdentity.
     val leftId  = sideIdentity(identity, "left",  op.leftRoot.name.getOrElse("left"))
     val rightId = sideIdentity(identity, "right", op.rightRoot.name.getOrElse("right"))
-    val leftJson  = toJson(leftT,  leftId,  prettyPrint = prettyPrint)
-    val rightJson = toJson(rightT, rightId, prettyPrint = prettyPrint)
+    val leftJson  = toJson(leftT,  leftId,  prettyPrint = prettyPrint)(clock)
+    val rightJson = toJson(rightT, rightId, prettyPrint = prettyPrint)(clock)
 
     // Compose the joined envelope.
     val merged  = op.mergedModel
@@ -441,7 +443,8 @@ object SemanticManifest {
     val root = mapper.createObjectNode()
     root.put("schemaVersion", CurrentSchemaVersion)
     root.put("kind",          "semanticdf-joined-manifest")
-    root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+    // Replay-safe: same clock as the per-side manifests above.
+    root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(clock()))
 
     if (identity.id.nonEmpty || identity.metadata.nonEmpty || identity.manifestVersion != InitialManifestVersion || identity.namespace != "default") {
       root.put("manifestVersion", identity.manifestVersion)
@@ -853,12 +856,16 @@ object SemanticManifest {
   private def buildJsonTree(
       model: SemanticTable,
       identity: Identity,
+  )(implicit clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault
   ): com.fasterxml.jackson.databind.JsonNode = {
     val root = mapper.createObjectNode()
 
     root.put("schemaVersion", CurrentSchemaVersion)
     root.put("kind",          "semanticdf-model-manifest")
-    root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
+    // Replay-safe: caller (the platform) threads a stable clock from
+    // Restate.instantNow() if it wants journal-safe `compiledAt`.
+    // The default `Clock.systemDefault` is wall-clock-of-call.
+    root.put("compiledAt",    DateTimeFormatter.ISO_INSTANT.format(clock()))
 
     // Identity + governance fields (recipe: docs/design/manifest-identity-bump.md).
     // Only emitted when the writer passed a non-empty Identity — the single-arg
