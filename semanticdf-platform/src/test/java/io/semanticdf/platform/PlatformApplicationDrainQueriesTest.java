@@ -186,6 +186,50 @@ class PlatformApplicationDrainQueriesTest {
     hanging.unblock.countDown();
   }
 
+  @Test
+  void drain_shutdownHookInterrupted_skipsRemainingQueries() throws Exception {
+    // If the shutdown hook thread itself is interrupted (e.g., the JVM's
+    // shutdown hook timeout fires), the drain must bail out early. Without
+    // the early-exit flag, the forEach lambda would continue iterating,
+    // wasting time on queries that spark.stop() will kill anyway.
+    //
+    // The test simulates the interruption by interrupting the test thread
+    // (which acts as the "shutdown hook" caller) just before invoking
+    // drainQueries, then waiting briefly for the interrupt flag to take
+    // effect.
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    HangingQuery q1 = new HangingQuery();
+    HangingQuery q2 = new HangingQuery();
+    HangingQuery q3 = new HangingQuery();
+    reg.put("q1", q1.proxy());
+    reg.put("q2", q2.proxy());
+    reg.put("q3", q3.proxy());
+
+    // Interrupt the test thread (acts as the shutdown-hook caller).
+    // The InterruptedException in future.get() will trigger the
+    // early-exit path.
+    Thread.currentThread().interrupt();
+
+    long start = System.currentTimeMillis();
+    int drained = PlatformApplication.drainQueries(reg, 5_000);
+    long elapsed = System.currentTimeMillis() - start;
+
+    // Clear the interrupt flag for subsequent tests.
+    Thread.interrupted();
+
+    // The drain must bail out at the first query (q1) — q2 and q3 are
+    // skipped, so the drain returns quickly even though each query
+    // would hang for 5s.
+    assertTrue(elapsed < 1_000,
+        "drain must return quickly after interrupt, elapsed=" + elapsed);
+    assertEquals(1, drained,
+        "only the first query should be attempted; the rest are skipped");
+
+    q1.unblock.countDown();
+    q2.unblock.countDown();
+    q3.unblock.countDown();
+  }
+
   // --- Test fakes ---
 
   /** A fake query whose {@code stop()} blocks until {@link #unblock} counts

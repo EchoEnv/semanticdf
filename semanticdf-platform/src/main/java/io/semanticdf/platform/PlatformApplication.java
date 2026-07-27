@@ -207,9 +207,23 @@ public final class PlatformApplication {
               t.setDaemon(true);
               return t;
             });
+    // Volatile flag: set true when the shutdown hook thread itself is
+    // interrupted (e.g., JVM's shutdown hook timeout fires). The forEach
+    // lambda checks this flag at the start of each iteration to bail out
+    // early — without it, the drain continues iterating after the JVM
+    // has already given up on us, which wastes time on queries that will
+    // be killed by spark.stop() anyway.
+    java.util.concurrent.atomic.AtomicBoolean interrupted =
+        new java.util.concurrent.atomic.AtomicBoolean(false);
     try {
       handles.forEach(
           (streamId, query) -> {
+            // If the shutdown hook thread was interrupted (e.g., JVM's
+            // own shutdown hook timeout fired), skip remaining queries —
+            // spark.stop() will tear them down anyway.
+            if (interrupted.get()) {
+              return;
+            }
             // Count BEFORE attempting — operators want to see the total
             // drain attempts, not just the successful stops.
             count.incrementAndGet();
@@ -236,11 +250,16 @@ public final class PlatformApplication {
                       + "ms; JVM shutdown hook timeout will force-exit");
             } catch (InterruptedException ie) {
               // The shutdown hook itself was interrupted — re-set the
-              // interrupt flag and stop draining.
+              // interrupt flag (best practice), set our early-exit flag
+              // so the forEach lambda bails out on subsequent iterations,
+              // and skip this query.
               Thread.currentThread().interrupt();
+              interrupted.set(true);
               System.err.println(
-                  "semanticdf-platform: drain interrupted; "
-                      + "remaining queries will be killed by spark.stop()");
+                  "semanticdf-platform: drain interrupted at stream-id="
+                      + streamId
+                      + "; remaining queries will be killed by spark.stop()");
+              future.cancel(true);
               return;
             } catch (Throwable t) {
               // query.stop() can throw TimeoutException (Spark's internal
