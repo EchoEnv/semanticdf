@@ -7,12 +7,15 @@ import io.semanticdf.platform.audit.AuditService;
 import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
 import io.semanticdf.platform.query.QueryService;
+import io.semanticdf.platform.streaming.ModelRegistry;
+import io.semanticdf.platform.streaming.SparkStreamingQueryLauncher;
 import io.semanticdf.platform.streaming.StreamingQueryHandleRegistry;
 import io.semanticdf.platform.streaming.StreamingQueryLauncher;
 import io.semanticdf.platform.streaming.StreamingService;
-import io.semanticdf.platform.streaming.ModelRegistry;
+import io.semanticdf.platform.streaming.YamlModelRegistry;
 
 import java.io.IOException;
+import org.apache.spark.sql.SparkSession;
 
 /**
  * PlatformApplication — main entry point for the semanticdf-platform daemon.
@@ -30,17 +33,44 @@ public final class PlatformApplication {
   private PlatformApplication() {}
 
   public static void main(String[] args) throws IOException {
-    // --- Streaming lifecycle wiring ---
+    // --- Configuration from environment ---
     //
-    // The handle registry is a plain runtime-local map — no deps.
-    // The model registry and query launcher are wired from the
-    // environment in a follow-up (when the CatalogService owns model
-    // loading and the engine adapter owns SparkSession creation).
-    // For P1 they throw clearly so operators see an actionable error
-    // rather than a silent no-op.
+    // MODELS_DIR — directory of *.yml model files. Default: ./models (relative
+    // to the working directory of the platform process).
+    //
+    // SPARK_APP_NAME — Spark application name shown in the Spark UI. Default:
+    // "semanticdf-platform".
+    //
+    // SPARK_MASTER — Spark master URL. Default: "local[*]" (local mode, all
+    // cores). In production, set this to "spark://host:port" or "yarn".
+    String modelsDir = System.getenv().getOrDefault("MODELS_DIR", "./models");
+    String sparkAppName = System.getenv().getOrDefault("SPARK_APP_NAME", "semanticdf-platform");
+    String sparkMaster = System.getenv().getOrDefault("SPARK_MASTER", "local[*]");
+
+    // --- Spark session ---
+    //
+    // The platform creates one SparkSession at startup and shares it across
+    // all StreamingService handlers. Per platform-architecture.md §1.3, the
+    // platform's "engine adapter" owns SparkSession creation. For P1 the
+    // adapter is local-mode Spark; future versions may use Spark Connect.
+    SparkSession spark =
+        SparkSession.builder()
+            .appName(sparkAppName)
+            .master(sparkMaster)
+            .getOrCreate();
+
+    // --- Streaming lifecycle wiring ---
     StreamingQueryHandleRegistry handles = new StreamingQueryHandleRegistry();
-    ModelRegistry models = PlatformApplication::modelNotConfigured;
-    StreamingQueryLauncher launcher = PlatformApplication::launcherNotConfigured;
+    ModelRegistry models = YamlModelRegistry.load(modelsDir, spark);
+    StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
+
+    System.out.println(
+        "semanticdf-platform: loaded "
+            + ((YamlModelRegistry) models).size()
+            + " models from "
+            + modelsDir
+            + ": "
+            + ((YamlModelRegistry) models).registeredModels());
 
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
@@ -67,22 +97,5 @@ public final class PlatformApplication {
     }, "semanticdf-platform-shutdown"));
 
     System.out.println("semanticdf-platform listening on http://localhost:" + port);
-  }
-
-  // --- P1 placeholder implementations (replaced by catalog + engine wiring) ---
-
-  /** Throws until the CatalogService integration configures a real model source. */
-  private static io.semanticdf.SemanticTable modelNotConfigured(String modelName) {
-    throw new IllegalStateException(
-        "ModelRegistry not configured. Set up the catalog integration to load models "
-            + "(see docs/design/platform-architecture.md). Requested model: " + modelName);
-  }
-
-  /** Throws until the engine adapter provides a SparkSession-backed launcher. */
-  private static org.apache.spark.sql.streaming.StreamingQuery launcherNotConfigured(
-      io.semanticdf.SemanticTable model, StreamingService.StreamRunRequest request) {
-    throw new IllegalStateException(
-        "StreamingQueryLauncher not configured. The engine adapter must provide a "
-            + "SparkSession-backed launcher (see docs/design/platform-architecture.md).");
   }
 }
