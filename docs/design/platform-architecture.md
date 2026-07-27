@@ -1,50 +1,45 @@
-# Platform Architecture — Standalone Semantic Data Platform
+# Platform Architecture — Standalone Semantic Data Platform (Restate-Native)
 
 **Status:** DRAFT — design review.
 
 This document is the consolidated output of a senior data-architect
 and a senior software-architect review, plus the reconciliation of
-their disagreements. It supersedes the v0.2.1 "library embedded in
-Spark" model.
+their disagreements. It pivots the previous "stateless Java daemon"
+design onto **Restate.dev** as the platform's runtime substrate.
 
 ## 1. Executive summary
 
-The current `semanticdf` is a Scala 2.13 / Spark library. It runs
+The current `semanticdf` is a Scala 2.13 / Spark library that runs
 *inside* the user's Spark job — no server, no cluster. The MCP
-server is a thin stdio/REST wrapper that creates a local
-`SparkSession` on startup.
+server is a thin stdio/REST wrapper.
 
 The target state inverts the dependency: **`semanticdf` becomes
 the host, and Spark/Trino are compute guests that consume the
 platform's REST contract.** The platform is a long-running, fault-
-tolerant, engine-agnostic service that owns the semantic model
-registry, lineage, audit, and query planning. Engines are plugins.
+tolerant, engine-agnostic service. The runtime is **Restate.dev**
+(distributed durable async/await, journaled in Postgres).
 
 The headline design decisions:
 
-1. **Single binary, multi-node** (Option C — modular monolith). One
-   artifact runs as a stateless node, replicated 3× across AZs for HA.
-2. **Java 21** for the daemon. Keeps Spark/Trino integration smooth
-   (both have native Java APIs and the same JVM ecosystem).
-3. **Postgres for everything metadata + coordination** (no ZooKeeper,
-   no etcd). 3-AZ synchronous replication, advisory locks for
-   coordination. The platform inherits Postgres's proven HA.
-4. **Object storage (S3 / MinIO) + Iceberg for raw data**. The
-   platform doesn't own the table format; engines read/write Iceberg
-   directly.
-5. **REST as the canonical contract**. Per-engine adapters (Trino
-   plugin, Spark SDK, future Flight server) are ergonomic layers on
-   top of REST.
-6. **No overhead services in v1**: no Kafka, no ZK, no service mesh,
-   no sidecar proxies. The only dependencies are Postgres and object
-   storage. Redis is deferred.
+1. **Restate-native platform** — services are Restate `Service` /
+   `VirtualObject` / `Workflow`, not a stateless HTTP daemon.
+2. **Java 21** for the platform layer. Scala stays only in the
+   `semanticdf` library, consumed as a JAR.
+3. **5 Restate services** with a clear state-ownership rule:
+   *Restate's journal = coordination (recent, recoverable from replay);
+   Postgres = record (durable, engines read directly).*
+4. **Postgres for everything metadata + Restate's journal + object
+   storage for raw data.** No ZooKeeper, no etcd, no Kafka.
+5. **REST + Restate protocol** — REST for humans/agents, Restate's
+   own protocol for engines (lower latency + exactly-once submission).
+6. **Caffeine L1 for cache hits** — the platform's REST layer keeps
+   sub-100µs hits by bypassing Restate on the hot read path.
 
-The headline trade-off: the platform adds a network round-trip
-(Treno / Spark → platform REST → results) that the in-process
-library does not have. The cost is paid once per uncached query
-shape, absorbed by the plan cache and the lineage cache. The
-gain is engine-agnostic access and a single source of truth for
-lineage, audit, and registration.
+The headline trade-off: the Restate runtime adds operational
+overhead (one more process; the team needs journal-replay debugging
+skills). In return we get durable multi-step workflows, per-key
+serialization, and activity retries — capabilities the previous
+design would have had to hand-roll.
 
 ## 2. Target architecture
 
@@ -52,74 +47,120 @@ lineage, audit, and registration.
 
 | Component | Responsibility | Implementation |
 |---|---|---|
-| **Platform daemon** (the binary) | REST + MCP + Arrow Flight endpoints. Catalog, lineage, audit, plan-cache. | Java 21, modular monolith. |
-| **Postgres** | All platform metadata: model registry, lineage, audit, query journal, idempotency keys, plan cache (optional). | Managed (RDS / Cloud SQL). 3-AZ sync replication. |
-| **Object storage** (S3 / MinIO / GCS) | Raw data tables (Iceberg) + the platform's own WAL/snapshots. | Object storage. |
-| **Engine adapters** (per-engine) | Engine-specific translation: Trino plugin, Spark SDK, Flink source. | Each engine has its own thin adapter. |
-| **`semanticdf` library** (kept as-is) | Pure-data compiler. Lives *inside* the platform daemon (and as a library, for in-process users). | Scala 2.13 / Spark (unchanged). |
-| **Optional Redis** (v2) | L2 cache for query results. | Deferred unless workload demands. |
+| **Restate runtime** | Hosts the platform's services. Journal in Postgres. mTLS between services. | Restate server binary (Rust), 1+ nodes, 3-AZ. |
+| **Platform services** (in the Restate runtime) | `ModelService`, `QueryService`, `StreamingService`, `AuditService`, `CatalogService` | Java 21, defined as Restate `@Service` / `@VirtualObject` / `@Workflow`. |
+| **`semanticdf` library** (unchanged) | Pure-data compiler. The platform calls into it inside `Restate.run` blocks. | Scala 2.13 / Spark; consumed as a JAR. |
+| **Postgres** | Platform metadata (model registry, lineage, audit, query journal mirror) **and** Restate's journal | Managed (RDS / Cloud SQL), 3-AZ sync replication. |
+| **Object storage** (S3 / MinIO / GCS) | Raw data tables (Iceberg) + Restate's WAL/snapshots | Object storage. |
+| **Engine adapters** | Per-engine: Trino plugin (Java), Spark SDK (Scala). Consume the platform's REST + optionally the Restate protocol. | Each engine has its own thin adapter. |
 
-### 2.2 Data flow (one query)
+### 2.2 The 5 Restate services
+
+Each service is picked for what its lifecycle actually is — not
+because the names are neat.
+
+| Service | Restate primitive | Key | Journal state | Postgres (source of truth) |
+|---|---|---|---|---|
+| `ModelService` | `@VirtualObject` | model name | `currentVersion`, `pendingBuild`, `lastInvalidatedAt`, `manifestHash` | model YAML, versioned definitions, audit-of-registrations |
+| `QueryService` | `@Service` (stateless) | — | none | audit events only |
+| `StreamingService` | `@Workflow` | stream-id (client-supplied) | `status`, `checkpointLocation`, `lastBatchTs`, `errorCount` | long-retention query journals |
+| `AuditService` | `@VirtualObject` | tenant | last write offset, last dedup hash | append-only event log, time-partitioned |
+| `CatalogService` | `@Service` (stateless) | — | none | read-replica view of model registry |
+
+**Why these primitives:**
+- `ModelService` is a `VirtualObject` keyed by model name because per-model
+  registration must be serialized by definition. The `Counter` example
+  in `/tmp/sdk-java/examples/.../Counter.java` is the canonical pattern.
+- `QueryService` is a `@Service` (stateless) because each query is a
+  short-lived stateless Spark action — there is nothing to suspend or
+  journal; idempotency is the caller's cache key.
+- `StreamingService` is a `@Workflow` because streaming is long-running
+  (hours/days) and the cancellation/pause signals map onto
+  `DurablePromise`. The `LoanWorkflow` example is the shape.
+- `AuditService` is a `VirtualObject` per-tenant because audit writes
+  need per-key serialization and audit reads are read-heavy.
+- `CatalogService` is a plain `@Service` because `list_models` and
+  `describe_model` are read-only and stateless.
+
+### 2.3 State placement rule
+
+> **Restate's journal holds coordination state (recent, recoverable
+> from replay). Postgres holds queryable history (durable, engines
+> read directly).**
+
+| State | Lives in | Rationale |
+|---|---|---|
+| Model registry | Postgres | External readers (catalogs, dashboards, lineage tools) query it. The Restate `ModelService` holds only "registration V in progress" + "current version pointer." |
+| Lineage | Postgres (durable cache) + Restate (per-version "dirty" flag) | Lineage is queryable. The dirty flag is control-flow. |
+| Audit log | Postgres (append-only) | Restate's journal is a replay log, not an audit trail. Mixing them is a critical violation. |
+| Plan cache | Restate `VirtualObject` keyed by query-shape hash + optional Redis L2 | Plan cache is read by the platform's own hot path; survives restarts via the journal. |
+| Query journal | Restate `Workflow` state (per-query ID) | Per-query in-flight state. Workflow owns the lifecycle. |
+| Streaming-query state | Restate `Workflow` state (per-stream ID) | Per-stream in-flight state. Workflow's single-execution-per-ID guarantee is the *whole point*. |
+| Plan-cache observability counters | Postgres (optional mirror) | For dashboards only; source of truth is Restate. |
+
+### 2.4 Data flow (one query end-to-end)
 
 ```
 ┌─────────┐    ┌──────────────────┐    ┌──────────────┐
-│  Agent  │───▶│  Platform daemon  │───▶│ Engine        │
-│ (LLM,   │    │  (this PR's       │    │ (Spark,      │
-│  BI)    │    │   product)        │    │  Trino)      │
+│  Agent  │───▶│  Platform REST   │───▶│  Restate      │───▶ Postgres
+│ (LLM,   │    │  (Caffeine L1)   │    │  Services     │       (record)
+│  BI)    │    │                  │    │  (Java 21)    │
 └─────────┘    └──────────────────┘    └──────────────┘
-                     │  │
-                     │  └─────▶ Postgres (catalog, lineage, audit)
-                     │
-                     └─────▶ Object storage (Iceberg tables, WAL)
+                                              │
+                                              ▼
+                                     ┌──────────────┐
+                                     │ Engine        │
+                                     │ (Spark,       │
+                                     │  Trino)       │
+                                     └──────────────┘
+                                              │
+                                              ▼
+                                     Object storage (Iceberg)
 ```
 
 For a query:
-1. Agent calls `POST /v1/query` (REST) with `model_name`, query shape.
-2. Daemon checks plan cache (in-process Caffeine, keyed by query
-   shape hash + model version). Hit → return cached plan, no Spark.
-3. Miss → load model from Postgres, compile via `semanticdf.of` →
-   op tree → submit to engine adapter (Spark or Trino).
+1. Agent calls `POST /v1/query` (REST). The platform's HTTP layer
+   checks the in-process Caffeine L1 cache. **Hit → return cached
+   plan, sub-100µs.** No Restate hop.
+2. **Cache miss** → call into Restate's `QueryService` (stateless) or
+   the relevant `ModelService` (VirtualObject) for the plan. The
+   response is cached in L1 for next time.
+3. Restate calls `semanticdf.of(spark, model)` *inside a `Restate.run`
+   block* (the boundary that makes non-determinism replay-safe). The
+   compiled plan goes to Postgres.
 4. Engine reads Iceberg tables from object storage, returns
    Arrow-encoded results.
-5. Daemon streams results back to agent via Arrow Flight (or
-   REST chunks for the BI consumer).
+5. Platform streams results back to agent via Arrow Flight (or REST
+   chunks for the BI consumer).
 
 For metadata reads (list models, get_field_lineage,
-get_dependencies): the daemon reads from Postgres only. No
-engine, no Spark action. Sub-100ms p99.
+get_dependencies): the platform reads from the Caffeine L1 (or
+Postgres on miss). **No Spark action. Sub-100ms p99.**
 
-### 2.3 HA / fault-tolerance
+### 2.5 HA / fault-tolerance
 
-- **3 platform replicas across AZs** (single-region for v1).
-  Stateless daemon; all state in Postgres.
-- **Synchronous PostgreSQL replication** across the 3 AZs. Each
-  platform replica reads/writes to the nearest Postgres replica;
-  the cluster's primary serves writes; sync rep means the standby is
-  in-sync before the primary acks. (V1: managed Postgres, RDS / Cloud
-  SQL. V2: regional active-passive.)
-- **Postgres advisory locks** for the few things that need
-  coordination: who is compiling this model version, who is running
-  this streaming query, who is the registration-writer leader. All
-  three are single-row operations with `SELECT ... FOR UPDATE` or
-  `pg_try_advisory_lock`. No ZK, no etcd.
-- **Rolling upgrade** (1 node at a time, Raft-quorum-style). The
-  platform supports wire protocol N and N-1 for at least one release.
-  Additive fields are accepted; destructive cleanup is delayed until
-  all nodes are upgraded.
-- **Snapshot / WAL**: object storage holds the platform's own WAL +
-  snapshots. On a region-wide Postgres failure, the platform can
-  rebuild from object storage alone (catalog state reconstructable from
-  WAL + last snapshot).
-- **Engine restart safety**: persisted engine query IDs allow
-  restart reconciliation without blind resubmission. If a Spark job
-  dies mid-query, the journal can resume from the last checkpoint.
+- **3 platform/Restate replicas across AZs** (single-region for v1).
+  Stateless Restate runtime; all state in Postgres.
+- **Synchronous PostgreSQL replication** across the 3 AZs. Now
+  serving two roles: platform metadata AND Restate's journal.
+- **Restate's per-key serialization** replaces the prior
+  `SELECT ... FOR UPDATE` round-trips on `ModelService`.
+- **Restate's activity retries** with `RetryPolicy` replace the prior
+  bespoke `Query.withTimeout` retry logic.
+- **Rolling upgrade** (1 node at a time). Restate supports N/N-1
+  protocol via `ServiceDefinition.Configurator` knobs
+  (`idempotencyRetention`, `journalRetention`, `invocationRetryPolicy`).
+- **Journal + WAL + snapshots** persisted in object storage. On a
+  region-wide Postgres failure, the platform can rebuild from
+  object storage alone (catalog state reconstructable from WAL + last
+  snapshot).
 
-### 2.4 Resource budget
+### 2.6 Resource budget
 
 | Resource | Per node | Total (3 nodes) |
 |---|---|---|
-| Container / pod size | 1 GiB | 3 GiB |
-| Heap | 512 MiB | 1.5 GiB |
+| Container / pod size | 2 GiB | 6 GiB |
+| Heap | 1 GiB | 3 GiB |
 | CPU | 2 vCPU | 6 vCPU |
 | Postgres (RDS, db.r6g.large) | shared | 16 GiB RAM, 4 vCPU, 100 GB SSD |
 | Object storage (S3 / MinIO) | shared | grows with data |
@@ -128,188 +169,178 @@ engine, no Spark action. Sub-100ms p99.
 
 | Operation | Target p50 | Target p99 |
 |---|---|---|
-| Authenticated metadata read | 1 ms | 5 ms |
-| Simple plan compile (cached) | 100 µs | 1 ms |
+| Authenticated metadata read (Caffeine hit) | 100 µs | 1 ms |
+| Authenticated metadata read (Caffeine miss → Restate) | 1 ms | 5 ms |
+| Simple plan compile (cache hit) | 100 µs | 1 ms |
 | Simple plan compile (cache miss) | 10 ms | 25 ms |
 | Complex lineage lookup | 30 ms | 100 ms |
-| Engine query (cached) | 5 ms | 50 ms |
+| Engine query (cache hit) | 5 ms | 50 ms |
 | Engine query (uncached, simple) | 200 ms | 1 s |
 | Engine query (uncached, complex) | 1 s | 10 s |
 
 **Throughput target per node**: ~1,000 metadata reads/sec, 250 plan
-compilations/sec, 500 lineage lookups/sec. Actual engine-query
-concurrency is quota-controlled separately.
+compilations/sec, 500 lineage lookups/sec. The hot read path bypasses
+Restate.
 
 ## 3. Language and runtime choice
 
-**Java 21** for the platform daemon. Retain Scala 2.13 *only* in the
-transitional Spark adapter; `semanticdf` the library stays in
-Scala. Do **not** introduce Rust in v1.
+**Java 21 for the platform layer; keep `semanticdf` the library in
+Scala; the boundary is a Maven JAR dep, not a language boundary
+inside the platform.**
 
-Justification:
-- **Ecosystem match**. Spark, Trino, and every major data tool
-  speak Java. Native interop with the Spark SDK and Trino's
-  Plugin API is the path of least friction.
-- **Long-running + low GC pauses**. Java 21 + G1/ZGC + bounded
-  heaps (512 MiB) make pauses manageable. The 1 GiB container
-  footprint is realistic.
-- **Team productivity**. The existing team writes Scala. Java is
-  the closest cousin. (If we later prove a hot path needs Rust,
-  the boundary is clean: Rust sidecar for a specific computation,
-  e.g., columnar lineage diff.)
-- **What's *not* on the table**: Go (less expressive for data),
-  Rust in v1 (operational cost, ecosystem mismatch for Spark/Trino).
+- Restate has Java and Kotlin SDKs only. No Scala SDK.
+- The `Restate.run` / `Restate.state` API uses `Class<T>` and
+  `TypeTag<T>` for serde. FFI wrappers between Scala and Restate would
+  force every journal entry to box through `ThrowingSupplier` and
+  obscure the dependency rule.
+- The Scala library's value is its typeclass seam
+  (`SemanticField[T]`, `SemanticDimension[T]`, `SemanticMeasure[T]`)
+  and its Spark `Encoder` integration. Porting would lose both.
+- The team writes Java for the platform's Restate services; the
+  Scala library is consumed as a JAR. Domain DTOs are Java `record`s
+  (the `Counter.CounterUpdateResult` shape in `/tmp/sdk-java/examples/.../Counter.java` is the template).
 
 ## 4. Technology stack per layer
 
 | Layer | Recommendation | Why |
 |---|---|---|
-| **Metadata store** | **Postgres 16** (managed, sync-replicated 3-AZ) | Already proven at our scale; no need for Iceberg-native catalog until raw tables exist. Defer Polaris / Nessie. |
-| **Semantic / catalog layer** | The platform itself; the catalog is `semanticdf` models registered via REST. The platform owns model registry, lineage, audit, plans. | Single source of truth. |
-| **Query interface (canonical)** | **REST + JSON** (the contract) | Engine-agnostic. All other interfaces are ergonomic layers on top. |
-| **Query interface (ergonomic)** | Trino plugin (per-engine); Spark SDK (per-engine); future Arrow Flight server for low-latency streaming. | One canonical contract, many ergonomics. |
-| **Coordination / consensus** | **Postgres advisory locks** (no ZK, no etcd) | The coordination surface is small. Postgres HA already gives us strong consistency. The cost of running ZK/etcd is not justified for the workload. |
-| **Caching (v1)** | In-process Caffeine (no Redis) | Sub-100µs cache hits. L1 only. |
-| **Caching (v2, optional)** | Add Redis for L2 if workload demands | Adds one more service. Defer until needed. |
-| **Storage backend** | **Object storage (S3 / MinIO) + Apache Iceberg** for raw data | Engine-agnostic. Spark/Trino/Flink all read Iceberg natively. |
-| **Audit log** | Append-only Postgres table, time-partitioned | Postgres HA + retention policy. |
-| **Observability** | OpenMetrics + structured JSON stdout + health/readiness + optional OTel (no Prometheus / Loki / OTel collector bundled) | Operators supply the observability stack. Don't bundle. |
-| **Security (v1)** | TLS, local OIDC/JWT validation, mTLS for service identities, namespace-scoped RBAC, tenant-qualified cache keys, delegated per-tenant engine credentials | Standard. Multi-tenant is logical, not process-level. |
-| **Upgrade** | Rolling replacement; expand/migrate/contract for catalog changes; blue/green reserved for incompatible engine-adapter changes | Zero request-path downtime. |
+| **Runtime** | **Restate** (`/tmp/sdk-java/`) | Durable execution, per-key serialization, activity retries — the work the prior design would have hand-rolled. |
+| **Metadata store + journal** | **Postgres 16** (managed, 3-AZ sync-replicated) | Already proven; Restate's journal *is* Postgres, no new datastore. |
+| **Hot read cache** | **In-process Caffeine** inside the platform's REST layer | Sub-100µs cache hits, bypasses Restate. |
+| **L2 cache (v2, optional)** | Redis | Adds one more service. Defer until workload demands. |
+| **Storage backend** | **Object storage (S3 / MinIO) + Apache Iceberg** for raw data | Engine-agnostic; Spark/Trino/Flink read Iceberg natively. |
+| **REST surface** | Vert.x (Restate SDK ships `sdk-http-vertx`) | Embedded in the platform process. |
+| **Observability** | OpenMetrics + structured JSON stdout + health/readiness + optional OTel | Operators supply the observability stack; don't bundle. |
+| **Security (v1)** | mTLS for service-to-service (Restate-managed); API-key/JWT for REST clients; namespace-scoped RBAC | Standard. Multi-tenant is logical, not process-level. |
+| **Upgrade** | Rolling replacement; N/N-1 protocol via `ServiceDefinition.Configurator` knobs | Zero request-path downtime. |
 
 ## 5. Engine interop
 
-**REST as the protocol contract; per-engine SDKs as the ergonomic
-layer.**
+**REST for humans/agents, Restate protocol for engines** (Option C).
 
-| Engine | How it talks to the platform | Notes |
-|---|---|---|
-| **Spark** | Spark SDK (Scala/Java/Python) | The `semanticdf` library can be linked in-process for hot path; cold calls go via REST. |
-| **Trino** | Trino plugin (Java) | Plugin maps a semantic model to a Trino schema. Simple group-by/aggregate pushes down to native Trino SQL. Calc measures fall back to the platform (calls the Spark adapter). |
-| **Flink** (future) | Flink source / DataStream connector | Lower priority; defer until there's a real Flink workload. |
-| **DuckDB** (future) | Python client + REST | For analyst-side exploration. |
+- **Agents (LLM, BI):** REST. Short-lived, stateless, JSON-shaped. Same
+  surface as the prior design.
+- **Engines (Spark, Trino):** Two paths. Default is REST (the platform
+  wraps Restate internally). Engines that want lower latency and
+  exactly-once submit-attempt semantics can speak Restate's ingress
+  directly using the platform's service classes as the wire contract.
+  Spark SDK (in-process JVM) probably wants Restate; Trino plugin
+  (separate JVM) probably stays on REST.
+- **What "engine-agnostic" means:** Engines depend on the platform's
+  *service surface* (the set of Restate handlers), not on a specific
+  engine adapter. The Restate services are the contract.
 
-The REST contract is the boundary. Per-engine SDKs are ergonomic
-layers — they may embed the `semanticdf` library for fast-path
-compilation, but they always go via the platform for state (lineage,
-audit, registration).
-
-## 6. The 4 boundaries, each with a wire shape
+## 6. The 4 boundaries, with wire shapes
 
 | # | Boundary | Wire shape | Consistency | Hot/cold |
 |---|---|---|---|---|
-| **B1** | Postgres ↔ platform daemon | Typed rows (UUID, JSONB, timestamptz) | Strong (single Postgres, transactional) | Cold (registration, version bump) |
-| **B2** | Platform daemon ↔ engine | REST/JSON for control; Arrow Flight for data | Session-coherent (read-your-writes within a session) | Hot (per query) |
-| **B3** | Engine ↔ object storage (Iceberg) | Parquet + Avro in Iceberg | Snapshot isolation (Iceberg guarantee) | Hot (per query) |
-| **B4** | Platform daemon ↔ agent | JSON-RPC for control, Arrow Flight for results | At-least-once control, exactly-once result stream (Flight native) | Hot (per agent request) |
+| **B1** | Platform REST ↔ Restate services | Java method call (in-process) | Restate-journal replay | Hot (cache-miss path) |
+| **B2** | Platform REST ↔ Agent | JSON over HTTP | Session-coherent | Hot |
+| **B3** | Restate services ↔ Engine | REST/JSON for control; Arrow Flight for results | Session-coherent | Hot (per query) |
+| **B4** | Restate services ↔ Engine (optional) | Restate gRPC | Exactly-once (Restate-managed) | Hot (engines that opt in) |
+| **B5** | Restate services ↔ Postgres | SQL (transactional, both metadata + journal) | Strong | Cold |
+| **B6** | Engine ↔ Object storage (Iceberg) | Parquet + Avro | Snapshot isolation (Iceberg guarantee) | Hot (per query) |
+| **B7** | Platform → Agent (results) | Arrow Flight (columnar) | Exactly-once result stream | Hot |
 
-The big cost is B2+B3: a query plan goes JSON → engine plan → Iceberg
-snapshot read. The plan cache means the JSON serialization is
-paid once per query shape, not per request.
+The internal boundary B1 is **new** in this design — it's durable and
+replayed, so anything crossing it must be a deterministic function of
+its inputs from the journal's perspective. The previous design had
+no such constraint.
 
 ## 7. Migration roadmap
 
-| Phase | Goal | Surface | Rollback |
-|---|---|---|---|
-| **P0 — Current** | `semanticdf` library embedded in Spark; `semanticdf-mcp` thin REST wrapper. | What we have today. | n/a |
-| **P1 — Standalone daemon (months 1-2)** | Extract the platform daemon from `semanticdf-mcp`. Same REST + MCP surface. Postgres-backed registry instead of in-process model loading. Backwards compatible with the current `semanticdf-mcp` clients. | New `semanticdf-platform` repo + artifact. Same `semanticdf` library underneath. | Old `semanticdf-mcp` still works; the platform is additive. |
-| **P2 — Engine adapters (months 3-4)** | First-class Trino plugin that exposes semantic models as Trino schemas. Spark SDK for in-process use. Both consume the platform's REST. | New: `trino-semanticdf` plugin, `semanticdf-spark-sdk` for cluster mode. | Trino plugin is opt-in; Spark SDK is opt-in. |
-| **P3 — Multi-node HA (months 5-6)** | 3-AZ Postgres replication. Platform daemon runs stateless across 3 nodes. Rolling upgrade. | Operational: same code, more replicas. | Single-node mode still works (dev). |
-| **P4 — Object-storage-backed data (months 6-8)** | Iceberg becomes the default raw-data substrate. Platform owns the table-metadata map; engines read/write Iceberg directly. | New: Iceberg integration. Migration: backfill existing parquet. | Engines can still use raw parquet (legacy mode). |
-| **P5 — Multi-region (months 9-12, V2)** | Regional active-passive. Object storage is the source of truth; Postgres is regional. | Operational. | Single-region stays supported. |
-| **P6 — Optional Redis (deferred)** | Add L2 cache if workload demands (high QPS of repeat queries). | Operational. | n/a (additive) |
+The spine is unchanged from the previous design; the daemon is
+replaced by Restate services, the REST surface is preserved, and
+`semanticdf` the library is unchanged.
+
+| Phase | Goal | Pivot-specific delta |
+|---|---|---|
+| P0 (now) | `semanticdf` library + `semanticdf-mcp` thin stdio/REST wrapper | unchanged |
+| **P1 (months 1-3)** | **Restate-native platform** | Java 21 module defining the 5 services; `semanticdf` consumed as a JAR; `semanticdf-mcp` becomes a thin client to the platform via REST. Same wire shape — backwards compatible. |
+| P2 (months 4-5) | Engine adapters (Trino plugin, Spark SDK) | Adapters become Restate `Client` callers, not REST callers. Demonstrates the new protocol. |
+| P3 (months 6-7) | Multi-node HA | 3 platform/Restate nodes across AZs; 3-AZ Postgres. Rolling upgrade with N/N-1 via `ServiceDefinition.Configurator` knobs. |
+| P4 (months 8-9) | Iceberg substrate | Object storage becomes the data substrate; engine adapters read/write Iceberg directly. |
+| P5 (months 10-12, V2) | Multi-region | Regional active-passive. Restate journal + Postgres per region. |
 
 ## 8. Trade-off analysis
 
-The user's design brief flagged a tension: "lightweight / no
-overhead" vs "fault-tolerant / long-running." Here's how the design
+The user's design brief flagged: "lightweight / no overhead" vs
+"fault-tolerant / long-running." Here's how the Restate-pivot design
 balances them:
 
 | Pull toward "lightweight" | Pull toward "fault-tolerant" | Resolution |
 |---|---|---|
-| One binary, no sidecars | Need replicated state | **Postgres HA is the single replicated state** — no ZK / no etcd. The platform daemon is stateless. |
-| No Kafka / no service mesh | Need durable audit + query journal | **Audit + journal live in Postgres** (transactional, WAL-backed). No separate event bus. |
-| Sub-millisecond latency | Need durable recovery on restart | **In-process cache + Postgres persistence**: cache hits are µs; cache misses go to Postgres at single-digit ms; engine queries are 10s of ms to seconds. |
-| Minimal services | Multi-node for HA | **3 platform replicas** + **1 Postgres cluster** + **1 object storage**. Three services. (Adding Redis would be a 4th; deferred.) |
-| No consensus system | Need leader election for writes | **Postgres advisory locks** for the small coordination surface. Avoids the operational cost of ZK. |
+| One binary, no sidecars | Need replicated state | **Restate + Postgres** — the runtime is one process; the journal is one Postgres. No ZK / no etcd / no Kafka. |
+| No Kafka / no service mesh | Need durable audit + query journal | **Postgres serves two roles** — the platform's record store AND Restate's journal. No separate event bus. |
+| Sub-millisecond latency | Need durable recovery on restart | **Caffeine L1 bypasses Restate** for cache hits. Restate is the miss path. |
+| Minimal services | Multi-node for HA | **3 Restate nodes + 1 Postgres + 1 object storage** = three services. (Adding Redis would be a 4th; deferred.) |
+| No consensus system | Need leader election for writes | **Restate's per-key serialization** replaces `SELECT ... FOR UPDATE`. No separate coordinator. |
 
-The unresolved tension: a Postgres failure pauses writes. A
-multi-region upgrade (P5) addresses this. For v1, the user accepts
-"single-region, 3-AZ" — the same RPO/RTO as a managed Postgres
-deployment.
+The unresolved tension: Postgres is now on the platform's critical
+path for **both** metadata and the Restate journal. Write
+amplification is ~5-10x the request rate (one row per `Restate.run`
+step). Sizing must be re-done.
 
 ## 9. Risks and things to validate
 
 ### 9.1 The 3 biggest risks
 
-1. **Cross-engine semantic drift.** NULLs, decimals, time zones,
-   windows, joins, and function behavior can silently produce
-   different answers between Spark and Trino. The platform owns the
-   *logical* plan; each engine compiles the *physical* plan. A
-   regression in engine semantics breaks the platform's correctness
-   promise.
-2. **Durable query handoff.** After a partition, ambiguous
-   submission outcomes can duplicate expensive work. Adapters must
-   provide stable idempotency keys / query IDs.
-3. **Migration blast radius.** The existing semantic AST, op tree,
-   lineage, and tests are deeply shaped around Spark despite the
-   library's pure-data structure. The platform is a thin shell; the
-   *library* is where the engine-specific cleverness lives. Any
-   refactor of the library's engine surface breaks the platform.
+1. **The Java-platform → Scala-library boundary is inside a Restate
+   journal entry.** Every `Restate.run("compile", () -> semanticdf.of(spark, model))`
+   crosses the language boundary, and the result is journaled. If
+   the Scala library is non-deterministic (catches a `Throwable` and
+   returns a default, depends on a static clock, reads from a non-
+   serialized closure capture), the journal replays produce a
+   different result than the original run. **Mitigation:** a
+   deterministic-purity audit of `semanticdf` before it goes inside
+   any `Restate.run` — every public entry point must be a pure
+   function of its inputs.
+2. **Postgres is now on the critical path for both metadata and the
+   journal.** The pre-Restate design sized Postgres for ~1K QPS of
+   metadata writes. Restate adds journal rows: ~5-10x request
+   amplification. A platform at 1K QPS does 5-10K journal writes/sec.
+   A managed Postgres can take it; a self-hosted one cannot.
+   Re-sizing is mandatory; assuming "we already have Postgres" is
+   the failure mode.
+3. **Determinism discipline.** Restate's replay model punishes any
+   non-deterministic call outside `Restate.run(...)` —
+   `System.currentTimeMillis()`, `UUID.randomUUID()`, third-party
+   clients. The prior design had no such constraint. A handler that
+   quietly violates it works in tests and breaks under crash-recovery.
+   **Mitigation:** a lint rule + test that injects journal-replay
+   failures (Restate's testcontainers already supports this).
 
-### 9.2 The 3 things to validate with the team
+### 9.2 The 3 things to validate with the team before committing
 
-1. **Workload profile.** Is this primarily LLM-agent (low-QPS,
-   latency-sensitive, often repeated queries → cache wins big) or
-   BI/analytics (high-QPS, latency-tolerant, mostly unique queries →
-   cache is less valuable)? The cache architecture and the Trino
-   pushdown cut depend on this.
-2. **Multi-region or single-region?** If multi-region with
-   active-active writes are on the 12-month roadmap, Postgres +
-   advisory locks won't carry it; the consensus choice (Postgres
-   itself) changes. If single-region is the next 18 months, the
-   design is fine as-is.
-3. **Will the team accept a separate `semanticdf-platform`
-   repository / process**, or does it have to live in the current
-   library? The current `semanticdf-mcp` is a thin wrapper in the
-   same repo. The platform redesign is *not* a thin wrapper; it
-   needs its own deployment unit, its own CI, and its own release
-   cadence. If the answer is "no, keep one repo," the platform is
-   constrained to a library that *can* be deployed as a service —
-   workable but cuts design options (no Arrow Flight server, no
-   multi-process caching).
+1. **Workload profile.** Still unanswered from the prior design:
+   agent-driven (low-QPS, repeat-heavy → cache wins) vs BI-driven
+   (high-QPS, mostly unique → Restate Workflow is the bottleneck, not
+   the cache). The hot-path design assumes the former; if the latter
+   dominates, Caffeine is the wrong layer.
+2. **The Scala library stays Scala, or do we port it to Java?** The
+   op tree + lineage + audit code is Scala; porting loses the
+   typeclass seam and the Spark `Encoder` integration. Recommend
+   *no port*; the platform consumes the library as a JAR. The team
+   must agree because the alternative is a 6-month port.
+3. **The Restate server is now in the on-call surface.** The pre-
+   Restate design was "one binary." Tomorrow it is "one binary + one
+   Restate server + a journal schema." The on-call team needs
+   Postgres + journal-replay debugging skills. Validate: who carries
+   the pager for the Restate server, and do they have a runbook for
+   "journal is replaying and we're stuck"?
 
 ### 9.3 Open assumptions
 
 - Workload is <500 QPS at steady state, <5K QPS at peak. (If higher,
-  re-evaluate Postgres connection pool sizing + cache tiers.)
+  re-evaluate Postgres connection pool sizing + journal tier.)
 - All engines in scope are JVM-native (Spark, Trino, possibly
   Flink). A non-JVM engine (Rust Python client, Go service) would
-  need a thin REST adapter — no special platform work.
+  need a thin REST adapter.
 - Tenants are logical (namespace-scoped), not process-level.
-  Regulated workloads that need physical isolation are out of scope.
+  Regulated workloads need physical isolation.
 - Single-cloud (AWS or GCP) for v1. Multi-cloud is a v3 problem.
 - The `semanticdf` library's op tree is the source of truth for
   lineage. The platform never re-implements the compiler.
-
-## 10. Migration: how the current state evolves
-
-The current state is the "P0" of the migration. The platform
-redesign (P1-P5) is additive — the library and the current
-`semanticdf-mcp` keep working throughout. The risk is in *not*
-doing the platform redesign: the library-as-architecture constrains
-engine-agnostic access to "write a thin client in each engine's
-language" (which is what the current MCP does). The platform makes
-the integration path uniform.
-
-Concrete P1 deliverables (months 1-2):
-- A new `semanticdf-platform` repository with the Java 21 daemon.
-- REST contract versioned as `v1`. Backwards compatible with the
-  current `semanticdf-mcp` MCP wire shape.
-- Postgres-backed model registry (the platform owns the source
-  of truth for model registration).
-- The `semanticdf` library consumed as a peer library (the platform
-  daemon links it via Maven).
-- Deployable as 1 node (dev) or N nodes (prod) with no code change.
-- One-line test: a Spark job that calls the platform via REST gets
-  the same answer as a Spark job that uses the library in-process.
+- Streaming queries are in v2 (P2). v1 is batch + lineage only.
+- The platform consumes `semanticdf` as a Maven JAR. FFI is out of
+  scope.
