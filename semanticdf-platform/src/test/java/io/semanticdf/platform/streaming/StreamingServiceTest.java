@@ -1,5 +1,7 @@
 package io.semanticdf.platform.streaming;
 
+import dev.restate.sdk.Restate;
+import dev.restate.sdk.common.StateKey;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -7,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertSame;
 
 import java.lang.reflect.Method;
 
@@ -161,7 +164,117 @@ class StreamingServiceTest {
     assertTrue(payload.contains("\"checkpointLocation\":\"/ckpt\""), payload);
   }
 
+  // --- safeStop exception handling (Issue #7 fix) ---
+
+  @Test
+  void safeStop_swallowsTimeoutException() {
+    // A query whose stop() throws TimeoutException (Spark's internal deadline)
+    // must not propagate — the handle has already been removed from the
+    // registry; an unhandled exception would orphan the Spark query.
+    org.apache.spark.sql.streaming.StreamingQuery query = throwingQuery(
+        new java.util.concurrent.TimeoutException("stop deadline exceeded"));
+    RecordingState state = new RecordingState(0L);
+
+    assertDoesNotThrow(() -> StreamingService.safeStop(query, state));
+    assertEquals(1L, (long) state.lastSetValue, "ERROR_COUNT must increment on failure");
+  }
+
+  @Test
+  void safeStop_swallowsRuntimeException() {
+    // Any RuntimeException from stop() is also swallowed.
+    org.apache.spark.sql.streaming.StreamingQuery query =
+        throwingQuery(new RuntimeException("unexpected"));
+    RecordingState state = new RecordingState(5L); // existing error count
+
+    assertDoesNotThrow(() -> StreamingService.safeStop(query, state));
+    assertEquals(6L, (long) state.lastSetValue, "ERROR_COUNT must increment by exactly 1");
+  }
+
+  @Test
+  void safeStop_normalStopDoesNotIncrementErrorCount() {
+    // A query whose stop() succeeds must not increment ERROR_COUNT.
+    org.apache.spark.sql.streaming.StreamingQuery query = normalQuery();
+    RecordingState state = new RecordingState(0L);
+
+    assertDoesNotThrow(() -> StreamingService.safeStop(query, state));
+    org.junit.jupiter.api.Assertions.assertNull(
+        state.lastSetValue, "ERROR_COUNT must not be touched on success");
+  }
+
   // --- Helpers ---
+
+  /** A {@link StreamingQuery} whose {@code stop()} throws the given exception. */
+  private static org.apache.spark.sql.streaming.StreamingQuery throwingQuery(Exception ex) {
+    return (org.apache.spark.sql.streaming.StreamingQuery)
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.apache.spark.sql.streaming.StreamingQuery.class.getClassLoader(),
+            new Class<?>[] {org.apache.spark.sql.streaming.StreamingQuery.class},
+            (proxy, method, args) -> {
+              if ("stop".equals(method.getName())) throw ex;
+              Class<?> rt = method.getReturnType();
+              if (rt == boolean.class) return false;
+              if (rt == int.class) return 0;
+              if (rt == long.class) return 0L;
+              return null;
+            });
+  }
+
+  /** A {@link StreamingQuery} whose {@code stop()} is a no-op. */
+  private static org.apache.spark.sql.streaming.StreamingQuery normalQuery() {
+    return (org.apache.spark.sql.streaming.StreamingQuery)
+        java.lang.reflect.Proxy.newProxyInstance(
+            org.apache.spark.sql.streaming.StreamingQuery.class.getClassLoader(),
+            new Class<?>[] {org.apache.spark.sql.streaming.StreamingQuery.class},
+            (proxy, method, args) -> {
+              Class<?> rt = method.getReturnType();
+              if (rt == boolean.class) return false;
+              if (rt == int.class) return 0;
+              if (rt == long.class) return 0L;
+              return null;
+            });
+  }
+
+  /** A minimal {@link Restate.State} that records the last set value. */
+  private static final class RecordingState implements Restate.State {
+    private final java.util.HashMap<String, Object> store = new java.util.HashMap<>();
+    Object lastSetValue;
+
+    RecordingState(long initialErrorCount) {
+      store.put("errorCount", initialErrorCount);
+    }
+
+    @Override
+    public <T> java.util.Optional<T> get(StateKey<T> key) {
+      @SuppressWarnings("unchecked")
+      T v = (T) store.get(key.name());
+      return java.util.Optional.ofNullable(v);
+    }
+
+    @Override
+    public <T> void set(StateKey<T> key, T value) {
+      store.put(key.name(), value);
+      lastSetValue = value;
+    }
+
+    @Override
+    public void clear(StateKey<?> key) {
+      store.remove(key.name());
+    }
+
+    @Override
+    public java.util.Collection<String> getAllKeys() {
+      return store.keySet();
+    }
+
+    @Override
+    public void clearAll() {
+      store.clear();
+    }
+  }
+
+  private static void assertNullValue(Object o) {
+    org.junit.jupiter.api.Assertions.assertNull(o);
+  }
 
   /** Invoke the private static auditPayload method via reflection. */
   private static String invokeAuditPayload(
