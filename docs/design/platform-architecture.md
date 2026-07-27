@@ -146,6 +146,33 @@ Postgres on miss). **No Spark action. Sub-100ms p99.**
 
 - **3 platform/Restate replicas across AZs** (single-region for v1).
   Stateless Restate runtime; all state in Postgres.
+
+### 2.5.1 Audit-event persistence (PR-A, v0.2.2)
+
+The {@code AuditService} backs its event log with two storage tiers:
+
+- **Journal tier (Restate):** holds {@code LAST_DEDUP_HASH} +
+  {@code LAST_WRITE_OFFSET} for the fast-path dedup gate. This is
+  coordination state — recoverable from replay.
+- **Postgres tier (the {@code AuditEventStore}):** holds the actual
+  events via {@code semanticdf_catalog.audit_events}, partitioned
+  monthly by {@code ts}, keyed on {@code (tenant, ts, dedup_hash)}
+  for replay-safe idempotency.
+
+The Postgres tier is opt-in via {@code SEMANTICDF_AUDIT_PERSIST=true}
+(default: false). When disabled, {@code AuditService.append} still
+short-circuits on the journal's {@code LAST_DEDUP_HASH} so retries
+don't double-write within a tenant — events just don't persist across
+restarts. This preserves today's behavior (audit events currently
+drop on the journal only) and gives operators an explicit, opt-in
+upgrade to durable audit.
+
+When {@code true}, the store reads
+{@code SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD} (the same JDBC
+URL the stream catalog uses) and runs monthly-partition
+{@code CREATE TABLE IF NOT EXISTS} bootstrap at startup. Partition
+coverage is current-month + next-2-months; older data requires a
+separate retention/ingestion path.
 - **Synchronous PostgreSQL replication** across the 3 AZs. Now
   serving two roles: platform metadata AND Restate's journal.
 - **Restate's per-key serialization** replaces the prior

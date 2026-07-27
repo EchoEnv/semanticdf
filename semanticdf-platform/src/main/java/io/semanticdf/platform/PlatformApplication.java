@@ -3,7 +3,10 @@ package io.semanticdf.platform;
 import dev.restate.sdk.endpoint.Endpoint;
 import dev.restate.sdk.http.vertx.RestateHttpServer;
 
+import io.semanticdf.platform.audit.AuditEventStore;
 import io.semanticdf.platform.audit.AuditService;
+import io.semanticdf.platform.audit.NoOpAuditEventStore;
+import io.semanticdf.platform.audit.PostgresAuditEventStore;
 import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
 import io.semanticdf.platform.query.QueryService;
@@ -66,6 +69,50 @@ public final class PlatformApplication {
     return cut < url.length() ? url.substring(0, cut) + "<redacted>" : url;
   }
 
+  /**
+   * Build the {@link AuditEventStore} from env vars. Visible-for-testing
+   * pattern — the composition root in {@link #main} calls this once at
+   * startup, hands the result to {@link AuditService}, and registers a
+   * close-on-shutdown hook in {@code Runtime.addShutdownHook}.
+   *
+   * <p>Env vars:
+   * <ul>
+   *   <li>{@code SEMANTICDF_AUDIT_PERSIST=true|false} —
+   *       default false (preserves pre-PR-A behavior: events reach
+   *       the journal's {@code LAST_DEDUP_HASH} but no Postgres row
+   *       is written).
+   *   <li>{@code SEMANTICDF_CATALOG_JDBC_URL},
+   *       {@code SEMANTICDF_CATALOG_USER},
+   *       {@code SEMANTICDF_CATALOG_PASSWORD} — Postgres
+   *       connection (shared with the stream catalog).
+   * </ul>
+   */
+  static AuditEventStore buildAuditEventStoreFromEnv() {
+    String persist = System.getenv().getOrDefault("SEMANTICDF_AUDIT_PERSIST", "false");
+    if (!"true".equalsIgnoreCase(persist)) {
+      System.out.println(
+          "semanticdf-platform: SEMANTICDF_AUDIT_PERSIST not set to true — "
+              + "audit events journal-only (no Postgres writes). Set "
+              + "SEMANTICDF_AUDIT_PERSIST=true with SEMANTICDF_CATALOG_JDBC_URL "
+              + "to enable durable audit persistence.");
+      return new NoOpAuditEventStore();
+    }
+    String jdbcUrl = System.getenv("SEMANTICDF_CATALOG_JDBC_URL");
+    if (jdbcUrl == null || jdbcUrl.isBlank()) {
+      throw new IllegalStateException(
+          "SEMANTICDF_AUDIT_PERSIST=true but SEMANTICDF_CATALOG_JDBC_URL is unset \u2014 "
+              + "either set both, or unset SEMANTICDF_AUDIT_PERSIST to disable audit persistence");
+    }
+    String user = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
+    String password =
+        System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
+    System.out.println(
+        "semanticdf-platform: SEMANTICDF_AUDIT_PERSIST=true \u2014 audit events "
+            + "durable in " + AuditEventStore.class.getSimpleName()
+            + " against " + redactConnectUrl(jdbcUrl));
+    return new PostgresAuditEventStore(jdbcUrl, user, password);
+  }
+
   public static void main(String[] args) throws IOException {
     // --- Configuration from environment ---
     //
@@ -89,6 +136,14 @@ public final class PlatformApplication {
     // tests and quickstart. SPARK 4.0+ REQUIRED for Connect mode
     // (SdfSession.scala:81-88 throws UnsupportedOperationException on
     // Spark 3.x). See platform-architecture.md for the rationale.
+    //
+    // SEMANTICDF_AUDIT_PERSIST — when set to "true" (default: false), audit
+    // events emitted by RestateAuditSink (currently via StreamingService.run
+    // / run → started/restarted events) are persisted to Postgres via
+    // PostgresAuditEventStore instead of being journal-only. Idempotent on
+    // (tenant, ts, dedup_hash); uses the platform's existing Postgres
+    // (SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD). See PR-A plan in
+    // platform-services-completion-plan.md.
     String modelsDir = System.getenv().getOrDefault("MODELS_DIR", "./models");
     String sparkAppName = System.getenv().getOrDefault("SPARK_APP_NAME", "semanticdf-platform");
     String sparkMaster = System.getenv().getOrDefault("SPARK_MASTER", "local[*]");
@@ -193,12 +248,25 @@ public final class PlatformApplication {
       catalog = built;
     }
 
+    // --- Audit-event store (PR-A: durable audit log to Postgres) ---
+    //
+    // Configuration:
+    //   SEMANTICDF_AUDIT_PERSIST=true|false (default: false)
+    //     false = NoOpAuditEventStore; the journal's LAST_DEDUP_HASH
+    //             short-circuits within a tenant but no Postgres
+    //             row is written. Existing behavior preserved.
+    //     true  = PostgresAuditEventStore against the platform's
+    //             existing Postgres (shares the JDBC URL with the
+    //             stream catalog).
+    //   Requires SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD.
+    final AuditEventStore auditStore = buildAuditEventStoreFromEnv();
+
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
         .bind(new ModelService())
         .bind(new QueryService())
         .bind(new StreamingService(models, launcher, handles, catalog))
-        .bind(new AuditService())
+        .bind(new AuditService(auditStore))
         .bind(new CatalogService())
         .build();
 
@@ -325,6 +393,18 @@ public final class PlatformApplication {
         } catch (Throwable t) {
           System.err.println(
               "semanticdf-platform: StreamCatalog close() failed: " + t.getMessage());
+        }
+      }
+      // PR-A: release the audit-event store's HikariCP pool (only
+      // meaningful when SEMANTICDF_AUDIT_PERSIST=true). NoOp store
+      // has nothing to close.
+      if (auditStore != null) {
+        try {
+          auditStore.close();
+          System.out.println("semanticdf-platform: AuditEventStore closed");
+        } catch (Throwable t) {
+          System.err.println(
+              "semanticdf-platform: AuditEventStore close() failed: " + t.getMessage());
         }
       }
     }, "semanticdf-platform-shutdown"));
