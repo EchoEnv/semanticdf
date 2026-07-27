@@ -19,8 +19,22 @@ import dev.restate.sdk.annotation.Workflow;
  *   - CHECKPOINT_LOCATION — the engine's checkpoint directory
  *   - LAST_BATCH_TS — the timestamp of the most recent micro-batch
  *   - ERROR_COUNT — number of errors since the stream started
- *   - STOP_SIGNAL — a DurablePromise set by {@link #stop(String)} that
+ *   - STOP_SIGNAL — a DurablePromiseKey set by {@link #stop(String)} that
  *     the main run loop checks each iteration
+ *
+ * == Checkpoint-location guard ==
+ *
+ * The {@link StreamRunRequest#checkpointLocation} field is REQUIRED
+ * (non-null, non-blank). The library's default is a per-JVM
+ * {@code createTempFile} path that is NOT durable across replays —
+ * Restate's journal replay would create a different path, breaking
+ * Spark's checkpoint continuity (silent data loss or stream
+ * re-processing). The compact constructor on {@link StreamRunRequest}
+ * enforces this at the Wire DTO boundary; {@link #run(StreamRunRequest)}
+ * re-asserts it as defense-in-depth.
+ *
+ * See {@code docs/design/platform-determinism-audit.md} finding #7
+ * for the full analysis.
  *
  * Skeleton: the run loop is a single tick that just records "running."
  * The full implementation will drive the engine's streaming query and
@@ -35,6 +49,16 @@ public class StreamingService {
   /** Main run loop — one execution per stream-id. */
   @Handler
   public void run(StreamRunRequest request) {
+    // Defense-in-depth: the compact constructor on StreamRunRequest
+    // already rejected null/blank checkpointLocation. Re-assert at the
+    // handler entry because the handler is the boundary that journals
+    // state — failing here is cheaper than letting the bad value flow
+    // into a Restate.run block.
+    if (request.checkpointLocation() == null || request.checkpointLocation().isBlank()) {
+      throw new IllegalArgumentException(
+          "StreamingService.run: checkpointLocation is required and must be non-blank");
+    }
+
     // TODO P1: drive the engine's streaming query, checkpoint each batch,
     // and yield to the STOP_SIGNAL promise between batches.
     // For the skeleton, just record initial state.
@@ -56,10 +80,27 @@ public class StreamingService {
     return "running";
   }
 
-  /** Request DTO for {@link #run(StreamRunRequest)}. */
+  /**
+   * Request DTO for {@link #run(StreamRunRequest)}.
+   *
+   * The compact constructor enforces that {@code checkpointLocation}
+   * is non-null and non-blank. This is the Wire DTO boundary check
+   * for Critical finding #7 of the deterministic-purity audit
+   * (see {@code docs/design/platform-determinism-audit.md}).
+   */
   public record StreamRunRequest(
       String modelName,
       String queryShape,
       String checkpointLocation
-  ) {}
+  ) {
+    public StreamRunRequest {
+      if (checkpointLocation == null || checkpointLocation.isBlank()) {
+        throw new IllegalArgumentException(
+            "StreamingService.run: checkpointLocation is required and must be non-blank. " +
+            "The library's default is a per-JVM temp path that is lost across Restate replays, " +
+            "breaking Spark checkpoint continuity. Provide a stable, durable path on the " +
+            "operator's storage (persistent volume or DB-backed checkpoint store).");
+      }
+    }
+  }
 }
