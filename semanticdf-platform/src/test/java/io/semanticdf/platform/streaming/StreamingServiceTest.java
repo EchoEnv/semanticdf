@@ -311,6 +311,41 @@ class StreamingServiceTest {
     }
   }
 
+  /**
+   * Records audit events emitted by the handler so tests can verify
+   * the audit contract (event type, dedupHash, timestamp) without
+   * booting a Restate runtime.
+   */
+  static final class RecordingAuditSink implements AuditSink {
+    static final class Event {
+      final String tenant;
+      final String eventType;
+      final long ts;
+      final String dedupHash;
+      final String payload;
+
+      Event(String tenant, String eventType, long ts, String dedupHash, String payload) {
+        this.tenant = tenant;
+        this.eventType = eventType;
+        this.ts = ts;
+        this.dedupHash = dedupHash;
+        this.payload = payload;
+      }
+    }
+
+    final java.util.List<Event> events = new java.util.ArrayList<>();
+
+    @Override
+    public void emit(
+        String tenant,
+        String eventType,
+        long ts,
+        String dedupHash,
+        String payload) {
+      events.add(new Event(tenant, eventType, ts, dedupHash, payload));
+    }
+  }
+
   @Test
   void recreateQueryForResume_startsQueryAndRegistersIt() {
     // The simple, testable core of reconciliation: launcher.start is
@@ -367,32 +402,29 @@ class StreamingServiceTest {
   @Test
   void reconcileAfterJvmCrash_updatesJournalState() {
     // The journal state updates (RESTART_COUNT, LAST_RESTART_AT) must
-    // happen even outside a Restate context (the try/catch around
-    // Restate.instantNow() falls back to System.currentTimeMillis()).
-    // This pins the contract: any time reconcileAfterJvmCrash runs,
-    // the operator-visible counters increment.
+    // happen deterministically with the nowMs passed in. This pins
+    // the contract: any time reconcileAfterJvmCrash runs, the
+    // operator-visible counters increment.
     RecordingState state = new RecordingState(0L);
     org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
     StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
     RecordingLauncher launcher = new RecordingLauncher(freshQuery);
+    RecordingAuditSink auditSink = new RecordingAuditSink();
     StreamingService service =
-        new StreamingService(new StubModelRegistry(null), launcher, reg);
-
+        new StreamingService(
+            new StubModelRegistry(null), launcher, reg, auditSink);
     StreamingService.StreamRunRequest req =
         new StreamingService.StreamRunRequest(
             "orders", "sum(amount)", "/ckpt/orders");
 
-    long beforeMs = System.currentTimeMillis();
-    service.reconcileAfterJvmCrash("stream-1", null, req, state);
-    long afterMs = System.currentTimeMillis();
+    long beforeMs = 1_700_000_000_000L;
+    long nowMs = beforeMs + 5_000L; // arbitrary deterministic value
+    service.reconcileAfterJvmCrash("stream-1", null, req, state, nowMs);
 
     // Restart count: 0 → 1
     assertEquals(1L, state.store.get("restartCount"));
-    // Last restart at: wall clock between before and after.
-    long restartAt = (long) state.store.get("lastRestartAt");
-    assertTrue(
-        restartAt >= beforeMs && restartAt <= afterMs,
-        "lastRestartAt must be in [before, after], got " + restartAt);
+    // Last restart at: the explicit nowMs.
+    assertEquals(nowMs, (long) state.store.get("lastRestartAt"));
     // Handle is in the registry.
     assertSame(freshQuery, reg.get("stream-1"));
   }
@@ -405,7 +437,8 @@ class StreamingServiceTest {
     StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
     RecordingLauncher launcher = new RecordingLauncher(freshQuery);
     StreamingService service =
-        new StreamingService(new StubModelRegistry(null), launcher, reg);
+        new StreamingService(
+            new StubModelRegistry(null), launcher, reg, new RecordingAuditSink());
     StreamingService.StreamRunRequest req =
         new StreamingService.StreamRunRequest(
             "orders", "sum(amount)", "/ckpt/orders");
@@ -414,7 +447,7 @@ class StreamingServiceTest {
     // through N reconciliations already.
     state.store.put("restartCount", 5L);
 
-    service.reconcileAfterJvmCrash("stream-1", null, req, state);
+    service.reconcileAfterJvmCrash("stream-1", null, req, state, 1_700_000_000_000L);
     assertEquals(6L, state.store.get("restartCount"));
   }
 
@@ -430,14 +463,17 @@ class StreamingServiceTest {
           throw new RuntimeException("checkpoint mismatch");
         };
     StreamingService service =
-        new StreamingService(new StubModelRegistry(null), failingLauncher, reg);
+        new StreamingService(
+            new StubModelRegistry(null), failingLauncher, reg, new RecordingAuditSink());
     StreamingService.StreamRunRequest req =
         new StreamingService.StreamRunRequest(
             "orders", "sum(amount)", "/ckpt/orders");
 
     assertThrows(
         RuntimeException.class,
-        () -> service.reconcileAfterJvmCrash("stream-1", null, req, state));
+        () ->
+            service.reconcileAfterJvmCrash(
+                "stream-1", null, req, state, 1_700_000_000_000L));
 
     assertEquals(
         "failed-restart",
@@ -447,6 +483,48 @@ class StreamingServiceTest {
         3L,
         state.store.get("errorCount"),
         "ERROR_COUNT must increment by exactly 1");
+  }
+
+  @Test
+  void reconcileAfterJvmCrash_auditSinkFailureMarksFailedRestart() {
+    // Critical finding C1 from PR #232 review: audit-sink failures
+    // must propagate to STATUS=failed-restart so operators see them.
+    // Previously the catch swallowed the audit exception, leaving
+    // STATUS=running while the audit event was silently lost.
+    RecordingState state = new RecordingState(0L);
+    org.apache.spark.sql.streaming.StreamingQuery freshQuery = normalQuery();
+    StreamingQueryHandleRegistry reg = new StreamingQueryHandleRegistry();
+    RecordingLauncher launcher = new RecordingLauncher(freshQuery);
+    AuditSink failingSink =
+        (tenant, eventType, ts, dedupHash, payload) -> {
+          throw new RuntimeException("AuditService down");
+        };
+    StreamingService service =
+        new StreamingService(
+            new StubModelRegistry(null), launcher, reg, failingSink);
+    StreamingService.StreamRunRequest req =
+        new StreamingService.StreamRunRequest(
+            "orders", "sum(amount)", "/ckpt/orders");
+
+    assertThrows(
+        RuntimeException.class,
+        () ->
+            service.reconcileAfterJvmCrash(
+                "stream-1", null, req, state, 1_700_000_000_000L));
+
+    // Audit failure path must mark STATUS=failed-restart — operators
+    // see both the missed audit event AND a clear failure marker in
+    // the audit log.
+    assertEquals(
+        "failed-restart",
+        state.store.get("status"),
+        "audit failure must surface as STATUS=failed-restart");
+    assertEquals(1L, state.store.get("errorCount"));
+    // Recreation succeeded (state.set was already called for
+    // LAST_RESTART_AT and RESTART_COUNT), but the workflow is marked
+    // failed because the audit emit failed — operators can
+    // investigate.
+    assertSame(freshQuery, reg.get("stream-1"));
   }
 
   // --- Helpers ---
