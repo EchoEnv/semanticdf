@@ -1,0 +1,50 @@
+# Local dev for semanticdf-platform.
+#
+# Two services:
+#   - postgres: the platform's metadata store AND Restate's journal
+#   - restate: the Restate server (one process per node for v1)
+#
+# Usage:
+#   docker-compose -f semanticdf-platform/docker-compose.yml up -d
+#   cd semanticdf-platform
+#   PORT=8080 mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: semanticdf-platform-postgres
+    environment:
+      POSTGRES_USER: semanticdf
+      POSTGRES_PASSWORD: semanticdf
+      POSTGRES_DB: semanticdf
+    ports:
+      - "5432:5432"
+    volumes:
+      - semanticdf-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U semanticdf"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  restate:
+    # The Restate server (Rust). Persists its journal to Postgres.
+    image: restatedev/restate:latest
+    container_name: semanticdf-platform-restate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RESTATE_DB_URL: postgresql://semanticdf:semanticdf@postgres:5432/semanticdf
+      RESTATE_NODE_NAME: restate-node-1
+    ports:
+      - "9070:8080"   # Restate admin + service ports
+      - "9071:9090"   # Restate metrics
+    command: ["server", "--config-file", "/config/config.toml"]
+    volumes:
+      - ./restate-config.toml:/config/config.toml:ro
+
+volumes:
+  semanticdf-pg-data:

@@ -1,0 +1,37 @@
+# Restate server config for the semanticdf-platform.
+#
+# This is a minimal config for the local dev docker-compose. For
+# production (P3 multi-node HA), this file expands to 3 nodes with
+# shared Postgres HA and a load balancer in front.
+
+# Database for Restate's journal (shared with the platform's metadata).
+# Set by docker-compose via RESTATE_DB_URL env var.
+
+# Service HTTP address — the platform's services bind here.
+# In the docker-compose setup, the platform's services run in a
+# separate container (the maven exec:java process), and they register
+# with this Restate server over the network.
+http_port = 8080
+
+# Admin API
+admin_port = 9070
+
+# Metrics (Prometheus format)
+metrics_port = 9071
+
+# Cluster config (single-node for v1; P3 expands to 3)
+[cluster]
+# bootstrap_partner_urls = []  # no peers in v1
+node_name = "restate-node-1"
+
+# Storage (Postgres journal)
+[storage.postgres]
+# url is set via RESTATE_DB_URL env var
+
+# Bifrost (the wire protocol)
+# (default config)
+
+# Telemetry
+[telemetry.tracing]
+# jaeger_endpoint = "http://jaeger:14250"  # if/when we add tracing
+# sampling = 1.0
