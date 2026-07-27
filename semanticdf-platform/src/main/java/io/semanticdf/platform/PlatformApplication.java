@@ -108,6 +108,32 @@ public final class PlatformApplication {
     SparkSession spark =
         SdfSession.createFromEnv(sparkAppName, Option.empty());
 
+    // PR #241: Register a minimal spark-cleanup shutdown hook IMMEDIATELY
+    // after SparkSession creation. The main shutdown hook (registered
+    // later, after all services are bound and the daemon sweep is up)
+    // handles the full graceful sequence: drain → spark.stop() →
+    // catalog.close(). But if main() throws BEFORE that later hook is
+    // registered — e.g., YamlModelRegistry.load fails, or Restate bind
+    // fails, or any subsequent step errors — this early hook ensures
+    // SparkSession.close() (and the gRPC-channel release in Connect
+    // mode) happens anyway. SparkSession.stop() is idempotent — both
+    // this hook and the later hook can safely call it in the success
+    // path (Spark treats the second call as a no-op).
+    Runtime.getRuntime().addShutdownHook(
+        new Thread(
+            () -> {
+              try {
+                spark.stop();
+                System.out.println(
+                    "semanticdf-platform: early-shutdown SparkSession released");
+              } catch (Throwable t) {
+                System.err.println(
+                    "semanticdf-platform: early-shutdown spark.stop() failed: "
+                        + t.getMessage());
+              }
+            },
+            "semanticdf-platform-shutdown-spark-early"));
+
     if (System.getenv(SdfSession.RemoteUrlEnvVar()) != null) {
       // PR #240: control-plane mode. Redact credentials (anything after a
       // ';' or '?' delimiter in sc:// URLs is a token) before logging.
