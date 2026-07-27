@@ -1,6 +1,62 @@
 # Release notes
 
-## v0.2.0 — file organization + cluster-mode safety
+## v0.2.1 — Restate-native platform foundation (P1)
+
+This release lands the foundation of the `semanticdf-platform` module: a Restate-native JVM runtime that hosts the platform's five services (`ModelService`, `QueryService`, `StreamingService`, `AuditService`, `CatalogService`), boots an HTTP ingress, and reconciles streaming queries across JVM crashes. The library `semanticdf` 0.2.1 is unchanged from the user's perspective — this release is the standalone platform module moving from skeleton (P1 commit #215) to feature-complete single-replica.
+
+### What changed
+
+#### Platform runtime (semanticdf-platform/)
+
+- **Engine wiring.** `PlatformApplication.main` constructs the engine adapter stack: `YamlModelRegistry` reads `*.yml` from `MODELS_DIR`, `SparkStreamingQueryLauncher` builds `StreamingQuery` instances via `SemanticTable.toStreamingQuery`, and `StreamingQueryHandleRegistry` provides runtime-local lookup of live queries. (#225)
+- **`StreamingService` lifecycle.** `run()` initializes the journal, resolves the model through `ModelRegistry`, starts the Spark query inside a journaled `Restate.run`, emits a `dedupHash`-keyed audit event via `AuditService`, then enters an active-monitor loop that observes termination every 5s. `stop()` resolves a `STOP_SIGNAL` `DurablePromise` (annotated `@Shared` so it can fire concurrently with `run`); the loop is the sole owner of physical `query.stop()`. (#221–223)
+- **Audit sink abstraction.** A new `AuditSink` interface and `RestateAuditSink` production impl encapsulate `Restate.virtualObject(AuditService.class, ...).append(...)`. The cross-service call is journaled so on retry the cached response is replayed. (#232)
+- **Shutdown story** (`PlatformApplication` shutdown hook + drain via `drainQueries(handles, perQueryTimeoutMs)`):
+  - `drainQueries` iterates the in-memory registry and calls `query.stop()` on each, with a bounded timeout per query (env `SEMANTICDF_DRAIN_TIMEOUT_MS`, default 10s) and an interrupt-safe early-exit if the JVM shutdown hook itself is interrupted. `ExecutorService` is daemon so it can't prevent JVM exit.
+  - Bound pool size for parallel drain: `Math.min(16, total)` workers, where `total` is the number of registered queries. Bounds drain time at ~30s for any reasonable P1 workload. (#228, #229, #230)
+- **Post-crash reconciliation** (`run()` step 5a): after `STATUS=running` is journaled, the handler checks `handles.get(streamId)`. On a cross-JVM replay that came up with an empty registry, `reconcileAfterJvmCrash(streamId, model, request, state)` re-invokes `launcher.start` and re-registers the handle. Spark's checkpoint recovery makes this idempotent for committed offsets. (#231)
+- **DE-H2 bulk-startup reconciliation** (daemon thread on platform startup): the platform walks a Postgres-backed `StreamCatalog` (`streaming_streams` table with `stream_id`, `model_name`, `query_shape`, `checkpoint_location`) and POSTs a fire-and-forget `run` invocation to the local Restate ingress for each previously-active stream. Each invocation re-enters the workflow's auto-detect branch and triggers reconciliation. Implemented as a daemon thread with a brief settle delay so Vert.x finishes wiring handlers before the first POSTs. (#234, #235)
+
+#### Reliability & circuit-breaker
+
+- **`RECONCILE_BLOCKED` journaled flag** (state key `Boolean`) with three set sites: initial `models.get` failure (step 2 catch), initial `launcher.start` failure (step 3 catch via `startQueryWithFailureTracking`), and post-crash-reconciliation failure (`reconcileAfterJvmCrash` catch). All paths throw `TerminalException` with HTTP 400 so Restate halts retries; the BLOCKED guard at handler entry reads `state.get(RECONCILE_BLOCKED)` and throws TerminalException for any blocked workflow. Prevents the unbounded journal growth on persistent failures (model file deleted, checkpoint path unwritable, etc.). (#233, #237)
+- **`AUDIT_LOSS_COUNT` journaled counter** (state key `Long`): audit emit failures after successful recreation increment this counter and the workflow continues normally (query is alive and unmonitored-blocking would orphan it). Operators read via `getAuditLossCount()`. (#233)
+- **Catalog/journal write ordering fix**: the `catalog.registerIfAbsent(...)` call in `run()` step 5b was reordered to BEFORE `state.set(STATUS, "running")`. Closes the microsecond-window drift hazard between the two writes where a JVM crash could leave the journal saying "running" while the catalog row was missing — defeating the entire DE-H2 sweep feature. (#236)
+- **URL encoding for stream-id in `StartupReconciler`**: `URLEncoder.encode(streamId, UTF_8).replace("+", "%20")` at both ingress URL build sites. Closes the silent cross-stream contamination hazard where stream-id containing `/` would route to wrong workflow key. (#236)
+
+#### Public @Handler endpoints
+
+- `StreamingService.run(StreamRunRequest)` — fresh start.
+- `StreamingService.stop(Void)` — signal stop (resolves `STOP_SIGNAL`).
+- `StreamingService.restart(Void)` — operator-triggered post-crash reconciliation. NOT `@Shared` (writes state). Clears `RECONCILE_BLOCKED` at entry; allows retry from `STATUS=failed` and `STATUS=failed-restart`; refuses `STATUS=stopped` (operator must invoke `run()`); throws `IllegalStateException` for empty journal.
+- `StreamingService.clearReconcileBlock(Void)` — manual unblock escape hatch for the auto-retry circuit-breaker.
+- `StreamingService.getStatus()`, `getRestartCount()`, `getAuditLossCount()` — `@Shared` operator/dashboard reads.
+
+#### Environment variables
+
+- `MODELS_DIR` (default `./models`), `SPARK_APP_NAME` (default `semanticdf-platform`), `SPARK_MASTER` (default `local[*]`), `PORT` (default 8080) — platform-level.
+- `SEMANTICDF_CATALOG_JDBC_URL`, `SEMANTICDF_CATALOG_USER`/`_PASSWORD` (default `semanticdf`) — opt-in bulk-startup reconciliation.
+- `SEMANTICDF_DRAIN_TIMEOUT_MS` (default 10000), `SEMANTICDF_DRAIN_MAX_PARALLEL` (default 16), `SEMANTICDF_RECONCILE_TIMEOUT_MS` (default 30000) — shutdown + sweep timeouts.
+
+### Test status
+
+- Library: **775 tests, all green** on Spark 3.5.8 and 4.1.1.
+- Platform: **85 tests** covering state-key rotation, BLOCKED-guard logic, RECONCILE_BLOCKED set-sites, sweep happy/skip paths, URL-encoding safety, schema bootstrap idempotency. (Integration test is bounded — see `docs/design/platform-architecture.md` and `StreamingServiceIntegrationTest` docstring for scope.)
+
+### What's deferred (next-wave, not blocking v0.2.1)
+
+- `StreamCatalog.unregister()` for catalog hygiene on `stop()` (DE-C4) — stale rows are bounded by the sweep's status pre-check.
+- Schema bootstrap retry on Postgres blip (fail-fast currently is intentional for P1 — surfaces config errors immediately).
+- `StreamingService` 3-ctor overload collapse to single canonical constructor (Karpathy minimum-code).
+- `StreamingServiceIntegrationTest` driving the full `run → tick → stop → reconcileAfterJvmCrash` lifecycle via Testcontainers (currently smoke-only).
+- Option C batched ticks (journal cost optimization) and Spark Connect launcher (P2 engine adapter).
+- Multi-replica lease in Postgres (P3).
+
+### Migration
+
+For consumers of `semanticdf` library 0.2.0 → 0.2.1: **no migration required**. The library version bump is on the platform-internal `semanticdf_2.13` artifact only (consumed by `semanticdf-platform`). External consumers of `semanticdf` see no API change.
+
+For operators of the new `semanticdf-platform`: deployment changes only — see `semanticdf-platform/docker-compose.yml` and `semanticdf-platform/README.md`. — file organization + cluster-mode safety
 
 This release tightens the package layout, hardens the library for cluster-mode deployment, and introduces a cache auto-invalidation strategy keyed on model version. No behaviour change for existing batch or streaming terminals.
 
