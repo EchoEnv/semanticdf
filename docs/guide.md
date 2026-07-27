@@ -1000,7 +1000,8 @@ Other compile-time catches:
   decoders.
 
 For details on why the typeclass pattern was chosen over a richer DSL,
-see `DESIGN.md` and `docs/phase-E-plan.md`.
+see the `SemanticField` scaladoc and `docs/backlog-type-safety.md`
+(records the deferred type-safety follow-ons).
 
 ---
 
