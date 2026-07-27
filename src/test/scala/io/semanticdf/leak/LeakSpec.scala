@@ -51,6 +51,7 @@ class LeakSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture 
         measures = Nil, dimensions = Nil,
         whereHash = None, havingHash = None,
         rowCount = 0, elapsedMs = 0, status = "ok",
+        dedupHash = AuditEvent.dedupHashOf(s"m$i", 0, Nil, Nil, None, None),
       ))
     }
     val snap = sink.snapshot()

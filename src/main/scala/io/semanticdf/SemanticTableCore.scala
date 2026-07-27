@@ -174,7 +174,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           // Fire-and-forget; the sink is documented as non-throwing,
           // but we wrap defensively so a misbehaving sink can't
           // break the query.
-          try auditSink.get.emit(AuditEvent(
+          val okEvent = AuditEvent(
             ts         = java.time.Instant.now(),
             model      = model,
             version    = req.version,
@@ -185,14 +185,22 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
             rowCount   = rowCount,
             elapsedMs  = elapsedMs,
             status     = "ok",
-          )) catch { case scala.util.control.NonFatal(_) => () }
+            // dedupHash is the replay-safe contract key; computed
+            // from the 6 query-shape fields only (excludes ts,
+            // elapsedMs, rowCount, status, error, requester, requestId).
+            // See docs/design/platform-determinism-audit.md.
+            dedupHash  = AuditEvent.dedupHashOf(
+                          model, req.version, req.measures, req.dimensions,
+                          whereHash, havingHash),
+          )
+          try auditSink.get.emit(okEvent) catch { case scala.util.control.NonFatal(_) => () }
         }
         df
       } catch {
         case e: Throwable =>
           val elapsedMs = (System.nanoTime() - t0) / 1000000L
           if (auditSink.isDefined) {
-            try auditSink.get.emit(AuditEvent(
+            val errorEvent = AuditEvent(
               ts         = java.time.Instant.now(),
               model      = model,
               version    = req.version,
@@ -204,7 +212,13 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
               elapsedMs  = elapsedMs,
               status     = "error",
               error      = Some(s"${e.getClass.getSimpleName}: ${e.getMessage}"),
-            )) catch { case scala.util.control.NonFatal(_) => () }
+              // dedupHash includes status; the same error + same
+              // query shape dedups to one row across replays.
+              dedupHash  = AuditEvent.dedupHashOf(
+                            model, req.version, req.measures, req.dimensions,
+                            whereHash, havingHash),
+            )
+            try auditSink.get.emit(errorEvent) catch { case scala.util.control.NonFatal(_) => () }
           }
           throw e
       }
