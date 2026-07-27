@@ -1,6 +1,6 @@
 # MCP Server Contract — semanticdf
 
-**Status:** v5 — current contract. The six tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`, `audit_log`) wrap the corresponding library methods plus the post-v0.1.16 audit-log retrieval. See [RELEASE.md](../RELEASE.md) for the cumulative changelog.
+**Status:** v6 — current contract. The eight tools (`list_models`, `describe_model`, `query`, `explain`, `introspect`, `audit_log`, `get_field_lineage`, `get_dependencies`) wrap the corresponding library methods plus the audit-log retrieval and the static-analysis lineage library. See the v5 → v6 changelog below for the lineage additions. See [RELEASE.md](../RELEASE.md) for the cumulative changelog.
 **Audience:** the LLM agent (Claude, Cursor, etc.), the MCP server implementation, and reviewers.
 
 This document is the **single source of truth** for what an MCP server exposing
@@ -687,6 +687,120 @@ filter's literal values. The `where_hash` is a stable SHA-256 of the
 canonicalized `Predicate` tree, so two equivalent filters hash to the
 same value but the values themselves are not exposed.
 
+### Tool 7: `get_field_lineage`
+
+**Purpose:** return the static-analysis lineage for a model (per the lineage library — see `docs/design/lineage.md`). Column-level provenance
+("which base columns feed this field?"), calc-measure dependencies
+("which other measures does this one depend on?"), and field
+metadata (`exprString`, `status`).
+
+**Request:**
+```json
+{ "model_name": "orders", "field_name": "pct_of_total" }
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `model_name` | yes | — | The model name (must be in the MCP server's registry). |
+| `field_name` | no | — | If given, return only this field's lineage (a single entry in `dimensions` / `measures` / `transforms`). If omitted, return the full per-model lineage. |
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "data": {
+    "model": "orders",
+    "dimensions": [
+      {
+        "name": "carrier",
+        "kind": "dimension",
+        "baseColumns": ["carrier"],
+        "dependsOn": [],
+        "exprString": "carrier",
+        "status": "complete"
+      }
+    ],
+    "measures": [
+      {
+        "name": "pct_of_total",
+        "kind": "measure",
+        "baseColumns": ["amount"],
+        "dependsOn": ["total"],
+        "exprString": "amount / total",
+        "status": "complete"
+      }
+    ],
+    "transforms": [],
+    "sources": ["orders_csv"],
+    "kind": "batch"
+  }
+}
+```
+
+**Fields:**
+
+- `dimensions` / `measures` / `transforms` — one `FieldJson` per
+ field. Filtered to a single field if `field_name` is given; the
+ lists are all empty if the field isn't found (not an error — an
+ LLM that typo-ed the field name gets a useful empty result rather
+ than a hard error).
+- `sources` — the model's `sourceTable` (empty if unset).
+- `kind` — `batch` or `streaming`.
+- Per-field `status` — `complete` (every reference resolved),
+ `partial` (some references couldn't be identified), or `opaque`
+ (no `exprString` — built from a raw Scala lambda with no source form).
+
+**No Spark action:** the handler walks the op tree in memory; no
+query is executed. Safe to call for any loaded model.
+
+**Coupling:** the handler is a thin adapter over
+`io.semanticdf.lineage.Lineage.of(st)`. The library owns the
+analysis; the handler owns the JSON wire shape.
+
+### Tool 8: `get_dependencies`
+
+**Purpose:** return the upstream and downstream model graph for one
+model. Used for impact analysis: "if I change this model, which
+downstream models are affected?" and "which upstream models does this
+depend on?". The library computes these as a side-effect of
+`Lineage.workspaceOf`; the handler just exposes them.
+
+**Request:**
+```json
+{ "model_name": "orders" }
+```
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `model_name` | yes | — | The model name. |
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "data": {
+    "model": "orders",
+    "upstream": [],
+    "downstream": ["order_summary"]
+  }
+}
+```
+
+**Fields:**
+
+- `upstream` — the models this model depends on via joins
+ (i.e., the joined-manifest leftSide / rightSide models).
+- `downstream` — the models that depend on this model via joins.
+
+For the MVP, both lists are computed from the workspace's join
+edges. A model that doesn't participate in any join has both lists
+empty.
+
+**MVP limitation:** cross-model resolution is best-effort. The MVP
+uses the workspace map's key as the modelId (the same constraint as
+the YAML loader). If a future version adds an explicit `id` field to
+`SemanticTable`, the handler will pick it up without changes.
+
 ---
 
 ## Lifecycle warnings
@@ -886,6 +1000,27 @@ None blocking. Two minor follow-ups tracked separately:
  `mcp-contract-v3.md` (etc.) and start version negotiation server-side. The
  same library jar must remain source-compatible with both versions during the
  deprecation window.
+
+---
+
+## v5 → v6 changelog
+
+What changed between v5 and v6 (the addition of the two lineage tools). Read this before reviewing the rest of the
+doc.
+
+**Added:**
+- **Tool 7: `get_field_lineage`** — per-model column-level lineage
+ (base columns + calc-measure dependencies + per-field `status`).
+ Pure static analysis (no Spark action). The `field_name` filter
+ narrows the response to a single field; an unknown field returns
+ empty lists (not an error) so a typo'd name is recoverable.
+- **Tool 8: `get_dependencies`** — upstream and downstream model
+ graph for impact analysis. Best-effort MVP (uses workspace map
+ keys as modelIds, same constraint as the YAML loader).
+
+**Changed:**
+- The tool count went from six to eight. The header line was
+ updated to list all eight.
 
 ---
 

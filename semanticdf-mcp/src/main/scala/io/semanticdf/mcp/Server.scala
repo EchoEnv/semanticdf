@@ -9,7 +9,7 @@ import io.modelcontextprotocol.server.McpSyncServer
 import io.modelcontextprotocol.server.transport.StdioServerTransportProvider
 import io.modelcontextprotocol.spec.McpSchema.ServerCapabilities
 import io.modelcontextprotocol.spec.McpSchema.Tool
-import io.semanticdf.mcp.handlers.{AuditLog, DescribeModel, Introspect, ListModels, OrderByParser, Query, QueryRequest}
+import io.semanticdf.mcp.handlers.{AuditLog, DescribeModel, Introspect, Lineage, ListModels, OrderByParser, Query, QueryRequest}
 
 import java.util.{List => JList}
 import org.apache.spark.sql.SparkSession
@@ -63,6 +63,8 @@ object Server {
         Query.registerExplainSpec(models, queryHandler, mapper),
         Introspect.registerSpec(models, new Introspect(spark), mapper),
         AuditLog.registerSpec(auditSink, mapper),
+        Lineage.registerGetFieldLineageSpec(models, mapper),
+        Lineage.registerGetDependenciesSpec(models, mapper),
       ))
       .build()
   }
