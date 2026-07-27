@@ -1,6 +1,8 @@
-# Type safety via typeclasses
+# Backlog — type-safety extensions (typed predicates, streaming types, catalog metadata)
 
-**Status:** All three original pieces shipped. This document explains the runtime-error pain that motivated the typeclass work, the pieces that landed, and what was explicitly deferred.
+**Status:** Backlog idea. The original three-piece plan landed; this document now records the *deferred* items so they don't get lost. Pick up only when a real consumer signals demand.
+
+The previous incarnation of this file was the typeclass work-plan that closed out v0.1.x. The three original pieces (typed query results, phantom-typed dimensions/measures, typed arithmetic in calc lambdas) all shipped. What's left is a small set of follow-ons; they're below.
 
 ## The pain
 

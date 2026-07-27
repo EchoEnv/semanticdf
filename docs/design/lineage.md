@@ -1,6 +1,6 @@
 # Lineage
 
-**Status:** DRAFT — design review.
+**Status:** ACCEPTED — `io.semanticdf.lineage.*` shipped in the v0.2.1 cycle.
 
 ## Problem
 
