@@ -118,6 +118,27 @@ public class StreamingService {
   private static final StateKey<Long> LAST_RESTART_AT =
       StateKey.of("lastRestartAt", Long.class);
 
+  /**
+   * Set to {@code true} when a recreation path (initial start or
+   * reconciliation) failed in a way that should NOT auto-retry.
+   * Cleared by {@link #restart(Void)} or
+   * {@link #clearReconcileBlock(Void)} when the operator decides the
+   * underlying cause is fixed. Critical to prevent infinite retry
+   * loops on persistent failures (model file deleted, permissions
+   * wrong, etc.) — see PR #233 / DE-M1 / Architect-C1.
+   */
+  private static final StateKey<Boolean> RECONCILE_BLOCKED =
+      StateKey.of("reconcileBlocked", Boolean.class);
+
+  /**
+   * Cumulative count of audit-emit failures that did NOT block the
+   * workflow (because the query was already running and a block
+   * would have orphaned it). Operators read this via
+   * {@link #getAuditLossCount()} to detect silent audit-log gaps.
+   */
+  private static final StateKey<Long> AUDIT_LOSS_COUNT =
+      StateKey.of("auditLossCount", Long.class);
+
   /** Cross-handler signal: resolved by {@link #stop(Void)} to coordinate
    * cancellation with a future active-loop {@code run} implementation. */
   private static final DurablePromiseKey<Void> STOP_SIGNAL =
@@ -191,6 +212,27 @@ public class StreamingService {
     String streamId = Restate.key();
     var state = Restate.state();
 
+    // Step 0: previous-failure blocker. PR #233 / DE-M1 / Architect-C1
+    // — a previous run/restart failure set RECONCILE_BLOCKED. Without
+    // this guard, Restate would retry the workflow indefinitely
+    // (RuntimeException from a handler is reported as a transient
+    // failure and retried). Throw a TerminalException with code 400
+    // (BAD_REQUEST) to halt retries and surface a clear operator
+    // message. Operators clear the block via restart() or
+    // clearReconcileBlock() after fixing the underlying cause.
+    if (state.get(RECONCILE_BLOCKED).orElse(false)) {
+      String blockedStatus = state.get(STATUS).orElse("unknown");
+      throw new dev.restate.sdk.common.TerminalException(
+          dev.restate.sdk.common.TerminalException.BAD_REQUEST_CODE,
+          "StreamingService.run: workflow is blocked from auto-retry "
+              + "after a previous failure (stream-id="
+              + streamId
+              + ", current status="
+              + blockedStatus
+              + "). Operators must invoke /restart or "
+              + "/clearReconcileBlock after fixing the underlying cause.");
+    }
+
     // 1. Initialize journaled lifecycle state.
     state.set(STATUS, "starting");
     state.set(MODEL_NAME, request.modelName());
@@ -205,6 +247,7 @@ public class StreamingService {
       model = models.get(request.modelName());
     } catch (RuntimeException e) {
       state.set(STATUS, "failed");
+      state.set(RECONCILE_BLOCKED, true);
       state.set(ERROR_COUNT, 1L);
       throw e;
     }
@@ -236,12 +279,24 @@ public class StreamingService {
     String payload = auditPayload(streamId, request);
     long ts = journaledNow();
 
-    auditSink.emit(
-        DEFAULT_TENANT,
-        StreamingDedupHash.STREAMING_STARTED,
-        ts,
-        dedupHash,
-        payload);
+    // Audit failure on initial start does NOT block — the query is
+    // already registered in the registry, so blocking would orphan
+    // it (Architect-C3 from PR #233 review). We increment a
+    // dedicated AUDIT_LOSS_COUNT counter that operators can read via
+    // getAuditLossCount() to detect silent audit-log gaps. The
+    // workflow continues to monitorLoop with the live query.
+    try {
+      auditSink.emit(
+          DEFAULT_TENANT,
+          StreamingDedupHash.STREAMING_STARTED,
+          ts,
+          dedupHash,
+          payload);
+    } catch (RuntimeException auditRe) {
+      state.set(
+          AUDIT_LOSS_COUNT,
+          state.get(AUDIT_LOSS_COUNT).orElse(0L) + 1L);
+    }
 
     // 5. Mark running.
     state.set(STATUS, "running");
@@ -448,23 +503,36 @@ public class StreamingService {
     String streamId = Restate.key();
     var state = Restate.state();
 
+    // Clear the previous-failure blocker at the entry. This is the
+    // operator-driven retry path: they've inspected the failure,
+    // fixed the underlying cause, and are now telling the workflow
+    // to try again. If the retry fails again, the catch in
+    // reconcileAfterJvmCrash will re-set the flag.
+    //
+    // Order matters: clear BEFORE validation checks so a failed
+    // validation (e.g., model file still missing) leaves the block
+    // set (DE-M2 from PR #233 review).
+    state.set(RECONCILE_BLOCKED, false);
+
     // If a handle is already present, the registry is in sync with the
     // journal — nothing to reconcile. Idempotent no-op.
     if (handles.get(streamId) != null) {
       return;
     }
 
-    // Refuse to restart a workflow that was cleanly stopped — creating
-    // a new query without an active monitor loop would orphan it (no
-    // one observes it for termination or restart signals). Operators
-    // who want to resume a stopped stream must invoke run() with the
-    // full request, which starts a fresh lifecycle.
+    // Refuse to restart a workflow that was cleanly stopped (only).
+    // Operators who want to resume a stopped stream must invoke run()
+    // with the full request, which starts a fresh lifecycle.
+    //
+    // STATUS=failed and STATUS=failed-restart ARE allowed — these
+    // are exactly what restart() exists to recover from. Operators
+    // call restart() after fixing the underlying cause (PR #233
+    // / Architect-H1).
     String currentStatus = state.get(STATUS).orElse("unknown");
-    if ("stopped".equals(currentStatus) || "failed".equals(currentStatus)) {
+    if ("stopped".equals(currentStatus)) {
       throw new IllegalStateException(
-          "StreamingService.restart: cannot restart a "
-              + currentStatus
-              + " workflow (stream-id="
+          "StreamingService.restart: cannot restart a stopped workflow "
+              + "(stream-id="
               + streamId
               + "). Operators must invoke run() with a fresh request.");
     }
@@ -483,15 +551,17 @@ public class StreamingService {
               + "). Operators must invoke run() to start a fresh stream.");
     }
 
-    // Resolve the model from the registry. If the model file has been
-    // deleted since the original run(), mark STATUS=failed-restart so
-    // operators see it via getStatus(), and re-throw so Restate
-    // surfaces the failure (same pattern as run() step 2).
+    // Resolve the model from the registry. If the model file is still
+    // missing, mark STATUS=failed-restart AND set the block so the
+    // workflow doesn't loop forever (DE-M1 / Architect-C2 from PR
+    // #233 review). Operators must fix the file and call restart()
+    // again, or call clearReconcileBlock() to bypass.
     SemanticTable model;
     try {
       model = models.get(modelName);
     } catch (RuntimeException e) {
       state.set(STATUS, "failed-restart");
+      state.set(RECONCILE_BLOCKED, true);
       state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
       throw e;
     }
@@ -541,6 +611,49 @@ public class StreamingService {
   @Handler
   public long getRestartCount() {
     return Restate.state().get(RESTART_COUNT).orElse(0L);
+  }
+
+  /**
+   * Read the cumulative count of audit-emit failures that did NOT
+   * block the workflow. Operators monitor this to detect silent
+   * audit-log gaps (network blips, AuditService back-pressure,
+   * transient Restate issues). A non-zero value with STATUS=running
+   * means audit is degraded but the query itself is healthy.
+   *
+   * <p>Uses {@code @Shared} so dashboards can poll.
+   *
+   * @return 0 if the audit path has been healthy; otherwise the
+   *         cumulative count of failed emits.
+   */
+  @dev.restate.sdk.annotation.Shared
+  @Handler
+  public long getAuditLossCount() {
+    return Restate.state().get(AUDIT_LOSS_COUNT).orElse(0L);
+  }
+
+  /**
+   * Operator escape hatch: clear the previous-failure block flag so
+   * the next {@link #run(StreamRunRequest)} attempt proceeds. Use
+   * this when:
+   *
+   * <ul>
+   *   <li>An operator has manually fixed the underlying cause (e.g.,
+   *       restored a deleted model file, fixed permissions, restarted
+   *       an upstream service) and wants to let the platform retry
+   *       without going through {@link #restart(Void)}.
+   *   <li>An automated CI smoke test hit a transient failure and
+   *       needs to reset before the next test run.
+   * </ul>
+   *
+   * <p>NOT annotated {@code @Shared} — this handler writes workflow
+   * state. Per-key serialization in Restate ensures the clear and the
+   * next retry are ordered.
+   *
+   * @param ignored unused (the stream-id comes from the workflow key)
+   */
+  @Handler
+  public void clearReconcileBlock(Void ignored) {
+    Restate.state().set(RECONCILE_BLOCKED, false);
   }
 
   // --- Helpers ---
@@ -673,7 +786,9 @@ public class StreamingService {
       dev.restate.sdk.Restate.State state,
       long nowMs) {
     try {
-      // 1. Recreate the query and register it.
+      // 1. Recreate the query and register it. If this throws, the
+      //    registry is still empty (put happens after successful launch)
+      //    so no cleanup is needed — just mark blocked.
       recreateQueryForResume(streamId, model, request);
 
       // 2. Bump the restart counter and last-restart-at in the journal.
@@ -682,8 +797,12 @@ public class StreamingService {
       state.set(RESTART_COUNT, newCount);
       state.set(LAST_RESTART_AT, nowMs);
 
-      // 3. Emit the restart audit event. The dedupHash includes
-      //    restartCount so each attempt produces a distinct event.
+      // 3. Emit the restart audit event. Best-effort — the query is
+      //    already registered, so blocking on audit failure would
+      //    orphan it (Architect-C3 from PR #233 review). We
+      //    increment AUDIT_LOSS_COUNT instead; operators read it via
+      //    getAuditLossCount() to detect silent audit-log gaps. The
+      //    workflow continues to monitorLoop normally.
       String dedupHash =
           StreamingDedupHash.streamingRestarted(
               streamId,
@@ -702,24 +821,25 @@ public class StreamingService {
               + "\",\"restartCount\":"
               + newCount
               + "}";
-      // Audit failures (network blip, AuditService back-pressure, NPE
-      // in payload) propagate to the outer catch, which marks
-      // STATUS=failed-restart. Operators see BOTH the missed audit AND
-      // a clear failure marker — silent audit-log gaps are no longer
-      // possible. The audit sink abstraction (AuditSink interface)
-      // makes this production path testable without swallowing.
-      auditSink.emit(
-          DEFAULT_TENANT,
-          StreamingDedupHash.STREAMING_RESTARTED,
-          nowMs,
-          dedupHash,
-          payload);
+      try {
+        auditSink.emit(
+            DEFAULT_TENANT,
+            StreamingDedupHash.STREAMING_RESTARTED,
+            nowMs,
+            dedupHash,
+            payload);
+      } catch (RuntimeException auditRe) {
+        state.set(
+            AUDIT_LOSS_COUNT,
+            state.get(AUDIT_LOSS_COUNT).orElse(0L) + 1L);
+      }
     } catch (RuntimeException e) {
-      // Recreation failed — mark the workflow as failed-restart so
-      // operators see it in getStatus(). The exception propagates
-      // out of run() so Restate treats it as a workflow failure
-      // and the next replay retries reconciliation.
+      // Recreation failed. Registry is empty (recreate throws before
+      // put). Mark failed-restart AND set the blocked flag so the
+      // next run() invocation throws a TerminalException (Architect-C1
+      // from PR #233 review) instead of looping forever.
       state.set(STATUS, "failed-restart");
+      state.set(RECONCILE_BLOCKED, true);
       state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
       throw e;
     }
