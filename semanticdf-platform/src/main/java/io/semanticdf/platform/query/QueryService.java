@@ -410,10 +410,27 @@ public class QueryService {
         // timezone — the underlying millis are preserved.
         return java.sql.Timestamp.from(java.time.Instant.parse(encoded));
       case RestateCachedRow.T_DATE:
-        // PR #252: encode as LocalDate (no time, no zone). Date's
-        // underlying value is reconstructed at the JVM-default midnight
-        // — date-only data, so the timezone doesn't shift the day.
-        return java.sql.Date.valueOf(java.time.LocalDate.parse(encoded));
+        // PR #255 fix for the DE finding H1 (Date.getTime() was
+        // JVM-default-timezone-dependent on decode).
+        // PR #252 used Date.valueOf(LocalDate.parse(s)) which
+        // reconstructs a Date whose getTime() is computed at the
+        // JVM-default midnight — silently shifting across JVM restarts
+        // in different timezones. The fix builds the Date from an
+        // Instant anchored at UTC midnight of the date. getTime()
+        // returns the underlying millis (UTC midnight of the date),
+        // which is JVM-timezone-independent.
+        //
+        // We construct a new java.sql.Date directly (not
+        // Date.from(Instant), which would return java.util.Date
+        // because that static method is inherited from
+        // java.util.Date — the parent class). Constructing via the
+        // java.sql.Date(long) constructor pins the runtime class to
+        // java.sql.Date.
+        return new java.sql.Date(
+            java.time.LocalDate.parse(encoded)
+                .atStartOfDay(java.time.ZoneOffset.UTC)
+                .toInstant()
+                .toEpochMilli());
       case RestateCachedRow.T_BINARY:
         return java.util.Base64.getDecoder().decode(encoded);
       default:
