@@ -185,7 +185,8 @@ public final class PlatformApplication {
    * exceptions as best-effort: a failed registration falls back to the
    * in-process restate runtime that's already listening.
    */
-  static String registerWithExternalRestate(String externalIngress, int boundPort)
+  static String registerWithExternalRestate(
+      String externalIngress, int boundPort, String serviceHandlerUrlEnv)
       throws Exception {
     String adminUrl = externalIngress.replaceAll(":8080/?$", ":9070");
     // The SDK appends `/<operation_path>` to the basePath without
@@ -195,17 +196,42 @@ public final class PlatformApplication {
     String normalizedBasePath = adminUrl.replaceAll("/$", "");
     // The 3-arg constructor accepts a basePath; passing it as the third
     // arg. setBasePath() does NOT update the host/port/scheme fields
-    // the request builder uses — only the constructor does.
+    // the request builder uses -- only the constructor does.
     ApiClient adminClient = new ApiClient(
         java.net.http.HttpClient.newBuilder(),
         new com.fasterxml.jackson.databind.ObjectMapper(),
         normalizedBasePath);
     var deploymentApi = new dev.restate.admin.api.DeploymentApi(adminClient);
-    String serviceHandlerUrl = "http://host.docker.internal:" + boundPort;
+    // Service-handler URL the external Restate uses to call back to us.
+    //   Default: http://host.docker.internal:<port> (works when Restate
+    //     is in Docker with `extra_hosts: host.docker.internal:host-gateway`
+    //     and the platform runs on the Docker bridge gateway host).
+    //   Override: when the env var is non-null/non-blank, use it.
+    //     Set SEMANTICDF_SERVICE_HANDLER_URL when the platform is reachable
+    //     from Restate only via an external IP (e.g., UFW blocks docker-bridge
+    //     to host traffic, or Restate runs on a different machine).
+    //     Example: SEMANTICDF_SERVICE_HANDLER_URL=http://203.0.113.1:9093
+    String defaultHandler = "http://host.docker.internal:" + boundPort;
+    String serviceHandlerUrl =
+        (serviceHandlerUrlEnv == null || serviceHandlerUrlEnv.isBlank())
+            ? defaultHandler
+            : serviceHandlerUrlEnv;
     RegisterDeploymentRequest req = new RegisterDeploymentRequest(
         new RegisterDeploymentRequestAnyOf().uri(serviceHandlerUrl));
     var resp = deploymentApi.createDeployment(req);
     return resp.getId();
+  }
+
+  /**
+   * Convenience overload: reads {@code SEMANTICDF_SERVICE_HANDLER_URL} from
+   * the environment. Tests use the 3-arg form with explicit values.
+   */
+  static String registerWithExternalRestate(String externalIngress, int boundPort)
+      throws Exception {
+    return registerWithExternalRestate(
+        externalIngress,
+        boundPort,
+        System.getenv("SEMANTICDF_SERVICE_HANDLER_URL"));
   }
 
   public static void main(String[] args) throws IOException {
@@ -420,11 +446,19 @@ public final class PlatformApplication {
     String externalIngress = System.getenv("RESTATE_INGRESS_URL");
     if (externalIngress != null && !externalIngress.isBlank()) {
       try {
-        String deploymentId = registerWithExternalRestate(externalIngress, boundPort);
+        String deploymentId =
+            registerWithExternalRestate(
+                externalIngress,
+                boundPort,
+                System.getenv("SEMANTICDF_SERVICE_HANDLER_URL"));
+        String handlerUrl =
+            System.getenv().getOrDefault(
+                "SEMANTICDF_SERVICE_HANDLER_URL",
+                "http://host.docker.internal:" + boundPort);
         System.out.println(
             "semanticdf-platform: registered deployment with external Restate at "
                 + externalIngress.replaceAll(":8080/?$", ":9070")
-                + " — service handler URL = http://host.docker.internal:" + boundPort
+                + " -- service handler URL = " + handlerUrl
                 + " deploymentId=" + deploymentId);
       } catch (Exception e) {
         System.err.println(

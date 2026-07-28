@@ -158,10 +158,38 @@ class PlatformApplicationExternalRestateTest {
                 java.nio.file.Path.of(
                     "src/main/java/io/semanticdf/platform/PlatformApplication.java")),
             StandardCharsets.UTF_8);
-    int callIdx = src.indexOf("registerWithExternalRestate(externalIngress, boundPort)");
+    // The 2-arg overload delegates to the 3-arg one with System.getenv().
+    // The call site in main() uses the 3-arg form. Find either.
+    int call2 = src.indexOf("registerWithExternalRestate(externalIngress, boundPort);");
+    int call3 = src.indexOf("registerWithExternalRestate(\n                externalIngress,");
+    int callIdx = (call2 > 0) ? call2 : call3;
     int guardIdx = src.lastIndexOf("if (externalIngress != null && !externalIngress.isBlank())");
     assertTrue(callIdx > 0, "call site must exist");
     assertTrue(guardIdx > 0 && guardIdx < callIdx, "call must be inside the env-var guard");
+  }
+
+  /**
+   * Structural check: the 3-arg overload accepts a non-null/non-blank
+   * env-var value and uses it as the service-handler URL. Pins the
+   * SEMANTICDF_SERVICE_HANDLER_URL contract at the source level.
+   */
+  @Test
+  void registerWithExternalRestate_envVarContractPinnedAtSourceLevel() throws Exception {
+    String src =
+        new String(
+            java.nio.file.Files.readAllBytes(
+                java.nio.file.Path.of(
+                    "src/main/java/io/semanticdf/platform/PlatformApplication.java")),
+            StandardCharsets.UTF_8);
+    // The 3-arg overload must read the env-var parameter and use it as the
+    // service-handler URL when non-blank.
+    assertTrue(
+        src.contains("SEMANTICDF_SERVICE_HANDLER_URL"),
+        "source must reference SEMANTICDF_SERVICE_HANDLER_URL");
+    // The 2-arg overload must read the env var via System.getenv.
+    assertTrue(
+        src.contains("System.getenv(\"SEMANTICDF_SERVICE_HANDLER_URL\")"),
+        "2-arg overload must read env var via System.getenv");
   }
 
   /**
@@ -181,5 +209,62 @@ class PlatformApplicationExternalRestateTest {
     assertTrue(
         src.contains(".replaceAll(\"/$\", \"\")"),
         "basePath must strip trailing slash to avoid SDK emitting //deployments");
+  }
+  /**
+   * When {@code SEMANTICDF_SERVICE_HANDLER_URL} is set (non-null, non-blank),
+   * the registration sends that exact URL to the external Restate. This
+   * lets the platform register with a Restate that's reachable only via
+   * an external IP (e.g., behind a host firewall that blocks the Docker
+   * bridge).
+   */
+  @Test
+  void registerWithExternalRestate_honorsServiceHandlerUrlOverride() throws Exception {
+    String override = "http://203.0.113.1:9093/";
+    PlatformApplication.registerWithExternalRestate(
+        "http://127.0.0.1:" + fakeAdminPort + "/", 9091, override);
+    assertTrue(
+        capturedBody.get().contains("\"uri\":\"http://203.0.113.1:9093/\""),
+        "expected override service-handler URI in request body, got: " + capturedBody.get());
+    assertTrue(
+        !capturedBody.get().contains("host.docker.internal"),
+        "override must replace the default host.docker.internal URI, got: "
+            + capturedBody.get());
+  }
+
+  /**
+   * When the override is null or blank, falls back to the default
+   * {@code host.docker.internal:<boundPort>}. Preserves the v0.2.2 default
+   * for the docker-compose dev setup.
+   */
+  @Test
+  void registerWithExternalRestate_fallsBackToDefaultWhenOverrideBlank() throws Exception {
+    PlatformApplication.registerWithExternalRestate(
+        "http://127.0.0.1:" + fakeAdminPort + "/", 9091, "");
+    assertTrue(
+        capturedBody.get().contains("\"uri\":\"http://host.docker.internal:9091\""),
+        "expected default service-handler URI when override is blank, got: "
+            + capturedBody.get());
+  }
+
+  /**
+   * The 2-arg overload (no env-var parameter) reads
+   * {@code SEMANTICDF_SERVICE_HANDLER_URL} from the environment via
+   * {@link System#getenv}. In a unit test JVM with no such env var set,
+   * it falls back to the default. This pins the env-var contract at the
+   * test-suite level.
+   */
+  @Test
+  void registerWithExternalRestate_twoArgOverloadFallsBackToDefaultInTestJvm() throws Exception {
+    String preExisting = System.getenv("SEMANTICDF_SERVICE_HANDLER_URL");
+    assertTrue(preExisting == null || preExisting.isBlank(),
+        "test JVM must not have SEMANTICDF_SERVICE_HANDLER_URL set; was: "
+            + preExisting);
+
+    PlatformApplication.registerWithExternalRestate(
+        "http://127.0.0.1:" + fakeAdminPort + "/", 9091);
+    assertTrue(
+        capturedBody.get().contains("\"uri\":\"http://host.docker.internal:9091\""),
+        "2-arg overload without env var must use the default, got: "
+            + capturedBody.get());
   }
 }
