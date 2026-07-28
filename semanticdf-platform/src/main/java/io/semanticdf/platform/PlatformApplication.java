@@ -12,6 +12,7 @@ import io.semanticdf.platform.model.ModelStore;
 import io.semanticdf.platform.model.NoOpModelStore;
 import io.semanticdf.platform.model.PostgresModelStore;
 import io.semanticdf.platform.catalog.CatalogService;
+import io.semanticdf.platform.query.QueryService;
 import io.semanticdf.cache.ResultCache;
 import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
@@ -333,7 +334,7 @@ public final class PlatformApplication {
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
         .bind(new ModelService(modelStore, spark, resultCache))
-        .bind(new QueryService())
+        .bind(new QueryService(models, spark, resultCache))
         .bind(new StreamingService(models, launcher, handles, catalog))
         .bind(new AuditService(auditStore))
         .bind(new CatalogService(modelStore))
