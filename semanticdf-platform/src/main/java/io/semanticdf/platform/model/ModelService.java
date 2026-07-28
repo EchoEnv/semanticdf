@@ -9,6 +9,8 @@ import io.semanticdf.SemanticTable;
 import io.semanticdf.adapters.YamlLoader;
 import io.semanticdf.cache.ResultCache;
 import io.semanticdf.lineage.Lineage;
+import io.semanticdf.platform.streaming.HotReloadingModelRegistry;
+import io.semanticdf.platform.streaming.ModelRegistry;
 
 import org.apache.spark.sql.SparkSession;
 
@@ -69,6 +71,7 @@ public class ModelService {
   private final ModelStore store;
   private final SparkSession spark;
   private final ResultCache cache;
+  private final ModelRegistry models;
 
   /**
    * Constructor. Used by {@link io.semanticdf.platform.PlatformApplication}
@@ -80,19 +83,37 @@ public class ModelService {
    *   <li>{@link SparkSession} (in-process or Spark Connect, per
    *       {@code SEMANTICDF_SPARK_CONNECT_URL});
    *   <li>{@link ResultCache} (defaults to a no-op cache when
-   *       null; v0.2.3+ can pass {@code InMemoryResultCache}).
+   *       null; v0.2.3+ can pass {@code InMemoryResultCache});
+   *   <li>{@link ModelRegistry} (the boot-time registry, typically
+   *       wrapped in {@link HotReloadingModelRegistry} so successful
+   *       {@code register()} calls propagate to {@code QueryService}
+   *       and {@code StreamingService} without a JVM restart).
    * </ul>
-   * Tests substitute their own triple via the same constructor.
+   *
+   * <p>The {@code models} parameter may be {@code null} for tests
+   * that don't exercise the runtime registry (the {@code instanceof}
+   * check in {@link #register(RegisterRequest)} is null-safe).
+   * Production always wires {@link HotReloadingModelRegistry}.
    */
-  public ModelService(ModelStore store, SparkSession spark, ResultCache cache) {
+  public ModelService(
+      ModelStore store, SparkSession spark, ResultCache cache, ModelRegistry models) {
     this.store = java.util.Objects.requireNonNull(store, "store");
     this.spark = java.util.Objects.requireNonNull(spark, "spark");
     this.cache = cache == null ? noOpCache() : cache;
+    this.models = models;
+  }
+
+  /**
+   * Backward-compatible constructor for tests that don't wire a
+   * {@link ModelRegistry}. Production uses the 4-arg constructor.
+   */
+  public ModelService(ModelStore store, SparkSession spark, ResultCache cache) {
+    this(store, spark, cache, null);
   }
 
   /** Convenience for tests + callers that don't have a cache yet. */
   public static ModelService noOp(ModelStore store, SparkSession spark) {
-    return new ModelService(store, spark, noOpCache());
+    return new ModelService(store, spark, noOpCache(), null);
   }
 
   /**
@@ -179,6 +200,17 @@ public class ModelService {
       // state is observable, not coordination, and a re-invocation
       // can re-emit without double-invalidating.
       cache.invalidateByModelAndVersion(modelName, persisted.version());
+
+      // STEP F (H3 fix): propagate the new SemanticTable into the
+      // runtime registry so QueryService.runQuery / StreamingService.run
+      // see the model on the next invocation. The instanceof check is
+      // intentional -- we don't want to pollute the ModelRegistry
+      // interface with mutation semantics. When the test-only
+      // YamlModelRegistry is passed (no decorator), this branch is
+      // a no-op and the registry remains read-only.
+      if (models instanceof HotReloadingModelRegistry hot) {
+        hot.register(modelName, compiled);
+      }
     } catch (Exception e) {
       state.set(REGISTRATION_STATUS, "failed");
       throw e;
