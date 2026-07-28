@@ -147,7 +147,7 @@ Postgres on miss). **No Spark action. Sub-100ms p99.**
 - **3 platform/Restate replicas across AZs** (single-region for v1).
   Stateless Restate runtime; all state in Postgres.
 
-### 2.5.1 Audit-event persistence (PR-A, v0.2.2)
+### 2.5.1 Audit-event persistence
 
 The {@code AuditService} backs its event log with two storage tiers:
 
@@ -174,7 +174,7 @@ URL the stream catalog uses) and runs monthly-partition
 coverage is current-month + next-2-months; older data requires a
 separate retention/ingestion path.
 
-### 2.5.2 Model registry persistence (PR-B, v0.2.2)
+### 2.5.2 Model registry persistence
 
 The {@code ModelService} writes the runtime-registered model
 manifest to Postgres via the {@code ModelStore}:
@@ -199,8 +199,9 @@ after the journal bookkeeping, OUTSIDE any {@code Restate.run}
 block — cache state is observable but not coordination, so a
 re-invocation can re-emit without double-invalidating.
 
-For P1 the cache is {@code ResultCache.NoOp} (no PR-C query cache
-yet); PR-C will swap to a real cache.
+For P1 the cache defaults to {@code ResultCache.NoOp}; operators
+opt in to {@code io.semanticdf.cache.InMemoryResultCache} when
+they need a real cache (env-driven toggle in a v0.2.3 follow-up).
 
 The {@code CatalogService} (read-only) reads from the same
 {@code ModelStore}: {@code listModels} returns all
@@ -288,17 +289,17 @@ inside the platform.**
 ## 5. Engine interop
 
 **REST for agents, Restate for engine coordination, engine-native
-protocol (Spark Connect, Trino client) for the data plane.** (Option C,
-revised by PR #240 — the engine call is NOT Restate.)
+protocol (Spark Connect, Trino client) for the data plane.**
 
 - **Agents (LLM, BI):** REST. Short-lived, stateless, JSON-shaped. Same
   surface as the prior design.
 - **Engine data plane (Spark, Trino):** Native engine protocol.
   - Spark: **Spark Connect (gRPC)** — `sc://host:port` form. The platform
     becomes a thin control-plane JVM that submits queries to a
-    long-running Spark cluster. PR #240 added `SEMANTICDF_SPARK_CONNECT_URL`
-    env var to `PlatformApplication.main`; the library's `SdfSession.createFromEnv`
-    routes through the right factory branch based on the env var.
+    long-running Spark cluster. The `SEMANTICDF_SPARK_CONNECT_URL`
+    env var routes `PlatformApplication.main` through the library's
+    `SdfSession.createFromEnv` factory branch; unset means
+    in-process Spark via `master("local[*]")`.
   - Trino: JDBC (legacy) or Trino Client (newer). Either is engine-native,
     not Restate-shaped.
   - Without the env var, the platform falls back to in-process Spark via

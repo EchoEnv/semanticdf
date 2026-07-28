@@ -1,6 +1,6 @@
 # Current scope & guardrails
 
-This document explains what SemanticDF **does today** (post-v0.2.0) and the
+This document explains what SemanticDF **does today** (post-v0.2.2) and the
 guardrails worth knowing before you adopt it. Each item pairs the
 *current behavior* with a *workaround* and a *roadmap hint* — so you
 can plan around what's here now and what's coming.
@@ -295,10 +295,10 @@ share two characteristics:
    issue — that's the signal that moves a roadmap item into a PR.
 
 For the full feature roadmap with priorities, see
-[`docs/feature-roadmap.md`](feature-roadmap.md).
+[`docs/backlog-type-safety.md`](backlog-type-safety.md).
 For the architectural decisions behind these deferrals, see
 [`docs/adr/`](adr/).
 
 ---
 
-*This document is updated each release. Last updated: v0.2.0.*
+*This document is updated each release. Last updated: v0.2.2.*
