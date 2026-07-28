@@ -5,9 +5,12 @@
 #   - restate: the Restate server (one process per node for v1)
 #
 # Usage:
-#   docker-compose -f semanticdf-platform/docker-compose.yml up -d
+#   docker compose -f semanticdf-platform/docker-compose.yml up -d
 #   cd semanticdf-platform
-#   PORT=8080 mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
+#   MAVEN_OPTS="--add-opens=..." \
+#     mvn -Dsemanticdf.version=0.2.1 exec:java \
+#       -Dexec.mainClass=io.semanticdf.platform.PlatformApplication \
+#       -Dexec.classpathScope=test
 
 version: "3.9"
 
@@ -29,20 +32,32 @@ services:
       timeout: 5s
       retries: 5
 
+  # Restate server - persistent, exposed for UI/API access.
+  # We use the official `docker.restate.dev` registry (not Docker Hub's
+  # `restatedev/restate`) so we always pull the same artifact.
+  # Port mapping mirrors the user's `docker run` example:
+  #   - 8080 ingress (HTTP)
+  #   - 9070 admin (JSON API)
+  #   - 9071 metrics (Prometheus)
+  # `host.docker.internal` is mapped to the host so the platform
+  # (running on the host via `mvn exec:java`) can reach this container.
   restate:
-    # The Restate server (Rust). Persists its journal to Postgres.
-    image: restatedev/restate:latest
-    container_name: semanticdf-platform-restate
+    image: docker.restate.dev/restatedev/restate:latest
+    container_name: restate_dev
+    restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       RESTATE_DB_URL: postgresql://semanticdf:semanticdf@postgres:5432/semanticdf
       RESTATE_NODE_NAME: restate-node-1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
-      - "9070:8080"   # Restate admin + service ports
-      - "9071:9090"   # Restate metrics
-    command: ["server", "--config-file", "/config/config.toml"]
+      - "8080:8080"   # Restate HTTP ingress
+      - "9070:9070"   # Restate admin API
+      - "9071:9071"   # Restate metrics
+    command: ["--config-file", "/config/config.toml"]
     volumes:
       - ./restate-config.toml:/config/config.toml:ro
 
