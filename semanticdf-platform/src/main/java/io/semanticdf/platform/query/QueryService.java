@@ -285,6 +285,34 @@ public class QueryService {
    * returns so the cache layer (in-memory) and the wire shape
    * (positional rows) operate on the library's native type.
    */
+  /**
+   * Inverse of {@link #toRestateCachedRow}: rebuilds a library-side
+   * {@link CachedResult} from a journaled {@link RestateCachedRow}.
+   *
+   * <p><b>LANDMINE WARNING (PR #254 / v0.2.2 DE finding H7):</b>
+   * the rebuilt {@link org.apache.spark.sql.types.StructType}
+   * declares every field as {@link
+   * org.apache.spark.sql.types.DataTypes.StringType}. The cell
+   * VALUES are correctly typed ({@link java.lang.Long}, {@link
+   * java.math.BigDecimal}, {@link java.sql.Timestamp}, etc.)
+   * because the {@link #decodeCell} helper consults the
+   * per-column {@code fieldTypes} tag list. The schema is
+   * intentionally permissive because the journal does not
+   * preserve the full {@code StructType} (no nullable, no
+   * metadata, no inner struct). Today's consumers read cells via
+   * {@link io.semanticdf.cache.CacheBridge#rowsAsJava} (which
+   * returns {@code List<List<Object>>}) and read field names via
+   * {@code CacheBridge.schemaFieldsAsJava} (which returns
+   * {@code List<String>}). Neither consumer consults the
+   * {@code schema.types} field. As long as the wire shape stays
+   * {@code List<List<Object>>} + {@code List<String> measures},
+   * the StringType schema is a no-op. If a v0.2.3+ change
+   * starts calling {@code cached.toDataFrame(spark)} on a
+   * reconstructed {@code CachedResult}, the StringType schema
+   * would coerce the typed cells back to strings — silent type
+   * loss for {@code BigDecimal} precision and {@code Timestamp}
+   * nanos. To guard against that, see {@code RestateCachedRow}.
+   */
   static CachedResult fromRestateCachedRow(RestateCachedRow journaled) {
     int nCols = journaled.fieldNames().size();
     int nRows = journaled.rows().size();
