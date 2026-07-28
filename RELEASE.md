@@ -1,5 +1,56 @@
 # Release notes
 
+## v0.2.2 — services-completion: durable registries, cache-first query path
+
+This release completes the platform's services-completion charter: every Restate service that previously existed as a P1 skeleton now executes against a durable, replay-safe substrate. The streaming foundation from v0.2.1 is untouched.
+
+### What changed
+
+#### Platform runtime — service wiring
+
+- **`AuditService` → durable Postgres.** The `append` handler now writes through to a partitioned `audit_events` table under flag `SEMANTICDF_AUDIT_PERSIST=true`. The journal-tier `LAST_DEDUP_HASH` / `LAST_WRITE_OFFSET` keeps its coordination role; Postgres adds the durable layer. `Restate.run("audit.append", ...)` ensures replay safety on mid-write crash. Default-off preserves the v0.2.1 behavior.
+- **`ModelService.register` → end-to-end.** Five sequenced steps: dedup → `Restate.run("model.compile", ...)` against the library's `YamlLoader` + temp-file (deleted in `finally`) → `Restate.run("model.lineage", ...)` via the new library helper `Lineage.workspaceJsonFor(model)` → `Restate.run("model.persist", ...)` against Postgres → journal bookkeeping → `cache.invalidateByModelAndVersion(name, version)` (outside any `Restate.run`). Same flag-driven opt-in via `SEMANTICDF_MODELS_PERSIST=true`.
+- **`CatalogService.listModels` and `describeModel`** read from the same `ModelStore`. `describeModel` returns the latest version's YAML body + lineage JSON + manifest hash + registered-at epoch-millis.
+- **`QueryService.runQuery` → cache-first Spark execution.** Cache key built from the wire DTO directly (raw SQL `where` included); cache hit returns cached rows without re-executing the Spark plan; cache miss executes via `Restate.run("query.execute", ...)` so a JVM crash mid-query replays the cached `CachedResult` without re-running the Spark plan. Default cache is `ResultCache.NoOp()`; operators wire `InMemoryResultCache` in a v0.2.3 follow-up.
+- **`Library` — six new methods + one fix.** `CacheBridge.executeQuery(...)` (with a 100k-row driver-memory guard) + `CacheBridge.platformCacheKey(...)` (platform-side cache key that includes the raw `where` filter) + `CacheBridge.rowsAsJava` / `schemaFieldsAsJava` / `buildQueryRequest` / `modelNameOrUnknown` Java-friendly facade. `Lineage.workspaceJsonFor(model, prettyPrint)` helper for single-model lineage JSON.
+
+#### Critical fix (post-merge review)
+
+The cache-key helper that landed with the QueryService wiring initially dropped the `where` filter on the floor — two callers with the same model+measures+dimensions but different SQL `where` strings would share the same cache entry, returning one caller's rows for the other's query (silent data corruption). The post-merge `platformCacheKey` fix hashes the full wire DTO directly: model, version, measures, dimensions, and `where`. Pinning is via a regression test that asserts three queries with different `where` strings produce three distinct cache keys.
+
+#### Engine mode
+
+- **`SEMANTICDF_SPARK_CONNECT_URL` is now the production topology.** When set (e.g. `sc://spark-connect:15002`), the platform becomes a pure control plane: a thin JVM that submits queries to a long-running Spark Connect cluster via gRPC. The cluster's lifetime is decoupled from the platform's; the platform initiates nothing Spark-related beyond the gRPC client. Unset keeps the v0.2.1 in-process Spark via `master("local[*]`)`. Flag-gated, no code-path switch — both modes route through the library's `SdfSession.createFromEnv` factory.
+
+#### Environment variables (additions to v0.2.1)
+
+- `SEMANTICDF_SPARK_CONNECT_URL` — switch to Spark Connect control-plane mode (e.g. `sc://spark-connect:15002`). Requires Spark 4.0+ on the platform module.
+- `SEMANTICDF_AUDIT_PERSIST` — `true` enables the durable audit log (default `false`).
+- `SEMANTICDF_MODELS_PERSIST` — `true` enables the durable model registry (default `false`).
+- `SPARK_MASTER` — currently unused (the library hardcodes `local[*]`); reserved for future single-node tuning.
+
+### Test status
+
+- Library: **775 tests, all green** on Spark 3.5.8 and 4.1.1.
+- Platform: **138 tests, all green**.
+- New tests pin: the cache-poisoning regression (5), `audit.append` replay-safety contracts, `model.compile` / `model.lineage` / `model.persist` step ordering, `where`-in-cache-key end-to-end. (Integration test for `StreamingService` is gated on Docker; see `StreamingServiceIntegrationTest` docstring for scope.)
+
+### What's deferred (v0.2.3+)
+
+- `ResultCache.NoOp()` vs `InMemoryResultCache` env-driven toggle for production deployments.
+- Audit emit on `QueryService.runQuery` (today only `streaming.started` / `streaming.restarted` / `model.registered` produce audit events; query events follow in v0.2.3).
+- Structured-`Predicate` translation from raw SQL `where` strings into the library's `Predicate` AST.
+- Typed `ResultDecoder[T]` rows (wire-shape change deferred).
+- Caffeine L1 cache in the platform's REST layer.
+- Multi-node HA (3 platform/Restate replicas across AZs).
+- Engine adapters beyond Spark Connect (Trino plugin, Spark SDK).
+
+### Migration
+
+For consumers of the `semanticdf` library 0.2.1 → 0.2.2: **no migration required**. The library is consumed by `semanticdf-platform` only; consumers of the user-facing library API see no change.
+
+For operators of `semanticdf-platform`: **opt-in flags** for the new durability (`SEMANTICDF_AUDIT_PERSIST`, `SEMANTICDF_MODELS_PERSIST`, `SEMANTICDF_SPARK_CONNECT_URL`) — all default-off / set-required. Existing v0.2.1 deployments upgrade cleanly; the schemas are pure additive (`audit_events`, `models` tables).
+
 ## v0.2.1 — Restate-native platform foundation (P1)
 
 This release lands the foundation of the `semanticdf-platform` module: a Restate-native JVM runtime that hosts the platform's five services (`ModelService`, `QueryService`, `StreamingService`, `AuditService`, `CatalogService`), boots an HTTP ingress, and reconciles streaming queries across JVM crashes. The library `semanticdf` 0.2.1 is unchanged from the user's perspective — this release is the standalone platform module moving from skeleton to feature-complete single-replica.

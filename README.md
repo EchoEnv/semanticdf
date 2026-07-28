@@ -82,7 +82,7 @@ guarantee that they're asking for the right thing.
 
 - **[`docs/getting-started.md`](docs/getting-started.md) — 5-minute paste-and-run setup (Maven + SparkSession + first query)**
 - [`docs/guide.md`](docs/guide.md) — narrative walkthrough: how SemanticDF works, in plain English
-- **[`semanticdf-platform/README.md`](semanticdf-platform/README.md)** — the standalone Restate-native platform runtime (long-running JVM with a Restate ingress, post-crash query reconciliation, bulk-startup recovery). v0.2.1+ ships this as a separate Maven module that depends on the library.
+- **[`semanticdf-platform/README.md`](semanticdf-platform/README.md)** — the standalone Restate-native platform runtime (long-running JVM with a Restate ingress, post-crash query reconciliation, bulk-startup recovery). Ships as a separate Maven module that depends on the library.
 - [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)

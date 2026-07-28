@@ -6,20 +6,33 @@ This module is a separate Maven project (not a submodule of the parent `semantic
 
 ## Status
 
-**P1 skeleton.** Handler bodies are stubs. The full implementation lands in subsequent PRs (per the 6-phase migration roadmap in the design doc).
+Standalone Restate-native runtime, post-v0.2.2. All five services are
+wired to their durable Postgres substrate (when the corresponding
+environment flags are set) and to the platform's `SparkSession`. The
+streaming pipeline runs end-to-end with crash reconciliation; the model
+registry persists across restarts; the audit log is replayable; the
+query path serves from a result cache.
 
-What's in this skeleton:
-- The 5 Restate services with the right Restate primitives
-- A `PlatformApplication` main class that boots the runtime + HTTP server
-- A `pom.xml` with the right dependency set
-- A `docker-compose.yml` for local dev (Postgres + Restate server)
+Flag-gated durability (all default-off today — the platform runs end-
+to-end in journal-only mode without any Postgres):
 
-What's NOT in this skeleton:
-- Actual `semanticdf.of(spark, model)` integration inside `Restate.run` blocks
-- The Caffeine L1 cache (separate PR)
-- The engine adapter (Trino plugin, Spark SDK) — P2
-- The auth layer (mTLS, API key) — separate PR
-- The Restate admin client for ops tooling — separate PR
+| Env var | When true | Default |
+|---|---|---|
+| `SEMANTICDF_AUDIT_PERSIST` | `AuditService` writes to Postgres | false |
+| `SEMANTICDF_MODELS_PERSIST` | `ModelService.register` writes to Postgres | false |
+
+The streaming catalog (`PostgresStreamCatalog`) is built-in and enabled
+whenever `SEMANTICDF_CATALOG_JDBC_URL` is set. See
+[`docs/design/platform-architecture.md`](../docs/design/platform-architecture.md)
+§2.5 for the storage-tier story.
+
+What remains for v0.2.3+ follow-ups:
+
+- **Caffeine L1 cache** in the platform's REST layer — sub-100µs hits bypass Restate.
+- **Engine adapter** (Trino plugin, Spark SDK beyond Connect) — P2 in the roadmap.
+- **Auth layer** (mTLS for service-to-service, API-key for REST clients).
+- **Multi-node HA** — 3 platform/Restate replicas across AZs (P3).
+- **Restate admin client** for ops tooling.
 
 ## Architecture
 
@@ -78,15 +91,12 @@ cd semanticdf-platform
 mvn test
 ```
 
-## P1 deliverables (the actual implementation work)
+## Post-v0.2.2 deliverables (still on the roadmap)
 
-Per the design doc, the P1 implementation has these deliverables (separate PRs):
-
-1. **Wire `semanticdf.of(spark, model)` into `ModelService.register`** — the first cross-language boundary inside a `Restate.run` block. Needs a deterministic-purity audit of the library first.
-2. **Postgres-backed model registry** — replace the in-process `Models` map (in `semanticdf-mcp/Models.scala`) with `ModelService` reads from Postgres.
-3. **Caffeine L1 cache** in the platform's REST layer — sub-100µs hits bypass Restate.
+1. **Caffeine L1 cache** in the platform's REST layer — sub-100µs hits bypass Restate.
+2. **Multi-node HA** — 3 platform/Restate replicas across AZs (P3 in the design doc).
+3. **Engine adapter** — Trino plugin + Spark SDK (P2 in the roadmap).
 4. **Auth layer** — mTLS for service-to-service (Restate-managed), API-key for REST clients.
-5. **One end-to-end smoke test** that boots the runtime + drives a real query.
 
 ## Design decisions specific to this module
 
@@ -99,7 +109,7 @@ Per the design doc, the P1 implementation has these deliverables (separate PRs):
 
 ```
 semanticdf-platform/
-├── pom.xml                                       Maven project, depends on semanticdf 0.2.0 + Restate 2.8.0
+├── pom.xml                                       Maven project, depends on the semanticdf library + Restate 2.8.0
 ├── docker-compose.yml                            Postgres + Restate server for local dev
 ├── README.md                                     This file
 └── src/
