@@ -230,6 +230,25 @@ class QueryServiceRestateEndToEndTest {
     return max;
   }
 
+  @org.junit.jupiter.api.AfterAll
+  static void tearDownAll() throws java.io.IOException {
+    // Match the cleanup pattern in QueryServiceEndToEndTest.java:90-105.
+    // Spark session leak: PR #250's review caught this — without
+    // spark.stop(), the test JVM's SparkSession would survive to
+    // subsequent test classes within the same surefire fork, leaking
+    // the BlockManager, Netty transport, and the daemon executor
+    // thread pool.
+    if (spark != null) {
+      spark.stop();
+    }
+    if (modelsDir != null) {
+      try (var walk = Files.walk(modelsDir)) {
+        walk.sorted(java.util.Comparator.reverseOrder())
+            .forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignored) {} });
+      }
+    }
+  }
+
   /** Type precheck: load the YAML model at class-init and assert it
    *  produced a non-null SemanticTable. Surfaces fixture errors with
    *  a clear error message rather than the catch-all NPE later. */
