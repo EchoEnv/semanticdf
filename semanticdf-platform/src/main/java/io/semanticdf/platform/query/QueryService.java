@@ -120,28 +120,28 @@ public class QueryService {
           "model lookup failed for '" + request.modelName() + "': " + e.getMessage(), e);
     }
 
-    // STEP 2: cache key. Pulls in the model's version so a version
-    // bump produces a different cache key (auto-invalidation).
-    final io.semanticdf.audit.QueryRequest libReq =
-        CacheBridge.buildQueryRequest(
+    // STEP 2: cache key. Platform-side helper that hashes the FULL
+    // wire DTO including the raw SQL `where` filter, so two callers
+    // with different `where` strings get different cache entries
+    // (PR-C-fix-1, supersedes the library's CacheKey.forRequest
+    // path which would have collapsed them).
+    final String cacheKey =
+        CacheBridge.platformCacheKey(
             request.modelName(),
             model.version(),
             request.measures(),
-            request.dimensions());
-    final Option<String> cacheKey = CacheKey.forRequest(libReq);
+            request.dimensions(),
+            request.where());
 
     // STEP 3: cache lookup (deterministic; pure).
-    if (cacheKey.isDefined()) {
-      Option<CachedResult> cached = cache.get(cacheKey.get());
-      if (cached.isDefined()) {
-        return toQueryResult(model, cached.get());
-      }
+    Option<CachedResult> cached = cache.get(cacheKey);
+    if (cached.isDefined()) {
+      return toQueryResult(model, cached.get());
     }
 
     // STEP 4: cache-miss execution. The Spark call goes inside
     // Restate.run(...) so a JVM crash mid-query replays the cached
     // CachedResult without re-executing the Spark plan.
-    final String ck = cacheKey.isDefined() ? cacheKey.get() : null;
     final CachedResult fresh =
         Restate.run(
             "query.execute",
@@ -156,9 +156,8 @@ public class QueryService {
     // STEP 5: cache populate. Tags the entry with (model_name, version)
     // so ModelService.register's invalidateByModelAndVersion(name, version)
     // hook drops the entry on a model version bump.
-    if (ck != null) {
-      cache.putWithModelAndVersion(ck, fresh, request.modelName(), model.version());
-    }
+    cache.putWithModelAndVersion(
+        cacheKey, fresh, request.modelName(), model.version());
 
     return toQueryResult(model, fresh);
   }
