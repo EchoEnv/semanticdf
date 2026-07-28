@@ -159,6 +159,101 @@ class RestateCachedRowTypeFidelityTest {
   }
 
   /**
+   * PR #252 fix for the DE finding C1: a {@code Timestamp} must
+   * round-trip with the SAME INSTANT regardless of the JVM timezone
+   * the journal was journaled / replayed in. Pre-#250 it was
+   * journaled via {@code Timestamp.toString()} (local-time text)
+   * and decoded via {@code Timestamp.valueOf()} (local-time parse) —
+   * a JVM restart in a different timezone would silently shift the
+   * instant. Post-#250 (with the Instant-encoded journal), the
+   * underlying millis are preserved.
+   */
+  @Test
+  void roundTripPreservesTimestampAcrossTimezones() throws Exception {
+    // The test fixture's static-init creates the SparkSession with
+    // spark.sql.session.timeZone=UTC, so journal encoding runs in
+    // UTC. We force-decoding to happen under a non-UTC default so
+    // the round-trip's two halves run under different zones — the
+    // critical path that exposed the original DE finding.
+    java.util.TimeZone defaultTz = java.util.TimeZone.getDefault();
+    try {
+      java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(
+          "America/Los_Angeles"));
+
+      java.sql.Timestamp original = java.sql.Timestamp
+          .valueOf("2024-01-15 10:30:45.123456789");
+
+      CachedResult original$ = cached("ts", original);
+      String json = journalRoundTrip(original$, "timestamp");
+      Object[] roundtripped = readFirstRowCells(json);
+
+      assertTrue(roundtripped[0] instanceof java.sql.Timestamp,
+          "Timestamp must round-trip as Timestamp; was "
+              + roundtripped[0].getClass());
+      // The critical assertion: the underlying instant is the
+      // same regardless of which timezone the JVM is in when the
+      // decode happens.
+      assertEquals(original.getTime(),
+          ((java.sql.Timestamp) roundtripped[0]).getTime(),
+          "Timestamp instant must survive a JVM timezone change");
+      assertEquals(original.getNanos(),
+          ((java.sql.Timestamp) roundtripped[0]).getNanos(),
+          "Timestamp nanos must survive the journal round-trip");
+    } finally {
+      java.util.TimeZone.setDefault(defaultTz);
+    }
+  }
+
+  /**
+   * PR #252 fix for the DE finding C2: a {@code DateType} Spark
+   * column must round-trip as a {@code java.sql.Date}, not a
+   * {@code java.sql.Timestamp}. Pre-#250 the type tag was the same
+   * for both ("timestamp") and the decoder used
+   * {@code Timestamp.valueOf(s)} which is wrong for date-only data.
+   * Post-#250 the tag is distinct ("date" vs "timestamp") and the
+   * decoder reconstructs the right Java type.
+   */
+  @Test
+  void roundTripPreservesDateAsDate() throws Exception {
+    java.sql.Date original = java.sql.Date.valueOf("2024-01-15");
+    CachedResult original$ = cached("d", original);
+
+    // The test fixture's `cached(...)` calls `inferType(...)` which
+    // is a separate code path from `sparkTypeTag` — we need the
+    // schema type to be `DateType` (not `StringType`) so that
+    // `toRestateCachedRow` actually emits the new "date" tag.
+    CachedResult withDateSchema = withDateSchema(original$);
+    String json = journalRoundTrip(withDateSchema, "date");
+    Object[] roundtripped = readFirstRowCells(json);
+
+    assertTrue(roundtripped[0] instanceof java.sql.Date,
+        "DateType must round-trip as java.sql.Date, not "
+            + "java.sql.Timestamp; was " + roundtripped[0].getClass());
+    // LocalDate equality (no time-of-day component to drift).
+    assertEquals(original.toLocalDate(),
+        ((java.sql.Date) roundtripped[0]).toLocalDate());
+  }
+
+  /**
+   * Re-build a CachedResult whose schema declares the single column
+   * as a {@link org.apache.spark.sql.types.DateType}, not a
+   * {@link StringType}. The shared {@code cached} factory uses
+   * {@code inferType} which falls back to {@code StringType} for
+   * non-typed inputs.
+   */
+  private static CachedResult withDateSchema(CachedResult c) {
+    org.apache.spark.sql.types.StructType schema =
+        new org.apache.spark.sql.types.StructType(new org.apache.spark.sql.types.StructField[] {
+            new org.apache.spark.sql.types.StructField(
+                c.schema().fields()[0].name(),
+                org.apache.spark.sql.types.DataTypes.DateType,
+                true,
+                org.apache.spark.sql.types.Metadata.empty())
+        });
+    return new CachedResult(c.rows(), schema);
+  }
+
+  /**
    * Simulate the journal round-trip: build a CachedResult with the
    * given cell value, call {@code toRestateCachedRow} (the journal
    * write path), serialize the result to JSON (Restate's default

@@ -58,6 +58,7 @@ public record RestateCachedRow(
   public static final String T_DECIMAL = "decimal";
   public static final String T_BOOLEAN = "boolean";
   public static final String T_TIMESTAMP = "timestamp";
+  public static final String T_DATE = "date";
   public static final String T_BINARY = "binary";
 
   /**

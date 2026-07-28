@@ -236,9 +236,10 @@ public class QueryService {
       return RestateCachedRow.T_DECIMAL;
     } else if (dt instanceof org.apache.spark.sql.types.BooleanType) {
       return RestateCachedRow.T_BOOLEAN;
-    } else if (dt instanceof org.apache.spark.sql.types.TimestampType
-        || dt instanceof org.apache.spark.sql.types.DateType) {
+    } else if (dt instanceof org.apache.spark.sql.types.TimestampType) {
       return RestateCachedRow.T_TIMESTAMP;
+    } else if (dt instanceof org.apache.spark.sql.types.DateType) {
+      return RestateCachedRow.T_DATE;
     } else if (dt instanceof org.apache.spark.sql.types.BinaryType) {
       return RestateCachedRow.T_BINARY;
     }
@@ -249,7 +250,12 @@ public class QueryService {
    * Encode a Spark cell value to a string for journal-round-trip.
    * Uses Java's standard {@code toString} for most types and
    * explicit handling for the precision-sensitive ones
-   * (BigDecimal, Timestamp, byte[]).
+   * (BigDecimal, Timestamp, Date, byte[]).
+   *
+   * <p>Timestamp and Date use UTC-anchored representations
+   * (Instant / LocalDate) so the journal survives a JVM restart in
+   * a different timezone without silent wall-clock drift (PR #252
+   * fix for the DE finding C1).
    */
   static String encodeCell(Object cell, org.apache.spark.sql.types.DataType dt) {
     if (cell == null) return null;
@@ -258,7 +264,19 @@ public class QueryService {
     }
     if (dt instanceof org.apache.spark.sql.types.TimestampType
         || dt instanceof org.apache.spark.sql.types.DateType) {
-      return cell.toString();
+      // Branch on the type tag (set in sparkTypeTag) rather than
+      // blindly calling cell.toString() — cell.toString() on a
+      // Timestamp emits local-time text, which is wrong across
+      // timezone changes.
+      if (cell instanceof java.sql.Timestamp) {
+        // ts.toInstant() preserves nanos; Instant.ofEpochMilli(ts.getTime())
+        // would round them to millis. ISO-8601 with fractional seconds
+        // round-trips through Instant.parse on the decode side.
+        return ((java.sql.Timestamp) cell).toInstant().toString();
+      }
+      if (cell instanceof java.sql.Date) {
+        return ((java.sql.Date) cell).toLocalDate().toString();
+      }
     }
     if (dt instanceof org.apache.spark.sql.types.BinaryType) {
       return java.util.Base64.getEncoder().encodeToString((byte[]) cell);
@@ -267,7 +285,15 @@ public class QueryService {
       return ((java.math.BigDecimal) cell).toPlainString();
     }
     if (cell instanceof java.sql.Timestamp) {
-      return cell.toString();
+      // Fallback for cells typed as Timestamp but where the schema
+      // tag is something else (e.g., user passed a Timestamp in
+      // a non-TimestampType column). toInstant() preserves nanos.
+      return ((java.sql.Timestamp) cell).toInstant().toString();
+    }
+    if (cell instanceof java.sql.Date) {
+      // Fallback for cells typed as Date but with non-Date schema
+      // tag. Use LocalDate (no timezone).
+      return ((java.sql.Date) cell).toLocalDate().toString();
     }
     if (cell instanceof byte[]) {
       return java.util.Base64.getEncoder().encodeToString((byte[]) cell);
@@ -344,7 +370,15 @@ public class QueryService {
       case RestateCachedRow.T_BOOLEAN:
         return Boolean.valueOf(encoded);
       case RestateCachedRow.T_TIMESTAMP:
-        return java.sql.Timestamp.valueOf(encoded);
+        // PR #252: encode as Instant (UTC). Timestamp.from(Instant)
+        // gives a Timestamp with the same Instant regardless of JVM
+        // timezone — the underlying millis are preserved.
+        return java.sql.Timestamp.from(java.time.Instant.parse(encoded));
+      case RestateCachedRow.T_DATE:
+        // PR #252: encode as LocalDate (no time, no zone). Date's
+        // underlying value is reconstructed at the JVM-default midnight
+        // — date-only data, so the timezone doesn't shift the day.
+        return java.sql.Date.valueOf(java.time.LocalDate.parse(encoded));
       case RestateCachedRow.T_BINARY:
         return java.util.Base64.getDecoder().decode(encoded);
       default:
