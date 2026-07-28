@@ -222,6 +222,7 @@ public class QueryService {
    */
   static String sparkTypeTag(org.apache.spark.sql.types.DataType dt) {
     if (dt == null) return RestateCachedRow.T_NULL;
+    if (dt instanceof org.apache.spark.sql.types.NullType) return RestateCachedRow.T_NULL;
     if (dt instanceof org.apache.spark.sql.types.StringType) {
       return RestateCachedRow.T_STRING;
     } else if (dt instanceof org.apache.spark.sql.types.IntegerType
@@ -243,7 +244,13 @@ public class QueryService {
     } else if (dt instanceof org.apache.spark.sql.types.BinaryType) {
       return RestateCachedRow.T_BINARY;
     }
-    return RestateCachedRow.T_STRING;  // safe fallback
+    throw new IllegalArgumentException(
+        "RestateCachedRow: unsupported Spark type: " + dt.getClass().getSimpleName()
+        + " (nested types like ArrayType / MapType / StructType /"
+        + " CalendarIntervalType are not safe to journal because Jackson"
+        + " would silently coerce their content to a String. Add a new"
+        + " tag in RestateCachedRow + encoder/decoder arms in QueryService"
+        + " before wiring this type through the cache.)");
   }
 
   /**
