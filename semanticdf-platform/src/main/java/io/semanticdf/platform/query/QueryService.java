@@ -18,7 +18,7 @@ import java.util.List;
 import scala.Option;
 
 /**
- * QueryService — stateless query routing.
+ * QueryService â stateless query routing.
  *
  * <p>Plain {@code @Service} (stateless, not {@code VirtualObject} or
  * {@code Workflow}). Each query is a short-lived Spark action;
@@ -27,30 +27,30 @@ import scala.Option;
  *
  * <p>The cache pattern mirrors the plan-doc C.3:
  * <ol>
- *   <li><b>Model lookup</b> via {@link ModelRegistry} — deterministic,
+ *   <li><b>Model lookup</b> via {@link ModelRegistry} â deterministic,
  *       pure, no {@code Restate.run} needed.
- *   <li><b>Cache key</b> via library's {@code CacheKey.forRequest} —
+ *   <li><b>Cache key</b> via library's {@code CacheKey.forRequest} â
  *       SHA-256 over the full request shape including model version.
  *       Auto-invalidation: a version bump produces a different cache
  *       key, so old entries become unreachable and LRU evicts them.
- *   <li><b>Cache lookup</b> via {@code ResultCache.get} —
+ *   <li><b>Cache lookup</b> via {@code ResultCache.get} â
  *       deterministic, no {@code Restate.run} needed.
- *   <li><b>Cache-miss execution</b> — the Spark {@code toDataFrame}
+ *   <li><b>Cache-miss execution</b> â the Spark {@code toDataFrame}
  *       call goes inside {@code Restate.run("query.execute", ...)} via
  *       the library's {@link CacheBridge#executeQuery} helper so a JVM
  *       crash mid-query replays the cached {@code CachedResult}
  *       without re-executing the Spark plan.
- *   <li><b>Cache populate</b> — {@code putWithModelAndVersion} tags
+ *   <li><b>Cache populate</b> â {@code putWithModelAndVersion} tags
  *       the entry for the sidecar
  *       {@link ResultCache#invalidateByModelAndVersion(String, int)}
  *       called from {@code ModelService.register}.
  * </ol>
  *
  * <p>Wire shape: the {@code QueryResult.rows} field is
- * {@code List<List<Object>>} — a positional row projection.
+ * {@code List<List<Object>>} â a positional row projection.
  * Typed decoding via {@code ResultDecoder[T]} is a v0.2.3+
- * improvement that would change the wire shape (see plan §C.3
- * «Locked as»).
+ * improvement that would change the wire shape (see plan Â§C.3
+ * Â«Locked asÂ»).
  *
  * <p>Audit: the library's audit plumbing for query events is
  * deliberately NOT wired in PR-C. The plan treats query-event
@@ -71,13 +71,13 @@ public class QueryService {
    * Constructor. Used by {@link io.semanticdf.platform.PlatformApplication}
    * (composition root) which wires:
    * <ul>
-   *   <li>{@link ModelRegistry} — the platform's existing registry
+   *   <li>{@link ModelRegistry} â the platform's existing registry
    *       (filesystem-loaded at startup + runtime-registered via
    *       PR-B's {@code ModelService}).
-   *   <li>{@link SparkSession} — the platform's shared session
+   *   <li>{@link SparkSession} â the platform's shared session
    *       (in-process or Spark Connect, per
    *       {@code SEMANTICDF_SPARK_CONNECT_URL}).
-   *   <li>{@link ResultCache} — library trait. Default for P1
+   *   <li>{@link ResultCache} â library trait. Default for P1
    *       is {@code ResultCache.NoOp} (no caching until operators
    *       wire {@code InMemoryResultCache}).
    * </ul>
@@ -95,7 +95,7 @@ public class QueryService {
   }
 
   /**
-   * Run a query. {@code @Service} — stateless, no per-key
+   * Run a query. {@code @Service} â stateless, no per-key
    * serialization. Concurrent reads are not journaled.
    *
    * <p>Returns the canonical {@link QueryResult} positional
@@ -147,7 +147,7 @@ public class QueryService {
     // Java record with a plain List<Object[]> per row) instead of
     // the library's CachedResult (which carries Array<Row>). Spark's
     // Row is abstract, and Jackson cannot deserialize it back on
-    // replay â that's a real replay-safety bug we surface here via
+    // replay Ã¢ÂÂ that's a real replay-safety bug we surface here via
     // this conversion at the journal boundary.
     final RestateCachedRow journaled =
         Restate.run(
@@ -185,29 +185,97 @@ public class QueryService {
    *
    * <p>Null cells are preserved as null (Row's per-cell null tracking
    * carries through to {@code Object[]}'s null elements). Spark's
-   * struct types are flattened to {@code String} names — the
+   * struct types are flattened to {@code String} names â the
    * platform's wire shape (QueryResult.measures) carries the
    * column names already; the schema-struct metadata is not
    * needed downstream of the cache lookup.
    */
   static RestateCachedRow toRestateCachedRow(CachedResult cached) {
     org.apache.spark.sql.Row[] rows = cached.rows();
-    java.util.List<Object[]> cellRows = new java.util.ArrayList<>(rows.length);
+    org.apache.spark.sql.types.StructField[] fields = cached.schema().fields();
+
+    java.util.List<String> names = new java.util.ArrayList<>(fields.length);
+    java.util.List<String> types = new java.util.ArrayList<>(fields.length);
+    for (org.apache.spark.sql.types.StructField f : fields) {
+      names.add(f.name());
+      types.add(sparkTypeTag(f.dataType()));
+    }
+
+    java.util.List<String[]> cellRows = new java.util.ArrayList<>(rows.length);
     for (int i = 0; i < rows.length; i++) {
       org.apache.spark.sql.Row row = rows[i];
       int n = row.size();
-      Object[] cells = new Object[n];
+      String[] cells = new String[n];
       for (int j = 0; j < n; j++) {
-        cells[j] = row.isNullAt(j) ? null : row.get(j);
+        cells[j] = encodeCell(row.isNullAt(j) ? null : row.get(j), fields[j].dataType());
       }
       cellRows.add(cells);
     }
-    org.apache.spark.sql.types.StructField[] fields = cached.schema().fields();
-    java.util.List<String> names = new java.util.ArrayList<>(fields.length);
-    for (org.apache.spark.sql.types.StructField f : fields) {
-      names.add(f.name());
+    return new RestateCachedRow(names, types, cellRows);
+  }
+
+  /**
+   * Map a Spark {@link org.apache.spark.sql.types.DataType} to a
+   * stable string tag. The tag is a string (Jackson-friendly) and
+   * stable across Spark versions because we use a closed set of
+   * our own names, not Spark's class names.
+   */
+  static String sparkTypeTag(org.apache.spark.sql.types.DataType dt) {
+    if (dt == null) return RestateCachedRow.T_NULL;
+    if (dt instanceof org.apache.spark.sql.types.StringType) {
+      return RestateCachedRow.T_STRING;
+    } else if (dt instanceof org.apache.spark.sql.types.IntegerType
+        || dt instanceof org.apache.spark.sql.types.LongType
+        || dt instanceof org.apache.spark.sql.types.ShortType
+        || dt instanceof org.apache.spark.sql.types.ByteType) {
+      return RestateCachedRow.T_LONG;
+    } else if (dt instanceof org.apache.spark.sql.types.FloatType
+        || dt instanceof org.apache.spark.sql.types.DoubleType) {
+      return RestateCachedRow.T_DOUBLE;
+    } else if (dt instanceof org.apache.spark.sql.types.DecimalType) {
+      return RestateCachedRow.T_DECIMAL;
+    } else if (dt instanceof org.apache.spark.sql.types.BooleanType) {
+      return RestateCachedRow.T_BOOLEAN;
+    } else if (dt instanceof org.apache.spark.sql.types.TimestampType
+        || dt instanceof org.apache.spark.sql.types.DateType) {
+      return RestateCachedRow.T_TIMESTAMP;
+    } else if (dt instanceof org.apache.spark.sql.types.BinaryType) {
+      return RestateCachedRow.T_BINARY;
     }
-    return new RestateCachedRow(names, cellRows);
+    return RestateCachedRow.T_STRING;  // safe fallback
+  }
+
+  /**
+   * Encode a Spark cell value to a string for journal-round-trip.
+   * Uses Java's standard {@code toString} for most types and
+   * explicit handling for the precision-sensitive ones
+   * (BigDecimal, Timestamp, byte[]).
+   */
+  static String encodeCell(Object cell, org.apache.spark.sql.types.DataType dt) {
+    if (cell == null) return null;
+    if (dt instanceof org.apache.spark.sql.types.DecimalType) {
+      return ((java.math.BigDecimal) cell).toPlainString();
+    }
+    if (dt instanceof org.apache.spark.sql.types.TimestampType
+        || dt instanceof org.apache.spark.sql.types.DateType) {
+      return cell.toString();
+    }
+    if (dt instanceof org.apache.spark.sql.types.BinaryType) {
+      return java.util.Base64.getEncoder().encodeToString((byte[]) cell);
+    }
+    if (cell instanceof java.math.BigDecimal) {
+      return ((java.math.BigDecimal) cell).toPlainString();
+    }
+    if (cell instanceof java.sql.Timestamp) {
+      return cell.toString();
+    }
+    if (cell instanceof byte[]) {
+      return java.util.Base64.getEncoder().encodeToString((byte[]) cell);
+    }
+    if (cell instanceof Boolean) {
+      return cell.toString();
+    }
+    return cell.toString();
   }
 
   /**
@@ -220,17 +288,17 @@ public class QueryService {
   static CachedResult fromRestateCachedRow(RestateCachedRow journaled) {
     int nCols = journaled.fieldNames().size();
     int nRows = journaled.rows().size();
+    java.util.List<String> fieldTypes = journaled.fieldTypes();
     org.apache.spark.sql.Row[] rows = new org.apache.spark.sql.Row[nRows];
     for (int i = 0; i < nRows; i++) {
-      Object[] cells = journaled.rows().get(i);
-      // Cell type count must match column count; we don't enforce at
-      // runtime here because the journaled form comes from a
-      // trusted writer (us).
-      Object[] paddedCells =
-          (cells == null || cells.length == nCols)
-              ? cells
-              : padOrTruncate(cells, nCols);
-      rows[i] = org.apache.spark.sql.RowFactory.create(paddedCells);
+      String[] cells = journaled.rows().get(i);
+      int n = cells == null ? 0 : cells.length;
+      Object[] typed = new Object[n];
+      for (int j = 0; j < n; j++) {
+        String tag = fieldTypes.get(j);
+        typed[j] = decodeCell(cells[j], tag);
+      }
+      rows[i] = org.apache.spark.sql.RowFactory.create(typed);
     }
     org.apache.spark.sql.types.StructField[] structFields = new org.apache.spark.sql.types.StructField[nCols];
     for (int c = 0; c < nCols; c++) {
@@ -238,7 +306,7 @@ public class QueryService {
       // journal; the in-memory CachedResult only needs field NAMES
       // (the platform's wire shape uses List<String> measures) and a
       // schema the platform rebuilds lazily. For the in-memory type
-      // — use a permissive StringType; the next toDataFrame
+      // â use a permissive StringType; the next toDataFrame
       // rebuild does its own schema lookup from the model's
       structFields[c] =
           new org.apache.spark.sql.types.StructField(
@@ -252,17 +320,42 @@ public class QueryService {
     return new CachedResult(rows, schema);
   }
 
-  /** Pad or truncate a row's cells to the expected column count. */
-  private static Object[] padOrTruncate(Object[] cells, int nCols) {
-    Object[] padded = new Object[nCols];
-    int copy = Math.min(cells.length, nCols);
-    System.arraycopy(cells, 0, padded, 0, copy);
-    return padded;
+  // (padOrTruncate removed — fromRestateCachedRow uses fieldTypes.size() to know nCols)
+
+  /**
+   * Inverse of {@link #encodeCell}. Decodes a string-encoded
+   * cell back to the typed Java Object expected by Spark's Row
+   * API. Throws {@code IllegalArgumentException} on unknown
+   * tags (forward-compatibility break).
+   */
+  static Object decodeCell(String encoded, String tag) {
+    if (encoded == null || RestateCachedRow.T_NULL.equals(tag)) {
+      return null;
+    }
+    switch (tag) {
+      case RestateCachedRow.T_STRING:
+        return encoded;
+      case RestateCachedRow.T_LONG:
+        return Long.valueOf(encoded);
+      case RestateCachedRow.T_DOUBLE:
+        return Double.valueOf(encoded);
+      case RestateCachedRow.T_DECIMAL:
+        return new java.math.BigDecimal(encoded);
+      case RestateCachedRow.T_BOOLEAN:
+        return Boolean.valueOf(encoded);
+      case RestateCachedRow.T_TIMESTAMP:
+        return java.sql.Timestamp.valueOf(encoded);
+      case RestateCachedRow.T_BINARY:
+        return java.util.Base64.getDecoder().decode(encoded);
+      default:
+        throw new IllegalArgumentException(
+            "unknown RestateCachedRow type tag: " + tag);
+    }
   }
 
   /** Convert a {@link CachedResult} to the platform's {@link QueryResult}
    * positional wire shape (delegates to the library's {@link CacheBridge}
-   * for the Scala-2.13 Row â Java List conversion). */
+   * for the Scala-2.13 Row Ã¢ÂÂ Java List conversion). */
   static QueryResult toQueryResult(SemanticTable model, CachedResult cached) {
     List<List<Object>> rows = rowsAsJava(cached);
     long rowCount = rows.size();
@@ -274,7 +367,7 @@ public class QueryService {
         rowCount);
   }
 
-  /** Library-side Row â Java conversion (delegates to {@link CacheBridge}). */
+  /** Library-side Row Ã¢ÂÂ Java conversion (delegates to {@link CacheBridge}). */
   static List<List<Object>> rowsAsJava(CachedResult cached) {
     java.util.List<java.util.List<Object>> raw =
         (java.util.List<java.util.List<Object>>) (java.util.List<?>) CacheBridge.rowsAsJava(cached);
