@@ -22,7 +22,7 @@ import java.time.Instant;
 import java.util.Map;
 
 /**
- * ModelService — per-model registration and version lifecycle.
+ * ModelService â per-model registration and version lifecycle.
  *
  * Key: model name (e.g. {@code "flights"}). Each model name maps to one
  * {@code ModelService} instance; the per-key serialization in Restate
@@ -31,10 +31,10 @@ import java.util.Map;
  *
  * State held in the journal (per the state-placement rule:
  * "journal = coordination, Postgres = record"):
- *   - CURRENT_VERSION — the latest published version
- *   - REGISTRATION_STATUS — "idle" | "in_progress" | "failed"
- *   - LAST_INVALIDATED_AT — when the lineage cache was last invalidated
- *   - MANIFEST_HASH — the SHA-256 of the current manifest, for change detection
+ *   - CURRENT_VERSION â the latest published version
+ *   - REGISTRATION_STATUS â "idle" | "in_progress" | "failed"
+ *   - LAST_INVALIDATED_AT â when the lineage cache was last invalidated
+ *   - MANIFEST_HASH â the SHA-256 of the current manifest, for change detection
  *
  * State held in Postgres (the platform's record store):
  *   - the actual model YAML
@@ -50,7 +50,7 @@ import java.util.Map;
  * Cache invalidation contract: a successful register triggers
  * {@code ResultCache.invalidateByModelAndVersion(name, version)} on
  * the cache seam (no-op if absent). The cache invalidation is
- * deliberately OUTSIDE {@code Restate.run(...)} — cache state is
+ * deliberately OUTSIDE {@code Restate.run(...)} â cache state is
  * observable but not coordination state, so a re-invocation
  * after a partial failure can re-emit without double-invalidating.
  *
@@ -99,19 +99,27 @@ public class ModelService {
    * Register a new model. Steps:
    * <ol>
    *   <li>Compute {@code manifestHash} over the YAML content (idempotent
-   *       on hash — same hash as journal's current value means no-op).
+   *       on hash â same hash as journal's current value means no-op).
    *   <li>Compile the YAML into a {@link SemanticTable} via the library's
-   *       {@link YamlLoader#load}, inside {@code Restate.run("compile", ...)}
-   *       (replay-safe).
+   *       {@link YamlLoader#load}. <b>Happens in handler scope, NOT
+   *       inside {@code Restate.run}</b> â {@code SemanticTable} carries
+   *       a {@code Dataset.rdd} chain that Jackson cannot round-trip
+   *       through the journal. The compile is a pure function
+   *       (deterministic for fixed YAML); re-executing on journal
+   *       replay is correct and cheap.
    *   <li>Compute the canonical lineage JSON via
-   *       {@link Lineage#workspaceOf} + {@link Lineage#toJson}, inside
-   *       a {@code Restate.run("lineage", ...)}.
+   *       {@link Lineage#workspaceOf} + {@link Lineage#toJson}, also
+   *       in handler scope (a {@code String} is Jackson-clean anyway,
+   *       and a side-effect-free pure function is more cleanly
+   *       journal-bypassed).
    *   <li>Persist to Postgres via
    *       {@link ModelStore#registerIfAbsent}, inside
-   *       {@code Restate.run("persist", ...)}.
+   *       {@code Restate.run("model.persist", ...)} â the durable
+   *       side effect, the only one that must survive a JVM crash
+   *       mid-register.
    *   <li>Update journal state (currentVersion, manifestHash,
    *       lastInvalidatedAt).
-   *   <li>Invalidate the cache (outside any Restate.run block —
+   *   <li>Invalidate the cache (outside any Restate.run block â
    *       cache state is not coordination state).
    * </ol>
    */
@@ -136,22 +144,23 @@ public class ModelService {
       final java.util.function.Supplier<Instant> clock = () -> Restate.instantNow();
       final Instant registeredAt = clock.get();
 
-      // STEP A: compile (Restate.run so the parsed SemanticTable is
-      // journaled; replay returns the cached value without re-parsing).
-      final SemanticTable compiled =
-          Restate.run(
-              "model.compile",
-              SemanticTable.class,
-              () -> compileFromYaml(yaml, modelName, this.spark));
+      // STEP A: compile in handler scope. SemanticTable carries a
+      // Dataset.rdd chain that Jackson cannot round-trip through the
+      // Restate journal; the compile is a pure function and re-runs
+      // cheaply on journal replay. Keeping it OUT of Restate.run
+      // avoids the InvalidDefinitionException that
+      // ModelServiceEndToEndTest's actual @RestateTest probe surfaced.
+      final SemanticTable compiled = compileFromYaml(yaml, modelName, this.spark);
 
-      // STEP B: lineage (Restate.run; same replay story).
-      final String lineageJson =
-          Restate.run(
-              "model.lineage",
-              String.class,
-              () -> lineageJsonFor(compiled));
+      // STEP B: lineage in handler scope. Same reasoning â pure
+      // function of the compiled model.
+      final String lineageJson = lineageJsonFor(compiled);
 
-      // STEP C: persist (Restate.run; replay-safe).
+      // STEP C: persist. The ONLY step inside Restate.run â the
+      // durable side effect to Postgres. Replay-safe: a JVM crash
+      // mid-INSERT is replayed and the ON CONFLICT DO NOTHING
+      // idempotency at the ModelStore layer returns the same
+      // ModelDefinition.
       final ModelStore.ModelDefinition persisted =
           Restate.run(
               "model.persist",
@@ -166,7 +175,7 @@ public class ModelService {
       state.set(LAST_INVALIDATED_AT, clock.get().toEpochMilli());
       state.set(REGISTRATION_STATUS, "idle");
 
-      // STEP E: cache invalidation. NOT in Restate.run — cache
+      // STEP E: cache invalidation. NOT in Restate.run â cache
       // state is observable, not coordination, and a re-invocation
       // can re-emit without double-invalidating.
       cache.invalidateByModelAndVersion(modelName, persisted.version());
@@ -203,10 +212,10 @@ public class ModelService {
    * {@link YamlLoader}. Visible-for-testing pattern: extracted so
    * it can be unit-tested without a Restate handler context.
    *
-   * <p>Reuses {@link YamlLoader#load(String, SparkSession)} — the
+   * <p>Reuses {@link YamlLoader#load(String, SparkSession)} â the
    * same entry point {@code YamlModelRegistry.load(modelsDir, spark)}
    * uses at startup. The temp file is cleaned up in
-   * {@code finally} — no FD leak on the register hot path.
+   * {@code finally} â no FD leak on the register hot path.
    */
   static SemanticTable compileFromYaml(String yaml, String modelName, SparkSession spark) {
     Path tmp;
@@ -223,7 +232,7 @@ public class ModelService {
         throw new IllegalStateException(
             "could not write YAML to " + tmp + " for model '" + modelName + "'", e);
       }
-      // Library entry point — same as YamlModelRegistry.load uses.
+      // Library entry point â same as YamlModelRegistry.load uses.
       scala.collection.immutable.Map<String, SemanticTable> built =
           YamlLoader.load(tmp.toString(), spark);
       Map<String, SemanticTable> javaMap =
@@ -262,7 +271,7 @@ public class ModelService {
 
   /**
    * Compute a manifest hash (SHA-256 hex) over the YAML content.
-   * Deliberately a stable-content hash — NOT including any
+   * Deliberately a stable-content hash â NOT including any
    * file-path / timestamp / serialization noise (those would
    * defeat the idempotency contract).
    */
