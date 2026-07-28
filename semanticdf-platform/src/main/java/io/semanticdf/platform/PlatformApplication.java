@@ -20,6 +20,7 @@ import io.semanticdf.cache.ResultCache;
 import io.semanticdf.platform.catalog.CatalogService;
 import io.semanticdf.platform.model.ModelService;
 import io.semanticdf.platform.query.QueryService;
+import io.semanticdf.platform.streaming.HotReloadingModelRegistry;
 import io.semanticdf.platform.streaming.ModelRegistry;
 import io.semanticdf.platform.streaming.PostgresStreamCatalog;
 import io.semanticdf.platform.streaming.SparkStreamingQueryLauncher;
@@ -297,16 +298,23 @@ public final class PlatformApplication {
 
     // --- Streaming lifecycle wiring ---
     StreamingQueryHandleRegistry handles = new StreamingQueryHandleRegistry();
-    ModelRegistry models = YamlModelRegistry.load(modelsDir, spark);
+    // H3 fix: wrap the boot-time YamlModelRegistry in a HotReloadingModelRegistry
+    // so successful ModelService.register() calls propagate to QueryService
+    // and StreamingService without a JVM restart. The delegate (YamlModelRegistry)
+    // remains the read-only baseline; the decorator adds a ConcurrentHashMap
+    // overlay mutated by ModelService.register's STEP F.
+    YamlModelRegistry yamlRegistry = YamlModelRegistry.load(modelsDir, spark);
+    ModelRegistry models = new HotReloadingModelRegistry(yamlRegistry);
     StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
 
     System.out.println(
         "semanticdf-platform: loaded "
-            + ((YamlModelRegistry) models).size()
+            + yamlRegistry.size()
             + " models from "
             + modelsDir
             + ": "
-            + ((YamlModelRegistry) models).registeredModels());
+            + yamlRegistry.registeredModels()
+            + " (hot-reload wrapper enabled: H3)");
 
     // --- Stream catalog (DE-H2 — bulk startup reconciliation) ---
     //
@@ -378,7 +386,7 @@ public final class PlatformApplication {
 
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
-        .bind(new ModelService(modelStore, spark, resultCache))
+        .bind(new ModelService(modelStore, spark, resultCache, models))
         .bind(new QueryService(models, spark, resultCache))
         .bind(new StreamingService(models, launcher, handles, catalog))
         .bind(new AuditService(auditStore))
