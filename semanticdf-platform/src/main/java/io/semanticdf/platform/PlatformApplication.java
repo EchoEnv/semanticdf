@@ -234,6 +234,74 @@ public final class PlatformApplication {
         System.getenv("SEMANTICDF_SERVICE_HANDLER_URL"));
   }
 
+  /**
+   * Build the {@link ResultCache} from env vars. Visible-for-testing
+   * pattern -- mirrors {@link #buildAuditEventStoreFromEnv}.
+   *
+   * <p>Env vars:
+   * <ul>
+   *   <li>{@code SEMANTICDF_RESULT_CACHE=noop|memory} (default: {@code noop})
+   *     <ul>
+   *       <li>{@code noop} = {@link ResultCache#NoOp} (default -- no
+   *         caching; every query re-executes the Spark plan).</li>
+   *       <li>{@code memory} = bounded LRU cache, default 256 entries
+   *         (overridable via {@code SEMANTICDF_RESULT_CACHE_ENTRIES}).</li>
+   *     </ul>
+   *   <li>{@code SEMANTICDF_RESULT_CACHE_ENTRIES=N} (default: 256)
+   *     only honored when {@code SEMANTICDF_RESULT_CACHE=memory}.
+   * </ul>
+   *
+   * <p>Default-off preserves the v0.2.2 behavior. The library's
+   * {@code InMemoryResultCache} (bounded LRU, thread-safe) ships in
+   * the cache module -- no platform-side implementation needed.
+   */
+  static ResultCache buildResultCacheFromEnv() {
+    return buildResultCacheFromEnv(System::getenv);
+  }
+
+  /**
+   * Test seam: same as {@link #buildResultCacheFromEnv()} but takes the
+   * env-var lookup as a parameter so tests can supply a deterministic map.
+   * Visible-for-testing only.
+   */
+  static ResultCache buildResultCacheFromEnv(java.util.function.Function<String, String> env) {
+    String kind = env.apply("SEMANTICDF_RESULT_CACHE");
+    if (kind == null) kind = "noop";
+    if ("memory".equalsIgnoreCase(kind)) {
+      String entriesStr = env.apply("SEMANTICDF_RESULT_CACHE_ENTRIES");
+      if (entriesStr == null) entriesStr = "256";
+      int entries;
+      try {
+        entries = Integer.parseInt(entriesStr);
+      } catch (NumberFormatException nfe) {
+        System.err.println(
+            "semanticdf-platform: SEMANTICDF_RESULT_CACHE_ENTRIES='"
+                + entriesStr
+                + "' is not an integer; falling back to 256");
+        entries = 256;
+      }
+      if (entries <= 0) {
+        System.err.println(
+            "semanticdf-platform: SEMANTICDF_RESULT_CACHE_ENTRIES="
+                + entries
+                + " must be > 0; falling back to 256");
+        entries = 256;
+      }
+      System.out.println(
+          "semanticdf-platform: SEMANTICDF_RESULT_CACHE=memory -- bounded LRU cache, maxEntries="
+              + entries
+              + " (set SEMANTICDF_RESULT_CACHE=noop to disable).");
+      return ResultCache.inMemory(entries);
+    }
+    if (!"noop".equalsIgnoreCase(kind)) {
+      System.err.println(
+          "semanticdf-platform: SEMANTICDF_RESULT_CACHE='"
+              + kind
+              + "' is not a known cache kind (expected 'noop' or 'memory'); falling back to NoOp.");
+    }
+    return ResultCache.NoOp();
+  }
+
   public static void main(String[] args) throws IOException {
     // --- Configuration from environment ---
     //
@@ -402,13 +470,13 @@ public final class PlatformApplication {
     //   Requires SEMANTICDF_CATALOG_JDBC_URL/_USER/_PASSWORD.
     final ModelStore modelStore = buildModelStoreFromEnv();
 
-    // Cache seam for ModelService — when a successful register()
-    // bumps CURRENT_VERSION, ModelService calls
-    // cache.invalidateByModelAndVersion(name, version). For P1,
-    // the default is ResultCache.NoOp (no cache active until
-    // PR-C wires it for QueryService); v0.2.3+ can pass the
-    // library's InMemoryResultCache.
-    final ResultCache resultCache = ResultCache.NoOp();
+    // Cache seam for ModelService and QueryService:
+    //   - When a successful register() bumps CURRENT_VERSION, ModelService
+    //     calls cache.invalidateByModelAndVersion(name, version).
+    //   - QueryService.runQuery consults the cache before compiling.
+    // Default: NoOp (no caching -- every query re-executes the Spark plan).
+    // Opt-in via SEMANTICDF_RESULT_CACHE=memory (bounded LRU).
+    final ResultCache resultCache = buildResultCacheFromEnv();
 
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
