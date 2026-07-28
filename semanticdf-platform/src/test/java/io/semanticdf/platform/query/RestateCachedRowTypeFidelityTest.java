@@ -235,6 +235,74 @@ class RestateCachedRowTypeFidelityTest {
   }
 
   /**
+   * PR #255 fix for the DE finding H1: a {@code Date} must
+   * round-trip with the SAME {@code getTime()} (underlying millis
+   * since epoch) regardless of the JVM timezone the journal was
+   * journaled / replayed in.
+   *
+   * <p>Pre-#255, {@code Date.valueOf(LocalDate.parse(s))} reconstructed
+   * a {@code Date} whose {@code getTime()} was computed at the
+   * JVM-default midnight — silently shifting across JVM restarts in
+   * different timezones. Post-#255, the decode path goes
+   * {@code LocalDate → atStartOfDay(UTC) → Instant → Date.from(Instant)},
+   * giving a {@code Date} whose {@code getTime()} is the UTC-midnight
+   * millis of the date — JVM-timezone-independent.
+   *
+   * <p>The {@code roundTripPreservesDateAsDate} test above only
+   * checks {@code toLocalDate()}, which doesn't drift across
+   * timezones (LocalDate has no zone). The new test here checks
+   * {@code getTime()} explicitly, which IS zone-sensitive — the
+   * pre-#255 path would fail under {@code TimeZone.setDefault("UTC")}
+   * + decode under {@code TimeZone.setDefault("America/Los_Angeles")}.
+   */
+  @Test
+  void roundTripPreservesDateGetTimeAcrossTimezones() throws Exception {
+    java.util.TimeZone defaultTz = java.util.TimeZone.getDefault();
+    try {
+      // Encode under UTC (matches the test fixture's session TZ).
+      java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone("UTC"));
+
+      // Build the original Date at JVM-default midnight (2024-01-15
+      // 00:00:00 UTC, in millis).
+      java.sql.Date original = java.sql.Date.valueOf("2024-01-15");
+      long originalMillis = original.getTime();
+
+      // Run the journal round-trip end-to-end (the test fixture's
+      // createSpark() forces session.timeZone=UTC, but the JVM default
+      // for the Java date-time APIs is what Date uses).
+      CachedResult original$ = withDateSchema(cached("d", original));
+      String json = journalRoundTrip(original$, "date");
+      Object[] beforeRestate = readFirstRowCells(json);
+
+      // Now switch the JVM default timezone and replay.
+      java.util.TimeZone.setDefault(
+          java.util.TimeZone.getTimeZone("America/Los_Angeles"));
+
+      // The journaled JSON is timezone-independent text; the decode
+      // path runs the new Date.from(Instant) branch. Read the JSON
+      // again (re-decoding the same journal bytes under a different
+      // JVM-default timezone).
+      Object[] afterRestate = readFirstRowCells(json);
+
+      // Critical assertion: the underlying millis are JVM-tz-independent.
+      assertEquals(originalMillis,
+          ((java.sql.Date) beforeRestate[0]).getTime(),
+          "Date.getTime() must equal the encoded millis");
+      assertEquals(originalMillis,
+          ((java.sql.Date) afterRestate[0]).getTime(),
+          "Date.getTime() must survive a JVM timezone change between "
+              + "encode and decode (pre-#255 this would shift by 8h "
+              + "when going from UTC to Los_Angeles)");
+
+      // Sanity: the LocalDate identity also holds (pre-#255 case).
+      assertEquals(original.toLocalDate(),
+          ((java.sql.Date) afterRestate[0]).toLocalDate());
+    } finally {
+      java.util.TimeZone.setDefault(defaultTz);
+    }
+  }
+
+  /**
    * Re-build a CachedResult whose schema declares the single column
    * as a {@link org.apache.spark.sql.types.DateType}, not a
    * {@link StringType}. The shared {@code cached} factory uses
