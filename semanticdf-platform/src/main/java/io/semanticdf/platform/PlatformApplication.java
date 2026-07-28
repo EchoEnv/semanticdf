@@ -1,5 +1,8 @@
 package io.semanticdf.platform;
 
+import dev.restate.admin.client.ApiClient;
+import dev.restate.admin.model.RegisterDeploymentRequest;
+import dev.restate.admin.model.RegisterDeploymentRequestAnyOf;
 import dev.restate.sdk.endpoint.Endpoint;
 import dev.restate.sdk.http.vertx.RestateHttpServer;
 
@@ -160,6 +163,48 @@ public final class PlatformApplication {
             + "durable in " + ModelStore.class.getSimpleName()
             + " against " + redactConnectUrl(jdbcUrl));
     return new PostgresModelStore(jdbcUrl, user, password);
+  }
+
+  /**
+   * Register this platform's deployment with an external Restate server's
+   * admin API. Visible-for-testing — extracted from {@link #main(String[])}
+   * so the registration path can be exercised without booting Spark.
+   *
+   * <p>Env-var shape:
+   * <pre>
+   *   RESTATE_INGRESS_URL=http://restate-host:8080/
+   * </pre>
+   * The admin URL is derived by swapping {@code :8080} for {@code :9070}
+   * (the Restate admin port). The service-handler URL is reported as
+   * {@code http://host.docker.internal:<boundPort>} so the external
+   * Restate container can reach this JVM (which is running on the host).
+   *
+   * <p>Returns the deployment ID assigned by the external Restate, or
+   * throws if the registration call fails. Callers should treat
+   * exceptions as best-effort: a failed registration falls back to the
+   * in-process restate runtime that's already listening.
+   */
+  static String registerWithExternalRestate(String externalIngress, int boundPort)
+      throws Exception {
+    String adminUrl = externalIngress.replaceAll(":8080/?$", ":9070");
+    // The SDK appends `/<operation_path>` to the basePath without
+    // normalizing the separator. If the basePath ends in `/`, the
+    // resulting URL is `//deployments`, which HttpServers reject as
+    // "no context found". Strip the trailing `/` here.
+    String normalizedBasePath = adminUrl.replaceAll("/$", "");
+    // The 3-arg constructor accepts a basePath; passing it as the third
+    // arg. setBasePath() does NOT update the host/port/scheme fields
+    // the request builder uses — only the constructor does.
+    ApiClient adminClient = new ApiClient(
+        java.net.http.HttpClient.newBuilder(),
+        new com.fasterxml.jackson.databind.ObjectMapper(),
+        normalizedBasePath);
+    var deploymentApi = new dev.restate.admin.api.DeploymentApi(adminClient);
+    String serviceHandlerUrl = "http://host.docker.internal:" + boundPort;
+    RegisterDeploymentRequest req = new RegisterDeploymentRequest(
+        new RegisterDeploymentRequestAnyOf().uri(serviceHandlerUrl));
+    var resp = deploymentApi.createDeployment(req);
+    return resp.getId();
   }
 
   public static void main(String[] args) throws IOException {
@@ -349,6 +394,36 @@ public final class PlatformApplication {
     // releases the socket. The shutdown hook below logs so operators
     // see the shutdown sequence in their logs.
     int boundPort = RestateHttpServer.listen(endpoint, port);
+
+    // VERIFICATION-MODE external-Restate registration.
+    //
+    // When RESTATE_INGRESS_URL is set, the platform ALSO registers
+    // its deployment with the external Restate server so the user
+    // can probe the registered services + invocations via the
+    // external Restate's admin API (port 9070).
+    //
+    // The in-process RestateHttpServer.listen() above remains in
+    // effect — the SDK needs an in-process runtime to handle the
+    // calls. The external Restate then routes incoming calls to
+    // this in-process runtime via the service-handler URL.
+    //
+    // This is the verification-mode path. Mirrors PR #240's Spark
+    // Connect toggle: opt-in, not a default-on cutover.
+    String externalIngress = System.getenv("RESTATE_INGRESS_URL");
+    if (externalIngress != null && !externalIngress.isBlank()) {
+      try {
+        String deploymentId = registerWithExternalRestate(externalIngress, boundPort);
+        System.out.println(
+            "semanticdf-platform: registered deployment with external Restate at "
+                + externalIngress.replaceAll(":8080/?$", ":9070")
+                + " — service handler URL = http://host.docker.internal:" + boundPort
+                + " deploymentId=" + deploymentId);
+      } catch (Exception e) {
+        System.err.println(
+            "semanticdf-platform: external Restate registration failed (continuing "
+                + "with in-process runtime only): " + e.getMessage());
+      }
+    }
 
     // DE-H2: bulk startup reconciliation. After the HTTP server is
     // listening (so the sweep's POSTs reach the ingress), walk the
