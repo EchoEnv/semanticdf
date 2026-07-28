@@ -21,22 +21,22 @@ import org.junit.jupiter.api.Test;
  *
  * <ol>
  *   <li>No {@code System.currentTimeMillis()} / {@code Instant.now()}
- *       in the handler body \u2014 the only stable time source is
+ *       in the handler body — the only stable time source is
  *       {@code Restate.instantNow()}.
  *   <li>Side-effecting calls (compile, lineage JSON, Postgres
  *       persist) are wrapped in {@code Restate.run(...)}.
- *   <li>No invented dedicated {@code ManifestHash} scheme \u2014 the
+ *   <li>No invented dedicated {@code ManifestHash} scheme — the
  *       service uses the library's {@code ResultCache} for
  *       invalidation hooks, not shadow types.
  *   <li>Constructor rejects null deps (no NPE-at-handler-time).
  *   <li>Cache invalidation happens AFTER the journal bookkeeping,
- *       OUTSIDE {@code Restate.run(...)} \u2014 cache state is not
+ *       OUTSIDE {@code Restate.run(...)} — cache state is not
  *       coordination state.
  * </ol>
  *
  * <p>Behavioral coverage (real TestKit + Testcontainers PG) is in
  * {@code PostgresModelStoreTest}. End-to-end round-trip
- * (register \u2192 queryRecent for audit) is left for PR-C integration.
+ * (register → queryRecent for audit) is left for PR-C integration.
  */
 class ModelServiceStructuralTest {
 
@@ -50,25 +50,35 @@ class ModelServiceStructuralTest {
   }
 
   @Test
-  void modelService_register_wrapsCompileAndPersistInRestateRun() throws IOException {
+  void modelService_register_persistOnlyInRestateRun() throws IOException {
     String src = readModelService();
-    // Locate the register handler body
     int registerOpen = src.indexOf("public void register(");
     assertTrue(registerOpen > 0, "register() handler not found");
     int braceOpen = src.indexOf("{", registerOpen);
     int braceClose = findMatchingBrace(src, braceOpen);
     String body = src.substring(braceOpen, braceClose);
 
-    // Look for at least 3 distinct Restate.run names: compile, lineage,
-    // persist (in document order \u2014 README-friendly).
+    // After PR #249: only the durable Postgres persist step is
+    // inside Restate.run. Compile (which produces a SemanticTable
+    // carrying a Dataset.rdd chain that Jackson cannot round-trip
+    // through the journal) and lineage (a String, but pure) run in
+    // handler scope. The journal only captures the side-effecting
+    // durable write.
+    int persistRun = body.indexOf("\"model.persist\"");
+    assertTrue(persistRun > 0,
+        "register() must call Restate.run(\"model.persist\", ...) " +
+        "for the durable Postgres write");
     int compileRun = body.indexOf("\"model.compile\"");
     int lineageRun = body.indexOf("\"model.lineage\"");
-    int persistRun = body.indexOf("\"model.persist\"");
-    assertTrue(compileRun > 0, "register() must call Restate.run(\"model.compile\", ...)");
-    assertTrue(lineageRun > 0, "register() must call Restate.run(\"model.lineage\", ...)");
-    assertTrue(persistRun > 0, "register() must call Restate.run(\"model.persist\", ...)");
-    assertTrue(compileRun < lineageRun && lineageRun < persistRun,
-        "Restate.run steps must appear in (compile, lineage, persist) order");
+    assertTrue(compileRun < 0,
+        "register() must NOT call Restate.run(\"model.compile\", ...) " +
+        "â restateCompiled semanticTable carries a Dataset.rdd chain " +
+        "that Jackson cannot round-trip through the journal. Compile " +
+        "is a pure function and runs in handler scope.");
+    assertTrue(lineageRun < 0,
+        "register() must NOT call Restate.run(\"model.lineage\", ...) " +
+        "â restateLineage is also pure; running in handler scope keeps " +
+        "the journal entry minimal (just the persist return).");
   }
 
   @Test
@@ -98,7 +108,7 @@ class ModelServiceStructuralTest {
 
   @Test
   void modelService_compileFromYaml_invokedViaReflection() throws Exception {
-    // Reflection-only — we don't spin up Spark here. The constructor
+    // Reflection-only â we don't spin up Spark here. The constructor
     // null-dep test proves the NPE behavior; this test confirms the
     // helper is reachable with the documented signature.
     java.lang.reflect.Method m = ModelService.class.getDeclaredMethod(
@@ -150,7 +160,7 @@ class ModelServiceStructuralTest {
     if (found >= 0) {
       String msg = "ModelService.register must not use '" + needle + "'";
       for (String hop : extraHops) msg += " (" + hop + ")";
-      msg += " \u2014 forbidden pattern at offset " + found + " in handler body.";
+      msg += " — forbidden pattern at offset " + found + " in handler body.";
       throw new AssertionError(msg);
     }
   }
