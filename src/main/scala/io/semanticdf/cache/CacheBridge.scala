@@ -22,6 +22,23 @@ import scala.jdk.CollectionConverters._
 object CacheBridge {
 
   /**
+   * Default hard cap on rows returned by `executeQuery`. Used by the
+   * 6-arg overload to bound driver-memory usage for very large
+   * results. The platform's `QueryResult.truncated` flag is computed
+   * against this value (not against 1024) so the wire signal matches
+   * the actual data loss.
+   *
+   * <p>Java callers use the [[defaultMaxRows()]] accessor; Scala callers
+   * use [[DefaultMaxRows]] directly.
+   */
+  val DefaultMaxRows: Int = 100000
+
+  /** Java-callable accessor (Java sees Scala `val`s as fields, not
+   * methods, so we expose this method for clean Java syntax). */
+  def defaultMaxRows(): Int = DefaultMaxRows
+
+
+  /**
    * Run a model query against the given spark session, returning a
    * {@link CachedResult} that wraps the materialized {@code Row[]} and
    * the result {@link org.apache.spark.sql.types.StructType}.
@@ -160,10 +177,14 @@ object CacheBridge {
   ): String = {
     val m  = if (modelName == null) "" else modelName
     val v  = modelVersion.toString
-    val me = if (measures == null) "" else measures.asScala.mkString(",")
-    val d  = if (dimensions == null) "" else dimensions.asScala.mkString(",")
-    val w  = if (where == null) "" else where
-    val canonical = s"platform|v1|m=$m|v=$v|me=$me|d=$d|w=$w"
+    val me = if (measures == null) "" else LengthPrefixed.encodeList(measures.asScala.toSeq)
+    val d  = if (dimensions == null) "" else LengthPrefixed.encodeList(dimensions.asScala.toSeq)
+    // `null` and empty string both mean "no where filter"; treat them
+    // identically so callers passing either form get the same cache
+    // key (the test `platformCacheKey_nullWhereHandledGracefully`
+    // pins this contract).
+    val w  = if (where == null || where.isEmpty) "" else LengthPrefixed.encodeString(where)
+    val canonical = s"platform|v1|m=${LengthPrefixed.encodeString(m)}|v=$v|me=$me|d=$d|w=$w"
     LengthPrefixed.sha256(canonical)
   }
 

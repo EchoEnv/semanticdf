@@ -98,6 +98,38 @@ class QueryServiceStructuralTest {
         () -> QueryService.noOp(null, null));
   }
 
+  /**
+   * PR #263 (cache correctness fix): the truncated flag in
+   * QueryResult must compare against the REAL cap
+   * ({@code CacheBridge.DefaultMaxRows = 100,000}), not 1024. The
+   * v0.2.2 bug used {@code rowCount > 1024} which told callers the
+   * result was truncated when in fact it was within the driver cap.
+   *
+   * <p>The threshold lives in {@code toQueryResult} (where the
+   * {@link CachedResult} is converted to the wire {@code QueryResult}),
+   * not in {@code runQuery} itself.
+   */
+  @Test
+  void queryService_toQueryResult_truncatedFlagUsesCacheBridgeDefaultMaxRows() throws IOException {
+    String src = readQueryService();
+    int toQueryResultOpen = src.indexOf("static QueryResult toQueryResult(");
+    int braceOpen = src.indexOf("{", toQueryResultOpen);
+    int braceClose = findMatchingBrace(src, braceOpen);
+    String body = src.substring(braceOpen, braceClose);
+
+    // The old (wrong) threshold must NOT appear anywhere in the
+    // toQueryResult body. If it does, someone reintroduced the bug.
+    assertTrue(!body.contains("> 1024"),
+        "toQueryResult() must not compare rowCount against 1024; the real "
+            + "cap is CacheBridge.DefaultMaxRows (100,000). See #263.");
+
+    // The new threshold MUST appear, and it MUST be the library's
+    // constant (not a hand-coded literal).
+    assertTrue(body.contains("CacheBridge.defaultMaxRows()"),
+        "toQueryResult() must call CacheBridge.defaultMaxRows() to compute "
+            + "the truncated flag (see #263).");
+  }
+
   // --- helpers ---
 
   private static int findMatchingBrace(String src, int startIdx) {

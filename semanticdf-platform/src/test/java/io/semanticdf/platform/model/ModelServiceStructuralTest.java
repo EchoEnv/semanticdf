@@ -89,9 +89,9 @@ class ModelServiceStructuralTest {
     int braceClose = findMatchingBrace(src, braceOpen);
     String body = src.substring(braceOpen, braceClose);
 
-    int cacheIdx = body.indexOf("cache.invalidateByModelAndVersion(");
+    int cacheIdx = body.indexOf("cache.invalidateModel(");
     assertTrue(cacheIdx > 0,
-        "register() must call cache.invalidateByModelAndVersion(...) after success");
+        "register() must call cache.invalidateModel(...) after success (was invalidateByModelAndVersion in v0.2.2; see #261)");
     // The cache call must NOT be inside a Restate.run block (cache state
     // is observable, not coordination). We verify this by checking that
     // the cache call appears AFTER all three Restate.run steps.
