@@ -91,6 +91,10 @@ class PlatformAlwaysReplayTest {
   static {
     try {
       modelsDir = Files.createTempDirectory("always-replay-models");
+      // Belt-and-suspenders: in case the @AfterAll hook is bypassed
+      // (CI kill -9, JVM abort), the temp dir is still reaped on
+      // normal JVM exit.
+      modelsDir.toFile().deleteOnExit();
 
       Files.writeString(
           modelsDir.resolve("flights.yml"),
@@ -148,8 +152,16 @@ class PlatformAlwaysReplayTest {
   }
 
   @AfterAll
-  static void tearDownAll() {
+  static void tearDownAll() throws Exception {
     if (spark != null) spark.stop();
+    // Recursive cleanup of the temp models dir — leave nothing
+    // behind per CI run (PR-fix: #15 from post-#278 review).
+    if (modelsDir != null && Files.exists(modelsDir)) {
+      try (var stream = Files.walk(modelsDir)) {
+        stream.sorted(java.util.Comparator.reverseOrder())
+            .forEach(p -> { try { Files.deleteIfExists(p); } catch (Exception ignored) {} });
+      }
+    }
   }
 
   private HttpRequest.Builder rawJson(URL url) {

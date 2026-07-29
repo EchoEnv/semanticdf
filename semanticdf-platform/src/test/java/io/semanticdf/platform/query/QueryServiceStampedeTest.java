@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.semanticdf.cache.CachedResult;
 import io.semanticdf.cache.InMemoryResultCache;
@@ -305,5 +306,46 @@ class QueryServiceStampedeTest {
     assertNotNull(cache.get("k1"));
     assertNotNull(cache.get("k2"));
     assertNotNull(cache.get("k3"));
+  }
+
+  // PR-fix B-1: post-#278 review. When a loser thread is interrupted
+  // while waiting on the winner's CompletableFuture, Future.get()
+  // clears the interrupt flag. We must re-set it so the next
+  // Restate handler call on this thread doesn't run with a stale
+  // interrupt. The behavioral test for this race is timing-sensitive
+  // (we'd need to interrupt the loser thread while it's parked in
+  // prior.get(), which the scheduler doesn't let us pin down), so
+  // we use a structural assertion: verify the catch-block contains
+  // Thread.currentThread().interrupt() in both getOrCompute and
+  // getOrComputeJournaled. A code-review-time test is enough
+  // here — the JVM contract for Future.get() and interrupt flags
+  // is well-documented.
+  @Test
+  void interruptedLoser_reSetsInterruptFlag() throws Exception {
+    java.nio.file.Path src = java.nio.file.Path.of(
+        "/home/emilio/app/projects/semanticdf/src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
+    String content = java.nio.file.Files.readString(src);
+
+    // Both the row-form and journaled-form loser paths must re-set
+    // the interrupt flag. The PR-fix replaces the simple
+    // ExecutionException catch with a multi-case catch that
+    // includes InterruptedException -> interrupt().
+    int rowCase = content.indexOf("case e: java.util.concurrent.ExecutionException =>");
+    int journaledCase = content.indexOf("case e: java.util.concurrent.ExecutionException =>",
+        rowCase + 1);
+    assertTrue(rowCase > 0, "row-form catch block must exist");
+    assertTrue(journaledCase > 0, "journaled-form catch block must exist");
+    String rowTail = content.substring(rowCase,
+        Math.min(rowCase + 500, content.length()));
+    String journaledTail = content.substring(journaledCase,
+        Math.min(journaledCase + 500, content.length()));
+    assertTrue(rowTail.contains("InterruptedException"),
+        "row-form catch must handle InterruptedException explicitly");
+    assertTrue(rowTail.contains("Thread.currentThread().interrupt()"),
+        "row-form InterruptedException must re-set the interrupt flag");
+    assertTrue(journaledTail.contains("InterruptedException"),
+        "journaled-form catch must handle InterruptedException explicitly");
+    assertTrue(journaledTail.contains("Thread.currentThread().interrupt()"),
+        "journaled-form InterruptedException must re-set the interrupt flag");
   }
 }

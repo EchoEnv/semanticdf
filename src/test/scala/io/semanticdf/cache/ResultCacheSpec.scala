@@ -551,6 +551,38 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(c.keys().isEmpty)
   }
 
+  // PR-fix #6: post-#278 review. invalidateByModelAndVersion must
+  // walk BOTH the row-form sidecar AND the journaled-form sidecar.
+  // Pre-fix, journaled entries leaked.
+  test("inMemory: invalidateByModelAndVersion clears journaled entries too") {
+    val c = ResultCache.inMemory(maxEntries = 16).asInstanceOf[InMemoryResultCache]
+    c.putWithModelAndVersion("row-a", CachedResult(Array.empty[Row],
+      StructType(Seq(StructField("x", IntegerType)))), "orders", 1)
+    c.putJournaledWithModelAndVersion("j-a", new Object(), "orders", 1)
+    c.putJournaledWithModelAndVersion("j-b", new Object(), "orders", 2)
+    // Invalidate orders v1: should remove row-a + j-a, leave j-b (v2).
+    val n = c.invalidateByModelAndVersion("orders", 1)
+    assert(n == 2, s"expected 2 entries removed (1 row + 1 journaled), got $n")
+    assert(c.get("row-a").isEmpty, "row-form entry should be gone")
+    assert(c.getJournaled("j-a").isEmpty, "journaled-form v1 entry should be gone")
+    assert(c.getJournaled("j-b").isDefined, "journaled-form v2 entry must survive")
+  }
+
+  // PR-fix #9: post-#278 review. Default getOrComputeJournaled
+  // silently wrote uninvalidateable entries (model=""). Loud failure
+  // is correct — only InMemoryResultCache should provide this.
+  test("getOrComputeJournaled: default impl throws UnsupportedOperationException") {
+    val raw: ResultCache = new ResultCache {
+      override def get(key: String): Option[CachedResult] = None
+      override def put(key: String, value: CachedResult): Unit = ()
+    }
+    val ex = intercept[UnsupportedOperationException] {
+      raw.getOrComputeJournaled("k", () => new Object())
+    }
+    assert(ex.getMessage.contains("getOrComputeJournaled"),
+      "error must point the caller at the offending method")
+  }
+
   test("end-to-end: cache miss after version bump is auto-invalidation") {
     // The most important regression test: a user bumps the model
     // version (e.g. flights.yml v1 → v2 with a schema change). Without

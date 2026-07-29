@@ -118,14 +118,32 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
-    val set = byModelAndVersion.remove((name, version))
-    if (set == null || set.isEmpty) 0
-    else {
-      val removed = set.size()
-      val it = set.iterator()
-      while (it.hasNext) map.remove(it.next())
-      removed
-    }
+    // Walk BOTH the row-form sidecar and the journaled-form
+    // sidecar. PR #278 introduced the journaled sidecar; this
+    // method was overlooked at the time. The platform currently
+    // only calls invalidateModel (which DOES walk both), but the
+    // trait still exposes this method, so any library caller
+    // would silently leak journaled entries if the model-version
+    // tag were used.
+    val rowSet = byModelAndVersion.remove((name, version))
+    val rowCount =
+      if (rowSet == null || rowSet.isEmpty) 0
+      else {
+        val n = rowSet.size()
+        val it = rowSet.iterator()
+        while (it.hasNext) map.remove(it.next())
+        n
+      }
+    val journaledSet = byModelAndVersionJournaled.remove((name, version))
+    val journaledCount =
+      if (journaledSet == null || journaledSet.isEmpty) 0
+      else {
+        val n = journaledSet.size()
+        val it = journaledSet.iterator()
+        while (it.hasNext) journaledMap.remove(it.next())
+        n
+      }
+    rowCount + journaledCount
   }
 
   /** Drop every retained entry. Exposed for tests. */
@@ -219,20 +237,28 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     val ours = new java.util.concurrent.CompletableFuture[AnyRef]()
     val prior = inFlightJournaled.putIfAbsent(key, ours)
     if (prior != null) {
+      // Lost the race; wait for the winner. Re-set the thread
+      // interrupt flag if Future.get() cleared it (PR-fix: B-1 from
+      // post-#278 review).
       try { return prior.get(); }
       catch {
-        case e: java.util.concurrent.ExecutionException => throw e.getCause
+        case e: java.util.concurrent.ExecutionException =>
+          throw e.getCause
+        case e: InterruptedException =>
+          Thread.currentThread().interrupt()
+          throw new RuntimeException(
+            "getOrComputeJournaled: interrupted while waiting on the "
+              + "in-flight compute (key=" + key + ")",
+            e)
       }
     } else {
       try {
         val v = compute.get()
-        if (getJournaled(key).isEmpty) {
-          // tag with empty model — caller should use
-          // putJournaledWithModelAndVersion from inside its
-          // compute closure for proper invalidation (the
-          // QueryService does this).
-          putJournaledWithModelAndVersion(key, v, "", 0)
-        }
+        // Caller is REQUIRED to put from inside the compute closure
+        // via putJournaledWithModelAndVersion(key, v, model, version)
+        // (the QueryService does this). Don't fall back to an
+        // untagged put here — entries with model="" are
+        // uninvalidateable (issue #9 from post-#278 review).
         ours.complete(v)
         v
       } catch {
@@ -317,12 +343,21 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     val ours = new java.util.concurrent.CompletableFuture[CachedResult]()
     val prior = inFlight.putIfAbsent(key, ours)
     if (prior != null) {
-      // Lost the race; wait for the winner.
+      // Lost the race; wait for the winner. Re-set the thread
+      // interrupt flag if Future.get() cleared it (PR-fix: B-1
+      // from post-#278 review). Without this, a stale interrupt
+      // can poison the next Restate handler call on this thread.
       try prior.get()
       catch {
         case e: java.util.concurrent.ExecutionException =>
           // The in-flight compute failed; propagate the cause.
           throw e.getCause
+        case e: InterruptedException =>
+          Thread.currentThread().interrupt()
+          throw new RuntimeException(
+            "getOrCompute: interrupted while waiting on the in-flight "
+              + "compute (key=" + key + ")",
+            e)
       }
     } else {
       // We won the race; run the compute.
