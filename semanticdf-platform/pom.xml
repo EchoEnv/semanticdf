@@ -189,6 +189,10 @@
         <profile>
             <id>local</id>
             <dependencies>
+                <!-- spark-streaming (legacy DStream API) intentionally omitted:
+                     the codebase uses org.apache.spark.sql.streaming.* (Structured
+                     Streaming) only. The DStream module pulls its own netty/akka
+                     transitive tree that nobody reads. -->
                 <dependency>
                     <groupId>org.apache.spark</groupId>
                     <artifactId>spark-sql_${scala.binary.version}</artifactId>
