@@ -117,9 +117,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     }
   }
 
-  @deprecated("Use invalidateModel(name). The cache key uses the YAML-declared "
-    + "version while the journal's CURRENT_VERSION is a separate counter; the two "
-    + "never match.", "0.2.2")
+  @deprecated("See ResultCache.invalidateByModelAndVersion for the rationale.", "0.2.2")
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
     // Walk BOTH the row-form sidecar and the journaled-form
     // sidecar. The journaled sidecar is a separate invalidation

@@ -144,10 +144,9 @@ steps:
 3. **Start the platform**:
    ```bash
    cd semanticdf-platform
-   MAVEN_OPTS="--add-opens java.base/sun.nio.ch=ALL-UNNAMED --add-opens java.base/java.nio=ALL-UNNAMED" \
-     mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication -Plocal
+   mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication -Plocal
    ```
-   The `-Plocal` profile bundles Spark into the runtime classpath (default scope is `provided` for slim production JARs). Maven needs the `--add-opens` flags because Spark 3.5.x reaches into JDK internals (not yet patched for the module system). The platform listens on `http://localhost:8080`. The Restate ingress from step 2 is on `8080`.
+   The `-Plocal` profile bundles Spark into the runtime classpath (default scope is `provided` for slim production JARs). The platform ships a `.mvn/jvm.config` with the `--add-opens` flags Spark 3.5.x needs on JDK 17, so no `MAVEN_OPTS` shell wrapper is required. The platform listens on `http://localhost:8080`. The Restate ingress from step 2 is on `8080`.
 4. **Register a model**:
    ```bash
    curl -X POST http://localhost:8080/ModelService/flights/register \
