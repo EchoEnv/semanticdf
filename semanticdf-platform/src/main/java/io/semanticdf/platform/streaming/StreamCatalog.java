@@ -5,17 +5,16 @@ import java.util.List;
 /**
  * Durable projection of streaming workflows.
  *
- * <p>This interface exists for one purpose: <b>DE-H2</b> — at platform
- * startup, after a JVM death, recover which streams were active so
+ * <p>This interface exists for one purpose: at platform startup,
+ * after a JVM death, recover which streams were active so
  * the {@link StartupReconciler} can re-invoke {@code run()} on each,
  * triggering {@link StreamingService}'s auto-detect branch to
  * recreate Spark queries that were lost with the previous JVM.
  *
- * <p><b>Architectural note (PR #234 review, Architect-C1):</b> the
- * catalog stores the metadata <em>needed at sweep time to invoke
- * {@code run()}</em> — stream-id + modelName + queryShape +
- * checkpointLocation. It does NOT store status (the journal has
- * that — single source of truth per
+ * <p><b>Architectural note:</b> the catalog stores the metadata
+ * <em>needed at sweep time to invoke {@code run()}</em> — stream-id
+ * + modelName + queryShape + checkpointLocation. It does NOT store
+ * status (the journal has that — single source of truth per
  * {@code docs/design/platform-architecture.md §2.3}). The metadata
  * is duplicated with the journal because the journal is Restate's
  * internal store and we can't read it directly from Java.

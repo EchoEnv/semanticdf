@@ -16,7 +16,7 @@ import org.apache.spark.sql.SparkSession
   *
   *   2. Every CLI invocation created its OWN session, ignoring any
   *      session the test (or the parent process) had already set up.
-  *      In PR #209 the lineage CLI test hit this: the test's
+  *      The lineage CLI test hit this: the test's
   *      `SparkSessionFixture` registered a temp view, but the CLI's
   *      `getOrCreate` returned a different session and the view was
   *      invisible.

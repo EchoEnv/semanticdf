@@ -42,7 +42,7 @@ object Benchmark {
             ("DL", "ATL", "JFK", 150, 6),
           )).toDF("carrier", "origin", "dest", "distance", "passengers")
         }
-      println(s"Row count: ${flights.count()}")
+      SemanticLogger.info(s"Row count: ${flights.count()}")
 
       val model = toSemanticTable(flights, name = Some("flights"))
         .withDimensions(
@@ -118,6 +118,6 @@ object Benchmark {
     val min    = sorted.head
     val median = sorted(runs / 2)
     val max    = sorted.last
-    println(f"[bench] $label%-45s  min=${min%7.1f}ms  med=${median%7.1f}ms  max=${max%7.1f}ms")
+    SemanticLogger.info(f"[bench] $label%-45s  min=${min%7.1f}ms  med=${median%7.1f}ms  max=${max%7.1f}ms")
   }
 }

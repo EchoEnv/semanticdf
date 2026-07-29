@@ -43,9 +43,9 @@ object AuditSink {
   /** JSON Lines on stdout. Each event is a single-line JSON object.
     * Designed for grep / awk / `jq` consumption; safe to tail.
     *
-    * Uses `java.util.logging` rather than `println` so the output
-    * goes through the user's logging config and can be redirected
-    * independently of the JVM's stdout. */
+    * Uses `java.util.logging` so the output goes through the user's
+    * logging config and can be redirected independently of the JVM's
+    * stdout. */
   val JsonlStdout: AuditSink = new JsonlStdoutSink()
 
   /** A sink that retains every event in memory, in arrival order.

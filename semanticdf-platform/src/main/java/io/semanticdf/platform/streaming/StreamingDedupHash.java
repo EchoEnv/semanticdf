@@ -31,8 +31,7 @@ import java.security.NoSuchAlgorithmException;
  *
  * <p>This mirrors the library's {@code AuditEvent.dedupHashOf} contract (a
  * SHA-256 over the query-shape fields) but is purpose-built for the streaming
- * lifecycle. See {@code docs/design/platform-determinism-audit.md} finding #7
- * and PR #218's dedupHash contract.
+ * lifecycle. See {@code docs/design/platform-determinism-audit.md} finding #7.
  *
  * <p>The field separator is ASCII unit-separator ({@code 0x1f}) to prevent
  * value concatenation from producing ambiguous input.

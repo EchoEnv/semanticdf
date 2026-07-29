@@ -61,7 +61,7 @@ object FlightsBasic {
 
       // Also show the semanticdf plan (no Spark compile)
       SemanticLogger.info("=== SemanticDF plan (explain) ===")
-      println(byCarrier.explain())
+      SemanticLogger.info(byCarrier.explain())
 
     } finally {
       spark.stop()

@@ -117,10 +117,11 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     }
   }
 
+  @deprecated("Use invalidateModel(name). See ResultCache for the rationale.", "0.2.3")
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
     // Walk BOTH the row-form sidecar and the journaled-form
-    // sidecar. PR #278 introduced the journaled sidecar; this
-    // method was overlooked at the time. The platform currently
+    // sidecar. The journaled sidecar is a separate invalidation
+    // key; this method walks both. The platform currently
     // only calls invalidateModel (which DOES walk both), but the
     // trait still exposes this method, so any library caller
     // would silently leak journaled entries if the model-version
@@ -155,14 +156,14 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   // ===================================================================
-  // PR #276 — journaled-form cache (bypasses Array[Row] rebuild)
+  // Journaled-form cache (bypasses Array[Row] rebuild)
   // ===================================================================
 
   /** LRU map for journaled-form entries (the form Restate journals:
     * a plain {@code List<Object[]>} of cells per row + column
     * metadata). Caching this form avoids the redundant
     * {@code Array[Row]} rebuild that the v0.2.2 path incurred on
-    * every cache miss — see issue #276. */
+    * every cache miss. */
   private val journaledMap = new java.util.LinkedHashMap[String, JournaledEntry](
     /* initialCapacity */ 16,
     /* loadFactor      */ 0.75f,
@@ -308,7 +309,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   }
 
   // ===================================================================
-  // PR #264 — single-flight on cache miss (thundering herd)
+  // Single-flight on cache miss (thundering herd)
   // ===================================================================
 
   /** Per-key in-flight completions for single-flight read-through.
@@ -320,11 +321,11 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     * via compare-and-remove on the ConcurrentHashMap so a slow
     * `compute` can't be stranded.
     *
-    * <p>PR #264 (cache correctness fix): without this, N concurrent
-    * identical first-time queries (the LLM-agent stampede pattern)
-    * all miss the cache, all run the full Spark job, and only the
-    * last put wins. The cache becomes a net negative — every caller
-    * pays the Spark cost on the first miss. */
+    * <p>Without this, N concurrent identical first-time queries
+    * (the LLM-agent stampede pattern) all miss the cache, all run
+    * the full Spark job, and only the last put wins. The cache
+    * becomes a net negative — every caller pays the Spark cost on
+    * the first miss. */
   private val inFlight =
     new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.CompletableFuture[CachedResult]]()
 
@@ -377,7 +378,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
         v
       } catch {
         case t: Throwable =>
-          // PR #264: on failure, we still complete the future so any
+          // On failure, we still complete the future so any
           // concurrent waiters (who reached `prior.get()` BEFORE we
           // did the remove below) wake up with the same exception.
           // After this point, no NEW caller can see the future —

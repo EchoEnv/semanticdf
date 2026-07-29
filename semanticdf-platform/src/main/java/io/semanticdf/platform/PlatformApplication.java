@@ -3,6 +3,8 @@ package io.semanticdf.platform;
 import dev.restate.admin.client.ApiClient;
 import dev.restate.admin.model.RegisterDeploymentRequest;
 import dev.restate.admin.model.RegisterDeploymentRequestAnyOf;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import dev.restate.sdk.endpoint.Endpoint;
 import dev.restate.sdk.http.vertx.RestateHttpServer;
 
@@ -58,6 +60,8 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * (status / restart / drain); the SDK ships {@code dev.restate.admin-client}.
  */
 public final class PlatformApplication {
+
+  private static final Logger LOG = LoggerFactory.getLogger(PlatformApplication.class);
 
   private PlatformApplication() {}
 
@@ -274,14 +278,14 @@ public final class PlatformApplication {
       try {
         entries = Integer.parseInt(entriesStr);
       } catch (NumberFormatException nfe) {
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: SEMANTICDF_RESULT_CACHE_ENTRIES='"
                 + entriesStr
                 + "' is not an integer; falling back to 256");
         entries = 256;
       }
       if (entries <= 0) {
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: SEMANTICDF_RESULT_CACHE_ENTRIES="
                 + entries
                 + " must be > 0; falling back to 256");
@@ -294,7 +298,7 @@ public final class PlatformApplication {
       return ResultCache.inMemory(entries);
     }
     if (!"noop".equalsIgnoreCase(kind)) {
-      System.err.println(
+      LOG.warn(
           "semanticdf-platform: SEMANTICDF_RESULT_CACHE='"
               + kind
               + "' is not a known cache kind (expected 'noop' or 'memory'); falling back to NoOp.");
@@ -311,9 +315,9 @@ public final class PlatformApplication {
     // SPARK_APP_NAME — Spark application name shown in the Spark UI / Connect logs.
     // Default: "semanticdf-platform".
     //
-    // SPARK_MASTER — currently UNUSED (PR #240 reserved the env var for
-    // future single-node tuning). The library's SdfSession hardcodes
-    // 'local[*]' for the local-mode fallback. Set SEMANTICDF_SPARK_CONNECT_URL
+    // SPARK_MASTER — currently UNUSED (reserved for future single-node
+    // tuning). The library's SdfSession hardcodes 'local[*]' for the
+    // local-mode fallback. Set SEMANTICDF_SPARK_CONNECT_URL
     // instead for production. Default: "local[*]" (preserved as a hint in
     // startup logs).
     //
@@ -339,10 +343,10 @@ public final class PlatformApplication {
 
     // --- Spark session ---
     //
-    // P1 (pre-#240): in-process Spark driver, master from SPARK_MASTER (default
+    // P1: in-process Spark driver, master from SPARK_MASTER (default
     //   "local[*]"). One Spark JVM per platform JVM.
     //
-    // PR #240: flag-gated via SEMANTICDF_SPARK_CONNECT_URL — when set, the
+    // Flag-gated via SEMANTICDF_SPARK_CONNECT_URL — when set, the
     //   session is a Spark Connect CLIENT to a long-running remote cluster.
     //   SparkConnect mode requires Spark 4.0+ (SdfSession throws a clear
     //   error on 3.5 with a hint to build with -Pspark4). The platform's
@@ -352,7 +356,7 @@ public final class PlatformApplication {
     SparkSession spark =
         SdfSession.createFromEnv(sparkAppName, Option.empty());
 
-    // PR #241: Register a minimal spark-cleanup shutdown hook IMMEDIATELY
+    // Register a minimal spark-cleanup shutdown hook IMMEDIATELY
     // after SparkSession creation. The main shutdown hook (registered
     // later, after all services are bound and the daemon sweep is up)
     // handles the full graceful sequence: drain → spark.stop() →
@@ -371,7 +375,7 @@ public final class PlatformApplication {
                 System.out.println(
                     "semanticdf-platform: early-shutdown SparkSession released");
               } catch (Throwable t) {
-                System.err.println(
+                LOG.warn(
                     "semanticdf-platform: early-shutdown spark.stop() failed: "
                         + t.getMessage());
               }
@@ -379,7 +383,7 @@ public final class PlatformApplication {
             "semanticdf-platform-shutdown-spark-early"));
 
     if (System.getenv(SdfSession.RemoteUrlEnvVar()) != null) {
-      // PR #240: control-plane mode. Redact credentials (anything after a
+      // Control-plane mode. Redact credentials (anything after a
       // ';' or '?' delimiter in sc:// URLs is a token) before logging.
       System.out.println(
           "semanticdf-platform: Spark Connect mode \u2014 control plane against "
@@ -410,7 +414,7 @@ public final class PlatformApplication {
             + yamlRegistry.registeredModels()
             + " (hot-reload wrapper enabled: H3)");
 
-    // --- Stream catalog (DE-H2 — bulk startup reconciliation) ---
+    // --- Stream catalog (bulk startup reconciliation) ---
     //
     // Postgres-backed durable list of stream-ids. The
     // StartupReconciler reads this at boot to re-invoke run() on
@@ -509,8 +513,8 @@ public final class PlatformApplication {
     // calls. The external Restate then routes incoming calls to
     // this in-process runtime via the service-handler URL.
     //
-    // This is the verification-mode path. Mirrors PR #240's Spark
-    // Connect toggle: opt-in, not a default-on cutover.
+    // This is the verification-mode path. Mirrors the Spark Connect
+    // toggle: opt-in, not a default-on cutover.
     String externalIngress = System.getenv("RESTATE_INGRESS_URL");
     if (externalIngress != null && !externalIngress.isBlank()) {
       try {
@@ -529,13 +533,13 @@ public final class PlatformApplication {
                 + " -- service handler URL = " + handlerUrl
                 + " deploymentId=" + deploymentId);
       } catch (Exception e) {
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: external Restate registration failed (continuing "
                 + "with in-process runtime only): " + e.getMessage());
       }
     }
 
-    // DE-H2: bulk startup reconciliation. After the HTTP server is
+    // Bulk startup reconciliation. After the HTTP server is
     // listening (so the sweep's POSTs reach the ingress), walk the
     // catalog and re-invoke run() on each previously-active stream.
     // The run() handler's auto-detect branch will see the empty
@@ -546,7 +550,7 @@ public final class PlatformApplication {
     // stream-ids if the sweep has issues.
     //
     // CRITICAL: the sweep runs on a DAEMON thread so it does NOT
-    // block main(). Reasons (PR #235 senior review):
+    // block main(). Reasons:
     //  1. With SEMANTICDF_RECONCILE_TIMEOUT_MS=30s default and a slow
     //     Postgres or N×5s swept HTTP calls, a synchronous sweep
     //     could delay readiness past kubelet's 30s liveness probe.
@@ -585,7 +589,7 @@ public final class PlatformApplication {
                           + " failed="
                           + sweepSummary.failed());
                 } catch (RuntimeException sweepRe) {
-                  System.err.println(
+                  LOG.warn(
                       "semanticdf-platform: startup reconciliation failed: "
                           + sweepRe.getMessage()
                           + " (operators must invoke /restart manually)");
@@ -633,7 +637,7 @@ public final class PlatformApplication {
         spark.stop();
         System.out.println("semanticdf-platform: SparkSession stopped");
       } catch (Throwable t) {
-        System.err.println("semanticdf-platform: spark.stop() failed: " + t.getMessage());
+        LOG.warn("semanticdf-platform: spark.stop() failed: " + t.getMessage());
       }
 
       // Release Postgres connections. Done last so the platform
@@ -646,7 +650,7 @@ public final class PlatformApplication {
           catalogForShutdown.close();
           System.out.println("semanticdf-platform: StreamCatalog closed");
         } catch (Throwable t) {
-          System.err.println(
+          LOG.warn(
               "semanticdf-platform: StreamCatalog close() failed: " + t.getMessage());
         }
       }
@@ -658,7 +662,7 @@ public final class PlatformApplication {
           auditStore.close();
           System.out.println("semanticdf-platform: AuditEventStore closed");
         } catch (Throwable t) {
-          System.err.println(
+          LOG.warn(
               "semanticdf-platform: AuditEventStore close() failed: " + t.getMessage());
         }
       }
@@ -670,7 +674,7 @@ public final class PlatformApplication {
           modelStore.close();
           System.out.println("semanticdf-platform: ModelStore closed");
         } catch (Throwable t) {
-          System.err.println(
+          LOG.warn(
               "semanticdf-platform: ModelStore close() failed: " + t.getMessage());
         }
       }
@@ -724,7 +728,7 @@ public final class PlatformApplication {
       long v = Long.parseLong(raw.trim());
       return v > 0 ? v : DEFAULT_DRAIN_TIMEOUT_MS;
     } catch (NumberFormatException e) {
-      System.err.println(
+      LOG.warn(
           "semanticdf-platform: invalid SEMANTICDF_DRAIN_TIMEOUT_MS='"
               + raw
               + "', using default "
@@ -794,7 +798,7 @@ public final class PlatformApplication {
       // interrupt flag (best practice), cancel any in-flight tasks, and
       // bail out — spark.stop() will tear down the rest.
       Thread.currentThread().interrupt();
-      System.err.println(
+      LOG.warn(
           "semanticdf-platform: drain interrupted; "
               + "remaining queries will be killed by spark.stop()");
       executor.shutdownNow();
@@ -823,7 +827,7 @@ public final class PlatformApplication {
       String streamId = snapshot.get(i).getKey();
       if (f.isCancelled()) {
         timedOut++;
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: drain timed out for stream-id="
                 + streamId
                 + " after "
@@ -840,7 +844,7 @@ public final class PlatformApplication {
           // call sites only produce ExecutionException, but we don't
           // want to NPE if a future JDK call adds another type).
           Throwable cause = e.getCause() != null ? e.getCause() : e;
-          System.err.println(
+          LOG.warn(
               "semanticdf-platform: drain failed for stream-id="
                   + streamId
                   + ": "
@@ -886,7 +890,7 @@ public final class PlatformApplication {
     try {
       int v = Integer.parseInt(raw.trim());
       if (v <= 0) {
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: non-positive SEMANTICDF_DRAIN_MAX_PARALLEL='"
                 + raw
                 + "', using default "
@@ -894,7 +898,7 @@ public final class PlatformApplication {
         return DEFAULT_DRAIN_MAX_PARALLEL;
       }
       if (v > MAX_DRAIN_MAX_PARALLEL) {
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: SEMANTICDF_DRAIN_MAX_PARALLEL='"
                 + raw
                 + "' exceeds max "
@@ -904,7 +908,7 @@ public final class PlatformApplication {
       }
       return v;
     } catch (NumberFormatException e) {
-      System.err.println(
+      LOG.warn(
           "semanticdf-platform: invalid SEMANTICDF_DRAIN_MAX_PARALLEL='"
               + raw
               + "', using default "

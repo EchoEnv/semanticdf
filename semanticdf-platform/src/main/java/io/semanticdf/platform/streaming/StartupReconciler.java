@@ -3,6 +3,8 @@ package io.semanticdf.platform.streaming;
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -15,7 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Bulk-startup reconciliation (DE-H2 from PR #232 senior review).
+ * Bulk-startup reconciliation.
  *
  * <p>After a platform JVM death, the in-JVM
  * {@link StreamingQueryHandleRegistry} is empty. Restate's journal
@@ -32,16 +34,16 @@ import java.util.concurrent.atomic.AtomicInteger;
  * about its result; we just want the workflow to be entered so
  * reconciliation can happen asynchronously).
  *
- * <p><b>Design notes (PR #234 review):</b>
+ * <p><b>Design notes:</b>
  * <ul>
- *   <li><b>Raw HTTP, no new dep</b> (Architect-H3). The Restate
- *       ingress accepts {@code POST /StreamingService/{key}/send}
- *       with a JSON body containing the {@code run} handler's
- *       argument. We use Java's built-in {@link HttpClient}.
+ *   <li><b>Raw HTTP, no new dep</b>. The Restate ingress accepts
+ *       {@code POST /StreamingService/{key}/send} with a JSON body
+ *       containing the {@code run} handler's argument. We use
+ *       Java's built-in {@link HttpClient}.
  *   <li><b>P1 single-replica</b>. Multi-replica will need a
- *       distributed lease in Postgres (DE-C1, deferred to P3).
+ *       distributed lease in Postgres (deferred to P3).
  *   <li><b>Bounded parallelism</b>. The submissions run on a small
- *       executor — same pattern as the drain timeout (PR #228).
+ *       executor.
  *   <li><b>Best-effort.</b> A failure to submit one stream doesn't
  *       stop the sweep; we log and continue. Failed streams
  *       remain in the catalog; operators see them via the summary
@@ -59,6 +61,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * inject a recording HTTP backend.
  */
 public final class StartupReconciler {
+  private static final Logger LOG = LoggerFactory.getLogger(StartupReconciler.class);
 
   private final StreamCatalog catalog;
   private final URI localIngress;
@@ -106,7 +109,7 @@ public final class StartupReconciler {
       long v = Long.parseLong(raw.trim());
       return v > 0 ? v : DEFAULT_TOTAL_TIMEOUT_MS;
     } catch (NumberFormatException e) {
-      System.err.println(
+      LOG.warn(
           "semanticdf-platform: invalid SEMANTICDF_RECONCILE_TIMEOUT_MS='"
               + raw
               + "', using default "
@@ -137,10 +140,10 @@ public final class StartupReconciler {
     AtomicInteger skipped = new AtomicInteger(0);
     AtomicInteger failed = new AtomicInteger(0);
 
-    // Bounded parallelism — same pattern as drain (PR #228). For
-    // P1 the assumption is <1000 streams; sequential would also
-    // be fine. The executor's sole purpose here is to bound
-    // concurrent in-flight HTTP requests to a small number.
+    // Bounded parallelism. For P1 the assumption is <1000 streams;
+    // sequential would also be fine. The executor's sole purpose
+    // here is to bound concurrent in-flight HTTP requests to a
+    // small number.
     ExecutorService executor =
         Executors.newFixedThreadPool(
             Math.min(8, total),
@@ -167,7 +170,7 @@ public final class StartupReconciler {
                         + ")");
               } catch (Exception e) {
                 failed.incrementAndGet();
-                System.err.println(
+                LOG.warn(
                     "semanticdf-platform: startup reconciliation failed for "
                         + meta.streamId()
                         + ": "
@@ -229,7 +232,7 @@ public final class StartupReconciler {
         // journal, or table populated via migration). Skip with
         // a warning — but since this indicates drift between
         // catalog and journal, log at WARN level.
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: WARN — catalog has stream-id="
                 + streamId
                 + " but journal says '"
@@ -238,11 +241,11 @@ public final class StartupReconciler {
         throw new SkippedException(status);
     }
 
-    // PR #236 (reclassified URL safety): stream-id may contain
-    // URL-unsafe characters ('/', '?', '#', '+', '%', space,
-    // non-ASCII). Without encoding, the URL would route to a
-    // WRONG workflow key (silent cross-stream contamination) or
-    // 404. URLEncoder is no-op on UUIDs and similar safe chars.
+    // URL safety: stream-id may contain URL-unsafe characters
+    // ('/', '?', '#', '+', '%', space, non-ASCII). Without
+    // encoding, the URL would route to a WRONG workflow key
+    // (silent cross-stream contamination) or 404. URLEncoder is
+    // no-op on UUIDs and similar safe chars.
     String runUrl =
         localIngress.toString()
             + "/StreamingService/"

@@ -50,7 +50,7 @@ object FlightsPctTotals {
 
       // Verify: pcts sum to 1.0
       SemanticLogger.info("=== SemanticDF plan ===")
-      println(result.explain())
+      SemanticLogger.info(result.explain())
 
       SemanticLogger.info("=== Expected values ===")
       SemanticLogger.info("AA total=550, pct=550/2375=0.2316, avg=550/7=78.6, pct_avg=78.6/103.3=0.761")

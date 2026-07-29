@@ -125,9 +125,12 @@ For a query:
 2. **Cache miss** → call into Restate's `QueryService` (stateless) or
    the relevant `ModelService` (VirtualObject) for the plan. The
    response is cached in L1 for next time.
-3. Restate calls `semanticdf.of(spark, model)` *inside a `Restate.run`
-   block* (the boundary that makes non-determinism replay-safe). The
-   compiled plan goes to Postgres.
+3. The Scala library compiles the model **in handler scope**
+   (not inside `Restate.run` — see §9.1, PR #249). The
+   journal-bounded step is `Restate.run("model.persist", ...)`,
+   which writes a small, Jackson-clean `ModelDefinition` record
+   to Postgres (the platform's record store). The result cache
+   is then invalidated outside any `Restate.run` block.
 4. Engine reads Iceberg tables from object storage, returns
    Arrow-encoded results.
 5. Platform streams results back to agent via Arrow Flight (or REST

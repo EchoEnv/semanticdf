@@ -76,7 +76,7 @@ object TimeSeries {
         .show(truncate = false)
 
       SemanticLogger.info("=== SemanticDF plan for by-month query ===")
-      println(model
+      SemanticLogger.info(model
         .atTimeGrain("flight_date", "month")
         .groupBy("flight_date", "carrier")
         .aggregate("total_passengers")

@@ -17,9 +17,11 @@ import java.util.List;
  * throws {@code InvalidDefinitionException: Cannot construct
  * instance of org.apache.spark.sql.Row}.
  *
- * <p>PR #248 introduced this record with a generic
- * {@code List<Object[]>} payload. PR #250 found that
- * {@code Object[]} is untyped: Jackson round-trips
+ * <p>This record uses a 9-tag vocabulary (T_LONG, T_STRING,
+ * T_BIG_DECIMAL, etc.) written at journal-write time and decoded
+ * back to the matching Java type at journal-read time. Earlier
+ * designs used an untyped {@code List<Object[]>} payload where
+ * Jackson round-tripped
  * {@code Long \u2192 Integer} (overflow), {@code BigDecimal \u2192 Double}
  * (precision loss), {@code Timestamp \u2192 epoch Long} (unit
  * confusion), and {@code byte[] \u2192 Base64 String} (silent type

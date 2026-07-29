@@ -126,8 +126,8 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
 
       case j: SemanticJoinOp =>
         // Pass extra dimensions so mergedModel includes them. Preserve
-        // the key arrays + SQL fallback from PR #153 so the joined
-        // manifest round-trip stays correct after adding extra dims.
+        // the key arrays + SQL fallback so the joined manifest
+        // round-trip stays correct after adding extra dims.
         val updatedJoin = SemanticJoinOp(
           left   = j.left,
           right  = j.right,
@@ -147,7 +147,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           rightPrefix = j.rightPrefix,
           // Preserve the structured predicate AST across the
           // extra-* rewrite so the joined-manifest round-trip
-          // keeps it (PR #186).
+          // keeps it it.
           predicateAst = j.predicateAst,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
@@ -256,7 +256,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           rightPrefix = j.rightPrefix,
           // Preserve the structured predicate AST across the
           // extra-* rewrite so the joined-manifest round-trip
-          // keeps it (PR #186).
+          // keeps it it.
           predicateAst = j.predicateAst,
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache)
@@ -451,7 +451,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
 
   /** Typed equi-join entry point: explicit single-column key names.
     * The "core-correct" path — emits the keys directly in the manifest
-    * wire shape (PR #154) without needing probe decomposition.
+    * wire shape without needing probe decomposition.
     *
     * @example
     * {{{
@@ -483,7 +483,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
   }
 
   /** Internal: shared body of `join_one` overloads. Calls the probe-based
-    * `extractJoinKeys` (PR #153 helper) when the caller used the lambda
+    * `extractJoinKeys` helper when the caller used the lambda
     * form; the typed entry points pre-populate the keys directly. */
   private[semanticdf] def join_oneWithKeys(
       other: SemanticTable,
