@@ -7,10 +7,13 @@
 # Usage:
 #   docker compose -f semanticdf-platform/docker-compose.yml up -d
 #   cd semanticdf-platform
-#   MAVEN_OPTS="--add-opens=..." \
-#     mvn -Dsemanticdf.version=0.2.1 exec:java \
-#       -Dexec.mainClass=io.semanticdf.platform.PlatformApplication \
-#       -Dexec.classpathScope=test
+#   mvn -Dsemanticdf.version=0.2.1 exec:java \
+#     -Dexec.mainClass=io.semanticdf.platform.PlatformApplication -Plocal
+#
+# The `-Plocal` profile bundles Spark + log4j-core into the runtime
+# classpath. The `.mvn/jvm.config` (same directory) provides the
+# `--add-opens` flags Spark 3.5.x needs on JDK 17. Earlier
+# workarounds (`-Dexec.classpathScope=test`) are obsolete.
 
 version: "3.9"
 
