@@ -117,7 +117,9 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     }
   }
 
-  @deprecated("See ResultCache.invalidateByModelAndVersion for the rationale.", "0.2.2")
+  // @deprecated inherited from ResultCache.invalidateByModelAndVersion.
+  // The trait's annotation carries the full rationale; the override does
+  // not repeat it (a `See <other method>` reference would be circular).
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
     // Walk BOTH the row-form sidecar and the journaled-form
     // sidecar. The journaled sidecar is a separate invalidation

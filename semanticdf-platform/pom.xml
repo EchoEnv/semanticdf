@@ -64,8 +64,10 @@
              shipped in .mvn/jvm.config (read by Maven at JVM startup, NOT
              reachable from this property because Maven reads jvm.config
              before properties are resolved) and a CI test should assert
-             the two stay in sync. Note: XML comments cannot contain
-             double-dash, so the literal flag prefix is not reproduced here. -->
+             the two stay in sync. See ../.mvn/jvm.config for the literal
+             flag values; XML 1.0 paragraph 2.5 forbids the two-dash
+             sequence inside comments, so the literal flag prefix is not
+             reproduced here. -->
         <add.opens.flags>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</add.opens.flags>
     </properties>
 
