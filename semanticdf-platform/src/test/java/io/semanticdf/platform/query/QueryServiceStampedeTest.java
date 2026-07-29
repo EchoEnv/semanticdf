@@ -326,11 +326,13 @@ class QueryServiceStampedeTest {
   @Test
   void interruptedLoser_reSetsInterruptFlag() throws Exception {
     // Resolve the source file relative to the project root so the
-    // test is portable across CI checkouts, forks, and parent-dir
-    // renames. Surefire runs tests with user.dir =
-    // semanticdf-platform/, so the parent is the project root.
-    Path src = Paths.get(System.getProperty("user.dir"))
-        .getParent()
+    // test is portable across CI checkouts, IDE runners, and
+    // parent-dir renames. Try cwd first, then cwd.getParent — the
+    // latter is the project root when Surefire runs from the
+    // module dir (semanticdf-platform/), which is the convention.
+    // Mirrors the examplesPath helper pattern in
+    // HospitalTemplateSpec.scala.
+    Path src = resolveProjectRoot()
         .resolve("src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
     String content = Files.readString(src);
 
@@ -355,5 +357,32 @@ class QueryServiceStampedeTest {
         "journaled-form catch must handle InterruptedException explicitly");
     assertTrue(journaledTail.contains("Thread.currentThread().interrupt()"),
         "journaled-form InterruptedException must re-set the interrupt flag");
+  }
+
+  /** Resolve the project root (the directory that contains
+    * {@code src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala}).
+    * Mirrors the {@code examplesPath} helper pattern in
+    * {@code HospitalTemplateSpec.scala}: try cwd first (works for
+    * IDE runners that set user.dir to the project root), then
+    * cwd.getParent (works for Surefire's default where user.dir is
+    * the module dir). The first candidate whose tree contains the
+    * target file wins. */
+  private static Path resolveProjectRoot() {
+    String cwd = System.getProperty("user.dir");
+    java.io.File[] candidates = new java.io.File[]{
+        new java.io.File(cwd),
+        new java.io.File(cwd).getAbsoluteFile().getParentFile()
+    };
+    // The marker file that uniquely identifies the project root.
+    String marker = "src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala";
+    for (java.io.File c : candidates) {
+      if (c == null) continue;
+      if (new java.io.File(c, marker).isFile()) {
+        return c.toPath();
+      }
+    }
+    throw new IllegalStateException(
+        "Could not locate project root from user.dir=" + cwd
+            + " (tried cwd and cwd.getParent; looking for " + marker + ")");
   }
 }

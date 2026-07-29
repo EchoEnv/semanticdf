@@ -43,8 +43,9 @@ import scala.Option;
  *       without re-executing the Spark plan.
  *   <li><b>Cache populate</b> â {@code putWithModelAndVersion} tags
  *       the entry for the sidecar
- *       {@link ResultCache#invalidateByModelAndVersion(String, int)}
- *       called from {@code ModelService.register}.
+ *       (no-op on the cache itself; the cache is invalidated
+ *       separately by {@code ModelService.register} via
+ *       {@link ResultCache#invalidateModel(String)}).
  * </ol>
  *
  * <p>Wire shape: the {@code QueryResult.rows} field is

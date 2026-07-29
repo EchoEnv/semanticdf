@@ -472,7 +472,7 @@ public final class PlatformApplication {
 
     // Cache seam for ModelService and QueryService:
     //   - When a successful register() bumps CURRENT_VERSION, ModelService
-    //     calls cache.invalidateByModelAndVersion(name, version).
+    //     calls cache.invalidateModel(name).
     //   - QueryService.runQuery consults the cache before compiling.
     // Default: NoOp (no caching -- every query re-executes the Spark plan).
     // Opt-in via SEMANTICDF_RESULT_CACHE=memory (bounded LRU).
