@@ -49,7 +49,7 @@ design would have had to hand-roll.
 |---|---|---|
 | **Restate runtime** | Hosts the platform's services. Journal in Postgres. mTLS between services. | Restate server binary (Rust), 1+ nodes, 3-AZ. |
 | **Platform services** (in the Restate runtime) | `ModelService`, `QueryService`, `StreamingService`, `AuditService`, `CatalogService` | Java 21, defined as Restate `@Service` / `@VirtualObject` / `@Workflow`. |
-| **`semanticdf` library** (unchanged) | Pure-data compiler. The platform calls into it inside `Restate.run` blocks. | Scala 2.13 / Spark; consumed as a JAR. |
+| **`semanticdf` library** (unchanged) | Pure-data compiler. The platform calls into it inside `Restate.run("model.persist", ...)` (the only journal-bounded step); compile and lineage run in handler scope (see §9.1, PR #249). | Scala 2.13 / Spark; consumed as a JAR. |
 | **Postgres** | Platform metadata (model registry, lineage, audit, query journal mirror) **and** Restate's journal | Managed (RDS / Cloud SQL), 3-AZ sync replication. |
 | **Object storage** (S3 / MinIO / GCS) | Raw data tables (Iceberg) + Restate's WAL/snapshots | Object storage. |
 | **Engine adapters** | Per-engine: Trino plugin (Java), Spark SDK (Scala). Consume the platform's REST + optionally the Restate protocol. | Each engine has its own thin adapter. |
@@ -187,16 +187,19 @@ manifest to Postgres via the {@code ModelStore}:
   the SHA-256 manifest hash, and the canonical
   {@code Lineage.workspaceJsonFor(model)} output.
 
-Compilation steps run inside {@code Restate.run(...)} so a JVM
-crash mid-register replays the cached compile + persist without
-re-executing side effects. The compile uses the library's
+Compilation steps run in handler scope (PR #249). Only the
+durable Postgres persist ({@code Restate.run("model.persist", ...)})
+is journal-bounded — compile and lineage are deliberately
+handler-scope because the compiled {@code SemanticTable} carries
+a Spark {@code Dataset.rdd} chain that Jackson cannot reconstruct
+during replay. The compile uses the library's
 {@code YamlLoader.load(path, spark)} entry point via a temp file
 that's deleted in a {@code finally} block (no FD leak).
 
 A successful registration invalidates the result cache via
-{@code ResultCache.invalidateByModelAndVersion(name, version)}
-after the journal bookkeeping, OUTSIDE any {@code Restate.run}
-block — cache state is observable but not coordination, so a
+{@code ResultCache.invalidateModel(name)} after the journal
+bookkeeping, OUTSIDE any {@code Restate.run} block — cache
+state is observable but not coordination, so a
 re-invocation can re-emit without double-invalidating.
 
 For P1 the cache defaults to {@code ResultCache.NoOp}; operators
@@ -366,14 +369,18 @@ step). Sizing must be re-done.
 ### 9.1 The 3 biggest risks
 
 1. **The Java-platform → Scala-library boundary is inside a Restate
-   journal entry.** Every `Restate.run("compile", () -> semanticdf.of(spark, model))`
-   crosses the language boundary, and the result is journaled. If
-   the Scala library is non-deterministic (catches a `Throwable` and
-   returns a default, depends on a static clock, reads from a non-
-   serialized closure capture), the journal replays produce a
-   different result than the original run. **Mitigation:** a
-   deterministic-purity audit of `semanticdf` before it goes inside
-   any `Restate.run` — every public entry point must be a pure
+   journal entry.** PR #249 moved compile and lineage OUT of
+   `Restate.run` — they now run in handler scope because the
+   compiled `SemanticTable` carries a Spark `Dataset.rdd` chain
+   that Jackson cannot reconstruct during replay. The remaining
+   journal-bounded step is `Restate.run("model.persist", ...)`,
+   which crosses the language boundary and returns a small
+   `ModelDefinition` record (Jackson-clean). The remaining
+   determinism risk is: any non-deterministic call by the handler
+   outside `Restate.run` (System.currentTimeMillis, UUID.randomUUID,
+   third-party clients) — see `platform-determinism-audit.md`.
+   **Mitigation:** a deterministic-purity audit of `semanticdf`
+   before any boundary uses it — every public entry point must be a pure
    function of its inputs.
 2. **Postgres is now on the critical path for both metadata and the
    journal.** The pre-Restate design sized Postgres for ~1K QPS of

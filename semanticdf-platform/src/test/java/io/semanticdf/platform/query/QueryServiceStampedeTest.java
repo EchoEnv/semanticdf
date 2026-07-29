@@ -360,21 +360,26 @@ class QueryServiceStampedeTest {
   }
 
   /** Resolve the project root (the directory that contains
-    * {@code src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala}).
+    * {@code src/main/scala/io/semanticdf/package.scala}).
     * Mirrors the {@code examplesPath} helper pattern in
     * {@code HospitalTemplateSpec.scala}: try cwd first (works for
     * IDE runners that set user.dir to the project root), then
     * cwd.getParent (works for Surefire's default where user.dir is
     * the module dir). The first candidate whose tree contains the
-    * target file wins. */
+    * marker file wins. */
   private static Path resolveProjectRoot() {
     String cwd = System.getProperty("user.dir");
     java.io.File[] candidates = new java.io.File[]{
         new java.io.File(cwd),
         new java.io.File(cwd).getAbsoluteFile().getParentFile()
     };
-    // The marker file that uniquely identifies the project root.
-    String marker = "src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala";
+    // The marker file is the package object — the canonical
+    // library root. Renaming it would rename the entire
+    // `io.semanticdf` package, so this is the most stable
+    // marker in the codebase (post-#281 review: previously used
+    // a deep cache file, which would silently break if the
+    // cache module was restructured).
+    String marker = "src/main/scala/io/semanticdf/package.scala";
     for (java.io.File c : candidates) {
       if (c == null) continue;
       if (new java.io.File(c, marker).isFile()) {
