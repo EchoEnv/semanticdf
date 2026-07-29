@@ -5,6 +5,8 @@ import dev.restate.sdk.annotation.Shared;
 import dev.restate.sdk.common.StateKey;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -571,6 +573,131 @@ class StreamingServiceTest {
     // state.set calls (Architect-C3 redesign).
     assertEquals(1L, state.store.get("restartCount"));
     assertEquals(1_700_000_000_000L, state.store.get("lastRestartAt"));
+  }
+
+  @Test
+  void monitorLoop_tick_throwingStreamingQueryException_marksFailedNotStopped() throws IOException {
+    // PR #265: StreamingService.monitorLoop's tick closure used to swallow
+    // StreamingQueryException and treat abnormal Spark death as a clean
+    // stop (STATUS=stopped, no ERROR_COUNT bump, no RECONCILE_BLOCKED).
+    // That made the dead stream indistinguishable from an operator-requested
+    // stop, and StartupReconciler.invokeRun SKIPS status="stopped" on JVM
+    // restart, so the stream was silently never resurrected.
+    //
+    // The fix: in the tick closure's catch block, set STATUS="failed",
+    // RECONCILE_BLOCKED=true, and bump ERROR_COUNT. The structural test
+    // pins the source shape so a regression (someone re-introducing the
+    // swallow-and-treat-as-stopped pattern) is caught at code-review time
+    // rather than waiting for a production Spark crash.
+    String src = readStreamingService();
+
+    // 1. The tick closure's catch must NOT just `return Boolean.TRUE`.
+    //    It MUST mutate the failure state. Locate the catch block.
+    int sqeCatch = src.indexOf("catch (org.apache.spark.sql.streaming.StreamingQueryException");
+    assertTrue(sqeCatch > 0,
+        "tick closure must catch StreamingQueryException (was missing? see #265)");
+
+    // The catch body must end at the matching `}` — find the closing
+    // brace. Use a simple counter (this nested block is small and
+    // has no string literals containing braces in practice).
+    int braceOpen = src.indexOf("{", sqeCatch);
+    int braceClose = findMatchingBrace(src, braceOpen);
+    String catchBody = src.substring(braceOpen, braceClose);
+
+    assertTrue(catchBody.contains("STATUS, \"failed\""),
+        "tick catch must set STATUS=failed (was STATUS=stopped; see #265)");
+    assertTrue(catchBody.contains("RECONCILE_BLOCKED, true"),
+        "tick catch must set RECONCILE_BLOCKED=true (was missing; see #265)");
+    assertTrue(catchBody.contains("ERROR_COUNT"),
+        "tick catch must bump ERROR_COUNT (was missing; see #265)");
+
+    // 2. The EXIT_TERMINATED branch must NOT unconditionally set
+    //    STATUS=stopped — it must check that the catch didn't already
+    //    mark STATUS=failed. Without this guard the catch-block
+    //    mutation would be clobbered.
+    String exitBody = extractCaseBody(src, "case EXIT_TERMINATED:");
+    assertTrue(
+        exitBody.contains("\"failed\""),
+        "EXIT_TERMINATED branch must check for the 'failed' status "
+            + "(or the catch-block mutation will be clobbered; see #265)");
+  }
+
+  /** Extract a switch case body by scanning from the case label to the
+   * next `case ` or end of the enclosing switch. Skips over string
+   * literals (Java doesn't have `case` inside a string in practice,
+   * but defending in depth). */
+  private static String extractCaseBody(String src, String caseLabel) {
+    int caseStart = src.indexOf(caseLabel);
+    if (caseStart < 0) return "";
+    int bodyStart = caseStart + caseLabel.length();
+    int scan = bodyStart;
+    while (scan < src.length()) {
+      // Skip over string literals
+      if (src.charAt(scan) == '"') {
+        scan++;
+        while (scan < src.length() && src.charAt(scan) != '"') {
+          if (src.charAt(scan) == '\\' && scan + 1 < src.length()) scan++;
+          scan++;
+        }
+        scan++;
+        continue;
+      }
+      // Skip over line comments
+      if (scan + 1 < src.length() && src.charAt(scan) == '/' && src.charAt(scan + 1) == '/') {
+        while (scan < src.length() && src.charAt(scan) != '\n') scan++;
+        continue;
+      }
+      // Skip over block comments
+      if (scan + 1 < src.length() && src.charAt(scan) == '/' && src.charAt(scan + 1) == '*') {
+        scan += 2;
+        while (scan + 1 < src.length()
+            && !(src.charAt(scan) == '*' && src.charAt(scan + 1) == '/')) {
+          scan++;
+        }
+        scan += 2;
+        continue;
+      }
+      if (src.startsWith("case ", scan) || src.startsWith("default:", scan)) {
+        return src.substring(bodyStart, scan);
+      }
+      scan++;
+    }
+    return src.substring(bodyStart);
+  }
+
+  // --- Helpers ---
+
+  /** Read the StreamingService.java source as a string for structural tests. */
+  private static String readStreamingService() throws IOException {
+    String[] candidates = {
+      "src/main/java/io/semanticdf/platform/streaming/StreamingService.java",
+      "semanticdf-platform/src/main/java/io/semanticdf/platform/streaming/StreamingService.java"
+    };
+    java.io.IOException last = null;
+    for (String p : candidates) {
+      try {
+        return new String(java.nio.file.Files.readAllBytes(java.nio.file.Paths.get(p)),
+            java.nio.charset.StandardCharsets.UTF_8);
+      } catch (java.io.IOException e) {
+        last = e;
+      }
+    }
+    throw new java.io.FileNotFoundException(
+        "StreamingService.java not found in candidates: " + java.util.Arrays.toString(candidates)
+            + "; last error: " + last);
+  }
+
+  /** Find the matching closing brace for an opening brace at startIdx. */
+  private static int findMatchingBrace(String src, int startIdx) {
+    int depth = 1;
+    int i = startIdx + 1;
+    while (i < src.length() && depth > 0) {
+      char c = src.charAt(i);
+      if (c == '{') depth++;
+      else if (c == '}') depth--;
+      i++;
+    }
+    return i;
   }
 
   @Test

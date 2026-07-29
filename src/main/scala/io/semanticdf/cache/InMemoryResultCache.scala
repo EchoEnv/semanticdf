@@ -117,30 +117,6 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     }
   }
 
-  override def invalidateModel(name: String): Int = lock.synchronized {
-    // Walk the sidecar once to collect keys for matching model across all versions,
-    // then remove them from both the cache and the sidecar. O(distinct-versions
-    // for this model); in practice models typically have 1–3 versions.
-    import scala.jdk.CollectionConverters._
-    val matching = scala.collection.mutable.Set.empty[String]
-    val it = byModelAndVersion.entrySet().iterator()
-    while (it.hasNext) {
-      val e = it.next()
-      if (e.getKey._1 == name) matching ++= e.getValue.asScala
-    }
-    if (matching.isEmpty) 0
-    else {
-      val removed = matching.size
-      matching.foreach { k =>
-        val e = map.remove(k)
-        if (e != null && e.model.nonEmpty) {
-          removeFromSidecar(k, e.model, e.version)
-        }
-      }
-      removed
-    }
-  }
-
   override def invalidateByModelAndVersion(name: String, version: Int): Int = lock.synchronized {
     val set = byModelAndVersion.remove((name, version))
     if (set == null || set.isEmpty) 0
@@ -156,6 +132,233 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
   override def clear(): Unit = lock.synchronized {
     map.clear()
     byModelAndVersion.clear()
+    journaledMap.clear()
+    byModelAndVersionJournaled.clear()
+  }
+
+  // ===================================================================
+  // PR #276 — journaled-form cache (bypasses Array[Row] rebuild)
+  // ===================================================================
+
+  /** LRU map for journaled-form entries (the form Restate journals:
+    * a plain {@code List<Object[]>} of cells per row + column
+    * metadata). Caching this form avoids the redundant
+    * {@code Array[Row]} rebuild that the v0.2.2 path incurred on
+    * every cache miss — see issue #276. */
+  private val journaledMap = new java.util.LinkedHashMap[String, JournaledEntry](
+    /* initialCapacity */ 16,
+    /* loadFactor      */ 0.75f,
+    /* accessOrder     */ true,
+  ) {
+    override def removeEldestEntry(eldest: java.util.Map.Entry[String, JournaledEntry]): Boolean = {
+      val shouldEvict = size > InMemoryResultCache.this.maxEntries
+      if (shouldEvict) {
+        val e = eldest.getValue
+        if (e.model.nonEmpty) {
+          InMemoryResultCache.this.removeFromJournaledSidecar(eldest.getKey, e.model, e.version)
+        }
+      }
+      shouldEvict
+    }
+  }
+
+  /** Sidecar index for journaled entries (parallel to
+    * [[byModelAndVersion]]). */
+  private val byModelAndVersionJournaled =
+    new java.util.HashMap[(String, Int), java.util.Set[String]]()
+
+  private case class JournaledEntry(value: AnyRef, model: String, version: Int)
+
+  private def removeFromJournaledSidecar(key: String, model: String, version: Int): Unit = {
+    val mv = (model, version)
+    val set = byModelAndVersionJournaled.get(mv)
+    if (set != null) {
+      set.remove(key)
+      if (set.isEmpty) byModelAndVersionJournaled.remove(mv)
+    }
+  }
+
+  override def getJournaled(key: String): Option[AnyRef] = lock.synchronized {
+    Option(journaledMap.get(key)).map(_.value)
+  }
+
+  override def putJournaledWithModelAndVersion(
+      key: String, value: AnyRef, model: String, version: Int): Unit = lock.synchronized {
+    val prev = journaledMap.get(key)
+    if (prev != null && prev.model.nonEmpty) {
+      removeFromJournaledSidecar(key, prev.model, prev.version)
+    }
+    journaledMap.put(key, JournaledEntry(value, model, version))
+    if (model.nonEmpty) {
+      val mv = (model, version)
+      val existing = byModelAndVersionJournaled.get(mv)
+      val set =
+        if (existing != null) existing
+        else {
+          val s = new java.util.HashSet[String]()
+          byModelAndVersionJournaled.put(mv, s)
+          s
+        }
+      set.add(key)
+    }
+  }
+
+  /** Per-key in-flight completions for the journaled-form
+    * single-flight path (parallel to [[inFlight]] for the row
+    * form). */
+  private val inFlightJournaled =
+    new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.CompletableFuture[AnyRef]]()
+
+  override def getOrComputeJournaled(
+      key: String,
+      compute: java.util.function.Supplier[AnyRef]): AnyRef = {
+    getJournaled(key) match {
+      case Some(v) => return v
+      case None    => ()
+    }
+    val ours = new java.util.concurrent.CompletableFuture[AnyRef]()
+    val prior = inFlightJournaled.putIfAbsent(key, ours)
+    if (prior != null) {
+      try { return prior.get(); }
+      catch {
+        case e: java.util.concurrent.ExecutionException => throw e.getCause
+      }
+    } else {
+      try {
+        val v = compute.get()
+        if (getJournaled(key).isEmpty) {
+          // tag with empty model — caller should use
+          // putJournaledWithModelAndVersion from inside its
+          // compute closure for proper invalidation (the
+          // QueryService does this).
+          putJournaledWithModelAndVersion(key, v, "", 0)
+        }
+        ours.complete(v)
+        v
+      } catch {
+        case t: Throwable =>
+          ours.completeExceptionally(t)
+          throw t
+      } finally {
+        inFlightJournaled.remove(key, ours)
+      }
+    }
+  }
+
+  /** Extend [[invalidateModel]] to also clear journaled entries.
+    * We override the existing [[invalidateModel]] definition (not
+    * add a new method). The body merges both caches' invalidations.
+    */
+  override def invalidateModel(name: String): Int = lock.synchronized {
+    import scala.jdk.CollectionConverters._
+    // Original sidecar invalidation (CachedResult entries)
+    val matchingRow = scala.collection.mutable.Set.empty[String]
+    val itRow = byModelAndVersion.entrySet().iterator()
+    while (itRow.hasNext) {
+      val e = itRow.next()
+      if (e.getKey._1 == name) matchingRow ++= e.getValue.asScala
+    }
+    val removedRow = matchingRow.size
+    matchingRow.foreach { k =>
+      val e = map.remove(k)
+      if (e != null && e.model.nonEmpty) {
+        removeFromSidecar(k, e.model, e.version)
+      }
+    }
+    // Journaled entries
+    val matchingJournaled = scala.collection.mutable.Set.empty[String]
+    val itJ = byModelAndVersionJournaled.entrySet().iterator()
+    while (itJ.hasNext) {
+      val e = itJ.next()
+      if (e.getKey._1 == name) matchingJournaled ++= e.getValue.asScala
+    }
+    matchingJournaled.foreach { k =>
+      val e = journaledMap.remove(k)
+      if (e != null && e.model.nonEmpty) {
+        removeFromJournaledSidecar(k, e.model, e.version)
+      }
+    }
+    removedRow + matchingJournaled.size
+  }
+
+  // ===================================================================
+  // PR #264 — single-flight on cache miss (thundering herd)
+  // ===================================================================
+
+  /** Per-key in-flight completions for single-flight read-through.
+    * Used by [[getOrCompute]] to coalesce N concurrent misses for
+    * the same key into exactly ONE `compute.get()` invocation.
+    *
+    * <p>Memory: at most one entry per distinct concurrent cache
+    * key during the compute window — typically a handful. Cleared
+    * via compare-and-remove on the ConcurrentHashMap so a slow
+    * `compute` can't be stranded.
+    *
+    * <p>PR #264 (cache correctness fix): without this, N concurrent
+    * identical first-time queries (the LLM-agent stampede pattern)
+    * all miss the cache, all run the full Spark job, and only the
+    * last put wins. The cache becomes a net negative — every caller
+    * pays the Spark cost on the first miss. */
+  private val inFlight =
+    new java.util.concurrent.ConcurrentHashMap[String, java.util.concurrent.CompletableFuture[CachedResult]]()
+
+  override def getOrCompute(
+      key: String,
+      compute: java.util.function.Supplier[CachedResult]): CachedResult = {
+    // Fast path: another thread already populated the cache.
+    get(key) match {
+      case Some(v) => return v
+      case None    => ()
+    }
+
+    // Try to claim the in-flight slot for this key. If another
+    // thread already claimed it, wait on their future instead of
+    // re-running the compute.
+    val ours = new java.util.concurrent.CompletableFuture[CachedResult]()
+    val prior = inFlight.putIfAbsent(key, ours)
+    if (prior != null) {
+      // Lost the race; wait for the winner.
+      try prior.get()
+      catch {
+        case e: java.util.concurrent.ExecutionException =>
+          // The in-flight compute failed; propagate the cause.
+          throw e.getCause
+      }
+    } else {
+      // We won the race; run the compute.
+      try {
+        val v = compute.get()
+        // Repopulate the cache with the fresh value BEFORE completing
+        // the future — so a waiter that wakes up and checks the cache
+        // sees the value. The `put` call here does NOT use the
+        // single-arg overload (which would tag with model="") — the
+        // caller is expected to call `putWithModelAndVersion` from
+        // inside the compute closure if model-tagging is needed
+        // (the QueryService does this).
+        if (get(key).isEmpty) {
+          put(key, v)
+        }
+        ours.complete(v)
+        v
+      } catch {
+        case t: Throwable =>
+          // PR #264: on failure, we still complete the future so any
+          // concurrent waiters (who reached `prior.get()` BEFORE we
+          // did the remove below) wake up with the same exception.
+          // After this point, no NEW caller can see the future —
+          // they either hit the cache (success path) or do their
+          // own compute (failure path; failure isn't cached by
+          // design — a transient backend hiccup shouldn't poison
+          // the key forever).
+          ours.completeExceptionally(t)
+          throw t
+      } finally {
+        // Only remove if it's still ours — a successful concurrent
+        // put on a DIFFERENT key never enters this map, so the
+        // compare-and-remove is safe.
+        inFlight.remove(key, ours)
+      }
+    }
   }
 
   /** Snapshot the keys in LRU order (oldest first). */
