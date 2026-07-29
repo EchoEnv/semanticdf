@@ -112,6 +112,7 @@ mvn test
 semanticdf-platform/
 ├── pom.xml                                       Maven project, depends on the semanticdf library + Restate 2.8.0
 ├── docker-compose.yml                            Postgres + Restate server for local dev
+├── .mvn/jvm.config                               `--add-opens` flags for Spark 3.5.x on JDK 17 (read by Maven at startup)
 ├── README.md                                     This file
 └── src/
     ├── main/java/io/semanticdf/platform/

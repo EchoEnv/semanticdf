@@ -58,6 +58,15 @@
         <!-- Spark is `provided` — the platform is engine-agnostic; the user's
              runtime brings Spark when they consume a query. -->
         <spark.version>3.5.8</spark.version>
+
+        <!-- add-opens flags for Spark 3.5.x on JDK 17. Single source of truth:
+             referenced by surefire's argLine below. The same flag set is
+             shipped in .mvn/jvm.config (read by Maven at JVM startup, NOT
+             reachable from this property because Maven reads jvm.config
+             before properties are resolved) and a CI test should assert
+             the two stay in sync. Note: XML comments cannot contain
+             double-dash, so the literal flag prefix is not reproduced here. -->
+        <add.opens.flags>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</add.opens.flags>
     </properties>
 
     <dependencies>
@@ -218,15 +227,6 @@
                     <scope>runtime</scope>
                 </dependency>
             </dependencies>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.codehaus.mojo</groupId>
-                        <artifactId>exec-maven-plugin</artifactId>
-                        <version>3.6.3</version>
-                    </plugin>
-                </plugins>
-            </build>
         </profile>
     </profiles>
 
@@ -240,6 +240,13 @@
                     <release>17</release>
                 </configuration>
             </plugin>
+            <!-- exec-maven-plugin pinned unconditionally so `mvn exec:java`
+                 always uses the same version, whether or not -Plocal is on. -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.6.3</version>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
@@ -250,19 +257,7 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <argLine>
-                        --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
-                        --add-opens=java.base/java.nio=ALL-UNNAMED
-                        --add-opens=java.base/java.lang=ALL-UNNAMED
-                        --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
-                        --add-opens=java.base/java.util=ALL-UNNAMED
-                        --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
-                        --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
-                        --add-opens=java.base/java.io=ALL-UNNAMED
-                        --add-opens=java.base/java.net=ALL-UNNAMED
-                        --add-opens=java.base/sun.security.action=ALL-UNNAMED
-                        --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
-                    </argLine>
+                    <argLine>${add.opens.flags}</argLine>
                 </configuration>
             </plugin>
         </plugins>
