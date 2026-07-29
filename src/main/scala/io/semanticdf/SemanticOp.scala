@@ -129,7 +129,7 @@ private[semanticdf] object JoinSide {
     * join-side name as a tag prefix) rather than `lit(null)` so that
     * the resulting `Column`'s `expr.sql` is a real, distinguishable
     * reference like `__L__id` / `__R__id`. The capture map stores the
-    * tagged form so the decomposition probe (PR #153) can match the
+    * tagged form so the decomposition probe can match the
     * AST leaf back to its side. */
   def recording(sideName: String, captured: scala.collection.mutable.Map[String, Boolean]): JoinSide = {
     // Bind the outer's `sideName` so the inner anonymous-class method's
@@ -153,7 +153,7 @@ private[semanticdf] object JoinSide {
   * Spark 4.x: `column.expr` is removed; SQL is on `column.node.sql()`.
   *
   * We use reflection so the same source compiles against both Spark
-  * versions. The probe in [[extractJoinKeys]] (PR #153) only needs the
+  * versions. The probe in [[extractJoinKeys]] only needs the
   * SQL form for round-trip fallback; correctness is verified by the
   * tagged-name decomposition, which works on both versions. */
 /** Module-level helpers for the join-key decomposition probe
@@ -411,7 +411,7 @@ final case class SemanticJoinOp(
       *
       * Default `None` for back-compat: hand-constructed `SemanticJoinOp`s
       * (e.g. inside the test suite, future user code) keep working unchanged.
-      * The `SemanticManifest.toJson` joined-manifest reader (PR #151) falls
+      * The `SemanticManifest.toJson` joined-manifest reader falls
       * back to deriving metadata from `leftRoot` when this is `None`.
       *
       * Foundation for the BLOCKed `joined-models-manifest` recipe
@@ -439,8 +439,8 @@ final case class SemanticJoinOp(
       * Ordering: parallel to [[rightKeys]] for `length`-paired equality,
       * or a single element for the common single-key case.
       *
-      * Foundation PR #153. The wire-shape counterpart is filled in by the
-      * implementation PR #154 (`SemanticManifest.toJoinedJson`).
+      * The wire-shape counterpart is filled in by the implementation
+      * (`SemanticManifest.toJoinedJson`).
       */
     leftKeys: Seq[String] = Seq.empty,
     /** Optional prefix applied to LEFT-side columns in the `on` predicate
@@ -478,7 +478,7 @@ final case class SemanticJoinOp(
       *
       * Stored as the result of `column.expr.sql`, which is round-trippable
       * via `functions.expr(sql)` — the same mechanism
-      * `Transform.exprString` (PR #149) uses for transforms. */
+      * `Transform.exprString` uses for transforms. */
     onExprString: Option[String] = None,
     /** Structured predicate AST for round-trip (v0.1.13). Populated
       * at construction by [[extractPredicateAst]] when the predicate

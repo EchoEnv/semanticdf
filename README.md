@@ -67,6 +67,11 @@ guarantee that they're asking for the right thing.
   (UDF, broadcast variable, `spark-submit --master yarn|k8s`) round-trips through
   Spark's deploy mode without `NotSerializableException`. The internal op tree,
   dimension/measure lambdas, and cache key derivation all cross the JVM boundary safely.
+- **Run as a long-running service.** The `semanticdf-platform` module is a standalone
+   Restate-native runtime that exposes the library over HTTP. Models, queries, and
+   streaming queries get durable state, a replayable audit log, and crash recovery — no
+   glue code required on your side. See [The platform](#the-platform) below.
+
 
 ## When (and when not) to use it
 
@@ -90,6 +95,113 @@ guarantee that they're asking for the right thing.
 - [`RELEASE.md`](RELEASE.md) — version-by-version changelog
 - [`docs/known-limitations.md`](docs/known-limitations.md) — current scope & guardrails (what's in, what's deferred, with workarounds)
 - [`examples/`](examples/) — runnable end-to-end examples
+
+## The platform
+
+`semanticdf-platform` is a **standalone Restate-native runtime** that
+turns the library into a long-running service. The library compiles
+semantic definitions to Spark plans; the platform puts a durable
+ingress in front of them, persists models and audit logs to Postgres,
+and reconciles streaming queries across JVM crashes.
+
+You can use the library directly (embed in your own app, call
+`SemanticTable.toDataFrame(spark)`), or you can run the platform and
+talk to it over HTTP. The two are independent — the library has no
+Restate dependency; the platform has no Spark dialect of its own.
+
+### Library vs. platform at a glance
+
+| | Library (`io.semanticdf:semanticdf_2.13`) | Platform (`semanticdf-platform/`) |
+|---|---|---|
+| **Lifetime** | Embedded in your JVM | Long-running JVM (5 services + Restate ingress) |
+| **API style** | Scala DSL + YAML | HTTP (raw or via MCP) |
+| **Durability** | Your app's call | Restate journal + Postgres |
+| **Streaming** | Spark Structured Streaming in your app | Stream registry survives JVM crashes |
+| **Crash recovery** | n/a | Auto-replay + bulk-startup sweep |
+| **Spark Connect** | ✓ via `SdfSession` | ✓ opt-in via `SEMANTICDF_SPARK_CONNECT_URL` |
+
+The platform is the recommended deployment for production: it gives
+you model versioning, audit replay, streaming lifecycle, and a
+durable cache (opt-in via `SEMANTICDF_RESULT_CACHE=memory`) without
+re-implementing them in your app.
+
+### Platform get started
+
+The platform is a separate Maven project that depends on the library.
+For a copy-paste runnable setup, see
+[`semanticdf-platform/README.md`](semanticdf-platform/README.md). Quick
+steps:
+
+1. **Build the library**:
+   ```bash
+   mvn install -DskipTests    # produces semanticdf_2.13-0.2.1.jar in ~/.m2
+   ```
+2. **Start a Restate dev server** (single-node, in-memory journal):
+   ```bash
+   docker run --rm --name restate -d -p 8080:8080 -p 9070:9070 -p 9071:9071 \
+       docker.io/restatedev/restate:latest
+   ```
+3. **Start the platform**:
+   ```bash
+   cd semanticdf-platform
+   mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
+   ```
+4. **Register a model**:
+   ```bash
+   curl -X POST http://localhost:8080/ModelService/flights/register \
+       -H "Content-Type: application/json" \
+       -d '{"modelName":"flights","yaml":"flights:\n  table: flights_tbl\n  dimensions:\n    carrier: carrier\n  measures:\n    rows: \"count(*)\"\n"}'
+   ```
+5. **Query it**:
+   ```bash
+   curl -X POST http://localhost:8080/QueryService/runQuery \
+       -H "Content-Type: application/json" \
+       -d '{"modelName":"flights","measures":["rows"],"dimensions":["carrier"],"where":""}'
+   ```
+
+The platform is opt-in for the durable substrate. By default it runs
+end-to-end in journal-only mode (no Postgres). Set the env vars to
+opt-in to durable persistence:
+
+| Env var | When true | Default |
+|---|---|---|
+| `SEMANTICDF_MODELS_PERSIST` | `ModelService.register` writes to Postgres | false |
+| `SEMANTICDF_AUDIT_PERSIST` | `AuditService` writes to Postgres | false |
+| `SEMANTICDF_RESULT_CACHE` | `memory` enables the LRU query cache | `noop` |
+| `SEMANTICDF_SPARK_CONNECT_URL` | Use Spark Connect (remote cluster) | unset |
+| `RESTATE_INGRESS_URL` | Register against an external Restate | unset |
+
+### Platform tour
+
+Five services wired into one Restate endpoint:
+
+| Service | Type | Key | Job |
+|---|---|---|---|
+| `ModelService` | `@VirtualObject` | model name | Compile YAML, persist, hot-reload |
+| `QueryService` | `@Service` (stateless) | — | Execute queries, cache results |
+| `StreamingService` | `@Workflow` | stream-id | Start, monitor, reconcile |
+| `AuditService` | `@VirtualObject` | tenant | Replay-safe audit log |
+| `CatalogService` | `@Service` (stateless) | — | List / describe models |
+
+State placement rule: **Restate journal = coordination (recent, recoverable from replay); Postgres = record (durable, queryable).**
+
+For the full architecture, see
+[`docs/design/platform-architecture.md`](docs/design/platform-architecture.md).
+For the rationale and trade-offs, see
+[`docs/design/platform-services-completion-plan.md`](docs/design/platform-services-completion-plan.md).
+
+### When to use the platform vs. the library
+
+Use the **platform** when:
+- You want one canonical set of metric definitions shared across many consumers (dashboards, notebooks, agents).
+- You need streaming queries that survive JVM restarts.
+- You want a replayable audit log of every query.
+- You're wiring an LLM agent to your data — the platform's durable ingress + model registry is a natural fit.
+
+Use the **library directly** when:
+- You're embedding semantic compilation in a single app (e.g., a Spark workload job).
+- You don't need cross-process state.
+- You want minimal dependencies (no Restate, no Postgres).
 
 ## Build
 

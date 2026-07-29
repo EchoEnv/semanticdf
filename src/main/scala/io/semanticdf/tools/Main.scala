@@ -4,12 +4,19 @@ import org.apache.spark.sql.SparkSession
 
 import io.semanticdf.adapters.{ManifestParsingException, SemanticManifest, YamlLoader}
 import io.semanticdf.lineage.Lineage
+import io.semanticdf.SemanticLogger
 
 
 /** CLI entry point for semanticdf tooling.
   *
   * Run with:
   *   mvn scala:run -DmainClass=io.semanticdf.tools.Main -Dexec.args="<subcommand> ..."
+  *
+  * <p>Diagnostic output (errors, missing-arg warnings) goes through
+  * [[SemanticLogger]]. The actual tool output (YAML models, HTML
+  * docs, JSON manifests) is written directly to stdout via `println`
+  * so shell pipelines work in the standard Unix way:
+  * {@code sdf introspect file.csv > model.yml}.
   *
   * Subcommands:
   *   introspect  — read a data file, infer a starter YAML model
@@ -40,7 +47,7 @@ object Main {
         case Some("lineage") =>
           runLineage(args.tail)
         case Some(cmd) =>
-          System.err.println(s"Unknown subcommand: $cmd")
+          SemanticLogger.warn(s"Unknown subcommand: $cmd")
           printUsage()
           sys.exit(1)
         case None =>
@@ -49,7 +56,7 @@ object Main {
       }
     } catch {
       case e: IllegalArgumentException =>
-        System.err.println(e.getMessage)
+        SemanticLogger.warn(e.getMessage)
         sys.exit(1)
     }
   }
@@ -88,7 +95,7 @@ object Main {
       println(s"Wrote $n OKF concept document(s) under $outDir")
     } catch {
       case e: Exception =>
-        System.err.println(s"okfgen failed: ${e.getMessage}")
+        SemanticLogger.warn(s"okfgen failed: ${e.getMessage}")
         sys.exit(1)
     }
   }
@@ -111,7 +118,7 @@ object Main {
           .fromFile(spark, path, format, modelName, readOpts)
       } catch {
         case e: Exception =>
-          System.err.println(s"Failed to introspect $path: ${e.getMessage}")
+          SemanticLogger.warn(s"Failed to introspect $path: ${e.getMessage}")
           sys.exit(1)
       }
 
@@ -191,7 +198,7 @@ object Main {
       println(s"  usesTAll      : ${meta.usesTAll}")
     } catch {
       case e: ManifestParsingException =>
-        System.err.println(s"Invalid manifest: ${e.getMessage}")
+        SemanticLogger.warn(s"Invalid manifest: ${e.getMessage}")
         sys.exit(1)
     }
   }
@@ -232,7 +239,7 @@ object Main {
       println(s"      re-loading from YAML or supplying explicit join keys.")
     } catch {
       case e: ManifestParsingException =>
-        System.err.println(s"Invalid joined manifest: ${e.getMessage}")
+        SemanticLogger.warn(s"Invalid joined manifest: ${e.getMessage}")
         sys.exit(1)
     }
   }

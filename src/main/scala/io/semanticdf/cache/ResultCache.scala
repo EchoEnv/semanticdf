@@ -99,7 +99,19 @@ trait ResultCache extends Serializable {
     * Returns the number of entries actually removed. Default: 0
     * (no-op for caches that don't track versions). The default
     * implementation does an O(n) scan over all entries; concrete
-    * caches are encouraged to maintain a sidecar for O(1). */
+    * caches are encouraged to maintain a sidecar for O(1).
+    *
+    * @deprecated Use [[invalidateModel(name)]] instead. The cache
+    * key uses the YAML-declared `model.version()`, while the
+    * journal's `CURRENT_VERSION` is a separate counter; the two
+    * never match, so this form was a silent no-op for any model
+    * whose YAML didn't declare a `version:` field.
+    * Kept for API compatibility with library callers that track
+    * version-keyed caches externally (e.g., a Redis-backed cache).
+    */
+  @deprecated("Use invalidateModel(name). The cache key uses the "
+    + "YAML-declared version while the journal's CURRENT_VERSION is a "
+    + "separate counter; the two never match.", "0.2.3")
   def invalidateByModelAndVersion(name: String, version: Int): Int = 0
 
   /** Return the keys currently held by this cache, in LRU order
@@ -113,14 +125,14 @@ trait ResultCache extends Serializable {
     * after dropping references. */
   def clear(): Unit = ()
 
-  // --- Journaled-form API (PR #276) ---
+  // --- Journaled-form API ---
 
   /** Look up a cached journaled-form value. Returns `None` on miss.
     * The journaled form is whatever the platform-side cache
     * already serializes for the Restate journal boundary (a
     * {@code RestateCachedRow} in v0.2.2). Caching this form
     * avoids the redundant {@code Array[Row]} rebuild that the
-    * v0.2.2 path incurred on every cache miss (see issue #276).
+    * v0.2.2 path incurred on every cache miss.
     *
     * <p>The library doesn't know about {@code RestateCachedRow}
     * — the value type is {@code AnyRef} so the trait stays

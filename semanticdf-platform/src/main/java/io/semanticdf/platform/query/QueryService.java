@@ -136,8 +136,7 @@ public class QueryService {
             request.where());
 
     // STEP 3 + STEP 4 + STEP 5: cache lookup with single-flight
-    // read-through (PR #264) AND journaled-form caching
-    // (PR #276).
+    // read-through AND journaled-form caching.
     //
     // Two cache forms:
     //  - `cache.get(key)` returns the library's `CachedResult` (with
@@ -148,7 +147,7 @@ public class QueryService {
     //    platform uses this because Restate journals this form,
     //    so caching it lets us avoid rebuilding `Array[Row]` on
     //    every cache miss (the redundant materialization that
-    //    v0.2.2 paid — see issue #276).
+    //    v0.2.2 paid).
     //
     // On cache MISS, the closure body:
     //  1. Runs Spark under `Restate.run("query.execute", ...)` for
@@ -163,12 +162,11 @@ public class QueryService {
     // The HIT path checks `getJournaled` first; if absent (e.g.
     // legacy callers that populated via `putWithModelAndVersion`,
     // or noOp cache), falls back to `get`.
-    // PR #276: only the InMemoryResultCache implementation
-    // actually supports the journaled-form methods (the trait
-    // defaults are no-ops). For NoOp / external implementations
-    // we fall back to the library's CachedResult path (which
-    // pays the redundant Array[Row] rebuild on cache miss but
-    // is correct).
+    // Only the InMemoryResultCache implementation actually supports
+    // the journaled-form methods (the trait defaults are no-ops).
+    // For NoOp / external implementations we fall back to the
+    // library's CachedResult path (which pays the redundant
+    // Array[Row] rebuild on cache miss but is correct).
     if (cache instanceof InMemoryResultCache) {
       InMemoryResultCache mem = (InMemoryResultCache) cache;
       final Object fresh = mem.getJournaled(cacheKey).isDefined() ? mem.getJournaled(cacheKey).get() : null;
@@ -191,9 +189,9 @@ public class QueryService {
                                     request.where());
                             return toRestateCachedRow(cr);
                           });
-                  // PR #276: cache the journaled form. No rebuild
-                  // to Array[Row]; the HIT path decodes directly
-                  // from the journaled form to wire shape.
+                  // Cache the journaled form. No rebuild to
+                  // Array[Row]; the HIT path decodes directly from
+                  // the journaled form to wire shape.
                   mem.putJournaledWithModelAndVersion(
                       cacheKey, journaled, request.modelName(), model.version());
                   return journaled;
@@ -262,8 +260,8 @@ public class QueryService {
         CacheBridge.modelNameOrUnknown(model),
         fieldNames,
         rows,
-        // PR #263 (cache correctness fix): the real cap is
-        // CacheBridge.DefaultMaxRows (100,000), not 1024.
+        // Truncation flag at the real cap (CacheBridge.DefaultMaxRows,
+        // 100,000 rows), not the historical 1024 threshold.
         /*truncated*/ n >= CacheBridge.defaultMaxRows(),
         n);
   }
@@ -353,7 +351,8 @@ public class QueryService {
    *
    * <p>Timestamp and Date use UTC-anchored representations
    * (Instant / LocalDate) so the journal survives a JVM restart in
-   * a different timezone without silent wall-clock drift (PR #252
+   * a different timezone without silent wall-clock drift (the
+   * Date/Timestamp landmine that produced H1).
    * fix for the DE finding C1).
    */
   static String encodeCell(Object cell, org.apache.spark.sql.types.DataType dt) {
@@ -414,7 +413,7 @@ public class QueryService {
    * Inverse of {@link #toRestateCachedRow}: rebuilds a library-side
    * {@link CachedResult} from a journaled {@link RestateCachedRow}.
    *
-   * <p><b>LANDMINE WARNING (PR #254 / v0.2.2 DE finding H7):</b>
+   * <p><b>LANDMINE WARNING:</b>
    * the rebuilt {@link org.apache.spark.sql.types.StructType}
    * declares every field as {@link
    * org.apache.spark.sql.types.DataTypes.StringType}. The cell
@@ -497,15 +496,14 @@ public class QueryService {
       case RestateCachedRow.T_BOOLEAN:
         return Boolean.valueOf(encoded);
       case RestateCachedRow.T_TIMESTAMP:
-        // PR #252: encode as Instant (UTC). Timestamp.from(Instant)
-        // gives a Timestamp with the same Instant regardless of JVM
-        // timezone — the underlying millis are preserved.
+        // Encode as Instant (UTC). Timestamp.from(Instant) gives a
+        // Timestamp with the same Instant regardless of JVM timezone
+        // — the underlying millis are preserved.
         return java.sql.Timestamp.from(java.time.Instant.parse(encoded));
       case RestateCachedRow.T_DATE:
-        // PR #255 fix for the DE finding H1 (Date.getTime() was
-        // JVM-default-timezone-dependent on decode).
-        // PR #252 used Date.valueOf(LocalDate.parse(s)) which
-        // reconstructs a Date whose getTime() is computed at the
+        // Date.getTime() must be JVM-default-timezone-independent on
+        // decode. Using Date.valueOf(LocalDate.parse(s)) would
+        // reconstruct a Date whose getTime() is computed at the
         // JVM-default midnight — silently shifting across JVM restarts
         // in different timezones. The fix builds the Date from an
         // Instant anchored at UTC midnight of the date. getTime()
@@ -541,12 +539,12 @@ public class QueryService {
         CacheBridge.modelNameOrUnknown(model),
         CacheBridge.schemaFieldsAsJava(cached),
         rows,
-        // PR #263 (cache correctness fix): the real cap is
-        // CacheBridge.DefaultMaxRows (100,000), not 1024. The truncated
-        // flag is the only wire signal a caller has that the result
-        // is incomplete; using the wrong threshold told callers the
-        // result was complete when in fact we may have silently
-        // dropped rows at the driver.
+        // Truncation flag at the real cap (CacheBridge.DefaultMaxRows,
+        // 100,000 rows), not the historical 1024 threshold. The
+        // truncated flag is the only wire signal a caller has that
+        // the result is incomplete; using the wrong threshold told
+        // callers the result was complete when in fact we may have
+        // silently dropped rows at the driver.
         /*truncated*/ rowCount >= CacheBridge.defaultMaxRows(),
         rowCount);
   }

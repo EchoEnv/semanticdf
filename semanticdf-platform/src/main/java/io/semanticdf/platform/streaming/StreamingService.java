@@ -3,6 +3,8 @@ package io.semanticdf.platform.streaming;
 import dev.restate.sdk.Restate;
 import dev.restate.sdk.annotation.Handler;
 import dev.restate.sdk.annotation.Workflow;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import dev.restate.sdk.common.DurablePromiseKey;
 import dev.restate.sdk.common.StateKey;
 
@@ -98,6 +100,7 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  */
 @Workflow
 public class StreamingService {
+  private static final Logger LOG = LoggerFactory.getLogger(StreamingService.class);
 
   // --- Workflow state keys (journaled, recoverable from replay) ---
 
@@ -123,9 +126,8 @@ public class StreamingService {
    * reconciliation) failed in a way that should NOT auto-retry.
    * Cleared by {@link #restart(Void)} or
    * {@link #clearReconcileBlock(Void)} when the operator decides the
-   * underlying cause is fixed. Critical to prevent infinite retry
-   * loops on persistent failures (model file deleted, permissions
-   * wrong, etc.) — see PR #233 / DE-M1 / Architect-C1.
+   * underlying cause is fixed. Prevents infinite retry loops on
+   * persistent failures (model file deleted, permissions wrong, etc.).
    */
   private static final StateKey<Boolean> RECONCILE_BLOCKED =
       StateKey.of("reconcileBlocked", Boolean.class);
@@ -243,14 +245,14 @@ public class StreamingService {
     String streamId = Restate.key();
     var state = Restate.state();
 
-    // Step 0: previous-failure blocker. PR #233 / DE-M1 / Architect-C1
-    // — a previous run/restart failure set RECONCILE_BLOCKED. Without
-    // this guard, Restate would retry the workflow indefinitely
-    // (RuntimeException from a handler is reported as a transient
-    // failure and retried). Throw a TerminalException with code 400
-    // (BAD_REQUEST) to halt retries and surface a clear operator
-    // message. Operators clear the block via restart() or
-    // clearReconcileBlock() after fixing the underlying cause.
+    // Step 0: previous-failure blocker. A previous run/restart failure
+    // set RECONCILE_BLOCKED. Without this guard, Restate would retry
+    // the workflow indefinitely (RuntimeException from a handler is
+    // reported as a transient failure and retried). Throw a
+    // TerminalException with code 400 (BAD_REQUEST) to halt retries
+    // and surface a clear operator message. Operators clear the block
+    // via restart() or clearReconcileBlock() after fixing the
+    // underlying cause.
     if (state.get(RECONCILE_BLOCKED).orElse(false)) {
       String blockedStatus = state.get(STATUS).orElse("unknown");
       throw new dev.restate.sdk.common.TerminalException(
@@ -289,24 +291,20 @@ public class StreamingService {
     //    handle is stored runtime-local — it cannot be journaled (not
     //    serializable).
     //
-    // PR #237 (architect-flagged ship-blocker): WITHOUT the try/catch
-    // below, a persistent launcher failure (Spark misconfigured,
-    // checkpoint path unwritable, etc.) throws out of Restate.run
-    // and propagates. Restate retries the entire handler, but step 0
-    // (the BLOCKED guard) only halts retries if BLOCKED is set —
-    // and step 3 doesn't set it. NET EFFECT: the journal grows
-    // unboundedly until operators manually /restart, defeating
-    // PR #233's RECONCILE_BLOCKED contract.
+    // The try/catch sets RECONCILE_BLOCKED on persistent launcher
+    // failures (Spark misconfigured, checkpoint path unwritable,
+    // etc.). Without this, Restate would retry the entire handler
+    // indefinitely — step 0's BLOCKED guard only halts retries if
+    // BLOCKED is set, and step 3 wouldn't set it.
     //
     // Wrap in try/catch mirroring step 2's pattern. Throw a
     // TerminalException directly so Restate doesn't even attempt
     // one retry (the BLOCKED guard would catch the retry, but the
     // retry itself is wasted journal entries).
-    // PR #237 (architect-flagged ship-blocker): startQueryWithFailureTracking
-    // wraps Restate.run in a try/catch that sets STATUS=failed and
-    // RECONCILE_BLOCKED=true on launcher errors, then throws a
-    // TerminalException so Restate doesn't retry. See the helper's
-    // javadoc for the full rationale.
+    // startQueryWithFailureTracking wraps Restate.run in a try/catch
+    // that sets STATUS=failed and RECONCILE_BLOCKED=true on launcher
+    // errors, then throws a TerminalException so Restate doesn't
+    // retry. See the helper's javadoc for the full rationale.
     final SemanticTable resolvedModel = model;
     startQueryWithFailureTracking(streamId, resolvedModel, request, state);
 
@@ -334,10 +332,10 @@ public class StreamingService {
 
     // Audit failure on initial start does NOT block — the query is
     // already registered in the registry, so blocking would orphan
-    // it (Architect-C3 from PR #233 review). We increment a
-    // dedicated AUDIT_LOSS_COUNT counter that operators can read via
-    // getAuditLossCount() to detect silent audit-log gaps. The
-    // workflow continues to monitorLoop with the live query.
+    // it. We increment a dedicated AUDIT_LOSS_COUNT counter that
+    // operators can read via getAuditLossCount() to detect silent
+    // audit-log gaps. The workflow continues to monitorLoop with the
+    // live query.
     try {
       auditSink.emit(
           DEFAULT_TENANT,
@@ -354,12 +352,12 @@ public class StreamingService {
     // 5. CATALOG: register this stream-id in the durable catalog so
     // the StartupReconciler can find it on next JVM startup.
     //
-    // PR #236 (DE-H3 fix): moved BEFORE state.set(STATUS, "running")
-    // to eliminate the catalog/journal drift window. With this
-    // ordering, the journal's STATUS=running and the catalog row
-    // are written together at the same point in the handler —
-    // a JVM death either happens before both (rollback) or after
-    // both (committed), with no in-between state where the journal
+    // Placed BEFORE state.set(STATUS, "running") to eliminate the
+    // catalog/journal drift window: the journal's STATUS=running
+    // and the catalog row are written together at the same point in
+    // the handler — a JVM death either happens before both
+    // (rollback) or after both (committed), with no in-between
+    // state where the journal
     // says running but the catalog has no row.
     //
     // Failure semantics: ON CONFLICT DO NOTHING (catalog, id:114)
@@ -385,7 +383,7 @@ public class StreamingService {
         // (we're past step 4); we just lost the auto-recovery on
         // next JVM startup. Operators can manually invoke
         // /restart after fixing the underlying Postgres issue.
-        System.err.println(
+        LOG.warn(
             "semanticdf-platform: catalog write failed for stream-id="
                 + streamId
                 + " ("
@@ -394,8 +392,9 @@ public class StreamingService {
       }
     }
 
-    // 5b. Mark running. (Catalog write was step 5 above; reordered
-    // in PR #236 so catalog and journal are written together.)
+    // 5b. Mark running. (Catalog write was step 5 above; the
+    // two are written together so a JVM death either commits
+    // both or neither.)
     state.set(STATUS, "running");
 
     // 5a. RECONCILIATION: detect post-crash replay and recreate the query.
@@ -425,12 +424,12 @@ public class StreamingService {
     // Same-JVM replay never enters this branch (registry non-empty),
     // so determinism is preserved in the common case.
     //
-    // H2 from PR #232 review: if the previous JVM died AFTER the
-    // STOP_SIGNAL was resolved (operator hit /stop) but BEFORE the
-    // STATUS=stopped journal entry was written, naive reconciliation
-    // would create a fresh query just to immediately stop it again
-    // — operator noise (a spurious streaming.restarted audit event
-    // followed by STATUS=stopped). Skip reconciliation in this case
+    // If the previous JVM died AFTER the STOP_SIGNAL was resolved
+    // (operator hit /stop) but BEFORE the STATUS=stopped journal
+    // entry was written, naive reconciliation would create a fresh
+    // query just to immediately stop it again — operator noise (a
+    // spurious streaming.restarted audit event followed by
+    // STATUS=stopped). Skip reconciliation in this case
     // and just mark STATUS=stopped.
     if (handles.get(streamId) == null) {
       if (Restate.promise(STOP_SIGNAL).peek().isReady()) {
@@ -489,19 +488,17 @@ public class StreamingService {
       // closure. awaitTermination throws StreamingQueryException if the
       // query terminated abnormally.
       //
-      // PR #265: an abnormal Spark death (StreamingQueryException)
-      // MUST NOT be classified as a clean stop. The v0.2.2 bug
-      // mapped it to `terminated=true` → STATUS=stopped, which
-      // `StartupReconciler.invokeRun` then SKIPS on JVM restart
-      // (it's the same path operator-requested stops take), so the
-      // dead stream was silently never resurrected. ERROR_COUNT
-      // and RECONCILE_BLOCKED were also not incremented, so
-      // operators had no signal. Fix: mark STATUS=failed, set
-      // RECONCILE_BLOCKED=true, bump ERROR_COUNT — mirroring the
-      // startQueryWithFailureTracking pattern. The state mutations
-      // ARE journaled (Restate.run journals state writes performed
-      // inside its closures as part of the completion record;
-      // verified by PR #237).
+      // An abnormal Spark death (StreamingQueryException) MUST NOT be
+      // classified as a clean stop. Treating it as `terminated=true`
+      // would map it to STATUS=stopped, which `StartupReconciler.invokeRun`
+      // then SKIPS on JVM restart (the same path operator-requested
+      // stops take), so the dead stream would be silently never
+      // resurrected. ERROR_COUNT and RECONCILE_BLOCKED would also not
+      // be incremented, so operators would have no signal. We mark
+      // STATUS=failed, set RECONCILE_BLOCKED=true, and bump ERROR_COUNT
+      // — mirroring the startQueryWithFailureTracking pattern. The
+      // state mutations ARE journaled (Restate.run journals state writes
+      // performed inside its closures as part of the completion record).
       // The closure also returns true if the handle is absent
       // (post-replay or stop called before run).
       boolean terminated =
@@ -636,7 +633,7 @@ public class StreamingService {
     //
     // Order matters: clear BEFORE validation checks so a failed
     // validation (e.g., model file still missing) leaves the block
-    // set (DE-M2 from PR #233 review).
+    // set.
     state.set(RECONCILE_BLOCKED, false);
 
     // If a handle is already present, the registry is in sync with the
@@ -651,8 +648,7 @@ public class StreamingService {
     //
     // STATUS=failed and STATUS=failed-restart ARE allowed — these
     // are exactly what restart() exists to recover from. Operators
-    // call restart() after fixing the underlying cause (PR #233
-    // / Architect-H1).
+    // call restart() after fixing the underlying cause.
     String currentStatus = state.get(STATUS).orElse("unknown");
     if ("stopped".equals(currentStatus)) {
       throw new IllegalStateException(
@@ -678,9 +674,8 @@ public class StreamingService {
 
     // Resolve the model from the registry. If the model file is still
     // missing, mark STATUS=failed-restart AND set the block so the
-    // workflow doesn't loop forever (DE-M1 / Architect-C2 from PR
-    // #233 review). Operators must fix the file and call restart()
-    // again, or call clearReconcileBlock() to bypass.
+    // workflow doesn't loop forever. Operators must fix the file and
+    // call restart() again, or call clearReconcileBlock() to bypass.
     SemanticTable model;
     try {
       model = models.get(modelName);
@@ -924,10 +919,9 @@ public class StreamingService {
 
       // 3. Emit the restart audit event. Best-effort — the query is
       //    already registered, so blocking on audit failure would
-      //    orphan it (Architect-C3 from PR #233 review). We
-      //    increment AUDIT_LOSS_COUNT instead; operators read it via
-      //    getAuditLossCount() to detect silent audit-log gaps. The
-      //    workflow continues to monitorLoop normally.
+      //    orphan it. We increment AUDIT_LOSS_COUNT instead; operators
+      //    read it via getAuditLossCount() to detect silent audit-log
+      //    gaps. The workflow continues to monitorLoop normally.
       String dedupHash =
           StreamingDedupHash.streamingRestarted(
               streamId,
@@ -961,8 +955,8 @@ public class StreamingService {
     } catch (RuntimeException e) {
       // Recreation failed. Registry is empty (recreate throws before
       // put). Mark failed-restart AND set the blocked flag so the
-      // next run() invocation throws a TerminalException (Architect-C1
-      // from PR #233 review) instead of looping forever.
+      // next run() invocation throws a TerminalException instead of
+      // looping forever.
       state.set(STATUS, "failed-restart");
       state.set(RECONCILE_BLOCKED, true);
       state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
@@ -1007,16 +1001,17 @@ public class StreamingService {
   /**
    * Step 3 of {@link #run} extracted for testability. Wraps
    * {@code Restate.run("start-streaming-query", ...)} in a try/catch
-   * that protects against the PR #237 ship-blocker.
+   * that prevents unbounded retry storms on persistent launcher
+   * failures.
    *
-   * <p><b>Without the catch (the PR #237 bug):</b> a persistent
-   * launcher failure (Spark misconfigured, checkpoint path
-   * unwritable, etc.) throws out of {@code Restate.run} and the
-   * handler exits with a raw exception. Restate retries the entire
-   * handler from step 1. Step 0's BLOCKED guard won't halt retries
-   * — because step 3 didn't set BLOCKED. NET EFFECT: the journal
-   * grows unboundedly and operators see no signal, defeating the
-   * PR #233 {@code RECONCILE_BLOCKED} contract.
+   * <p><b>Without the catch:</b> a persistent launcher failure
+   * (Spark misconfigured, checkpoint path unwritable, etc.) throws
+   * out of {@code Restate.run} and the handler exits with a raw
+   * exception. Restate retries the entire handler from step 1.
+   * Step 0's BLOCKED guard won't halt retries — because step 3
+   * didn't set BLOCKED. NET EFFECT: the journal grows unboundedly
+   * and operators see no signal, defeating the
+   * {@code RECONCILE_BLOCKED} contract.
    *
    * <p><b>The catch behavior:</b>
    * <ul>

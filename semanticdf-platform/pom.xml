@@ -61,11 +61,10 @@
     </properties>
 
     <dependencies>
-        <!-- semanticdf library — installed locally via mvn install. The platform
-             calls into it inside Restate.run("model.persist", ...) (the only
-             journal-bounded step); compile and lineage run in handler scope
-             (per PR #249 — compiled SemanticTable carries a Spark Dataset.rdd
-             chain that Jackson cannot reconstruct during replay). -->
+        <!-- semanticdf Scala library — used by the platform for model
+             compilation, lineage, and query execution. Installed locally
+             via `mvn install`. See docs/design/platform-architecture.md
+             for the runtime boundary. -->
         <dependency>
             <groupId>io.semanticdf</groupId>
             <artifactId>semanticdf_2.13</artifactId>

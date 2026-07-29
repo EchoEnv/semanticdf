@@ -5,6 +5,7 @@ import java.io.File
 import org.yaml.snakeyaml.Yaml
 
 import io.semanticdf.ModelStatus
+import io.semanticdf.SemanticLogger
 
 
 /** Generate an Open Knowledge Format (OKF) bundle from semanticdf YAML model files.
@@ -105,7 +106,7 @@ class OkfGen {
       yaml.load[java.util.Map[String, java.util.Map[String, Any]]](content)
     } catch {
       case e: Exception =>
-        System.err.println(s"Skipping $path: ${e.getMessage}")
+        SemanticLogger.warn(s"Skipping $path: ${e.getMessage}")
         return Nil
     }
     if (raw == null) return Nil

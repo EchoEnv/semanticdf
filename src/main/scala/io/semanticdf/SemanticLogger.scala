@@ -32,11 +32,11 @@ private[semanticdf] object SemanticLogger extends Logging {
 
   /** Emit a log message at the given level via Spark's logging infrastructure.
     *
-    * Earlier versions included a fallback branch that used `println` when no
-    * `SparkSession` was bound. That branch was unreachable in practice — every
-    * test fixture and entry point constructs a session before calling into
-    * semanticdf, so `SparkSession.getDefaultSession.isDefined` is always true.
-    * If a future test environment runs without a session, restore the fallback
+    * Assumes a `SparkSession` is bound. Every test fixture and entry
+    * point constructs a session before calling into semanticdf, so
+    * `SparkSession.getDefaultSession.isDefined` is always true. If a
+    * future test environment runs without a session, add a fallback
+    * to {@code println} here.
     * here, but it'd be cosmetic: Spark's `Logging` trait handles level routing
     * for us. */
   private def logAtLevel(level: String, msg: => String): Unit = level match {

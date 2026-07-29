@@ -50,8 +50,8 @@ import java.util.Map;
  * handler scope (NOT inside {@code Restate.run}) because the
  * compiled {@code SemanticTable} carries a Spark
  * {@code Dataset.rdd} chain that Jackson cannot reconstruct
- * during replay (PR #249). The {@code lastWriteOffset}-equivalent
- * for this service is the {@code CURRENT_VERSION} integer.
+ * during replay. The {@code lastWriteOffset}-equivalent for this
+ * service is the {@code CURRENT_VERSION} integer.
  *
  * Cache invalidation contract: a successful register triggers
  * {@code ResultCache.invalidateModel(name)} on the cache seam
@@ -62,7 +62,7 @@ import java.util.Map;
  * by name (not by name + version) because the cache key uses the
  * YAML-declared version while the journal's CURRENT_VERSION is a
  * separate counter — the two never match, so the older
- * (name, version) form was a silent no-op (see PR #277).
+ * (name, version) form was a silent no-op.
  *
  * Determinism discipline: the {@code registeredAt} on the persisted
  * row uses {@code Restate.instantNow()} (replay-stable), not
@@ -207,10 +207,10 @@ public class ModelService {
       // STEP E: cache invalidation. NOT in Restate.run — cache
       // state is observable, not coordination, and a re-invocation
       // can re-emit without double-invalidating. We invalidate by
-      // model NAME (not by name + version): the cache key uses the
-      // YAML-declared version, while the journal's CURRENT_VERSION
-      // is a separate counter — a (name, journalVersion) key
-      // would never match (PR #261 / PR #277).
+      // We invalidate by model NAME (not by name + version): the
+      // cache key uses the YAML-declared version, while the
+      // journal's CURRENT_VERSION is a separate counter — a
+      // (name, journalVersion) key would never match.
       cache.invalidateModel(modelName);
 
       // STEP F (H3 fix): propagate the new SemanticTable into the

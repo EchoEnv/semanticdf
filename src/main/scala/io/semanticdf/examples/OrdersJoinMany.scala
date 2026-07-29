@@ -63,7 +63,7 @@ object OrdersJoinMany {
       byCustomer.execute(spark).show(truncate = false)
 
       SemanticLogger.info("=== SemanticDF plan ===")
-      println(byCustomer.explain())
+      SemanticLogger.info(byCustomer.explain())
 
       SemanticLogger.info("=== What happened ===")
       SemanticLogger.info("orders pre-agg at customer_id: 101→12500, 102→4000, 103→2000")
