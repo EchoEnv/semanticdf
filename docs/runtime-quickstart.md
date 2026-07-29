@@ -177,14 +177,11 @@ There are three valid ways to set them:
 | `MAVEN_OPTS` env var | shell export | local debugging |
 | Surefire/scalatest `argLine` | test runner config | when running the test suite |
 
-The `examples/pipeline/` template uses `.mvn/jvm.config`. The semanticdf main
-project uses `argLine` for tests (already wired). For ad-hoc tools, use
-`MAVEN_OPTS=...--add-opens=...`.
-
-**Why `JAVA_TOOL_OPTIONS` in `exec-maven-plugin`'s `<environmentVariables>` doesn't
-work**: that field is accepted but does not propagate to the in-process JVM
-that `exec:java` uses (verified v3.5.0, minimised reproducer with
-`FOO=[null]` in the forked process). Use `.mvn/jvm.config` instead.
+The repo ships `.mvn/jvm.config` at the root, so `mvn exec:java` (including
+`introspect`, `query`, `lineage`, the platform's `PlatformApplication`)
+works on JDK 17 with no extra setup. The platform and `examples/pipeline/`
+both have `.mvn/jvm.config` as symlinks to the same root file. **Do not
+copy the file** to a new location — symlink it instead.
 
 ### 2. `mvn scala:run` leaks compiler args
 
