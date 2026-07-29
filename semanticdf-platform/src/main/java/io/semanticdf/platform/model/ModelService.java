@@ -199,7 +199,15 @@ public class ModelService {
       // STEP E: cache invalidation. NOT in Restate.run â cache
       // state is observable, not coordination, and a re-invocation
       // can re-emit without double-invalidating.
-      cache.invalidateByModelAndVersion(modelName, persisted.version());
+      // PR #261 (cache correctness fix): invalidate by model NAME,
+      // not by model NAME + journal CURRENT_VERSION. The cache key
+      // uses the YAML-declared version (`model.version()`), but the
+      // journal's CURRENT_VERSION is a different counter. The two
+      // never matched, so `invalidateByModelAndVersion(name,
+      // persisted.version())` was a no-op for any model whose YAML
+      // didn't declare a `version:` field (the default). Result:
+      // cache served stale rows forever after a re-register.
+      cache.invalidateModel(modelName);
 
       // STEP F (H3 fix): propagate the new SemanticTable into the
       // runtime registry so QueryService.runQuery / StreamingService.run

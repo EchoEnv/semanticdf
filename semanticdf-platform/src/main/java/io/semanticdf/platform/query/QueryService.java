@@ -449,7 +449,13 @@ public class QueryService {
         CacheBridge.modelNameOrUnknown(model),
         CacheBridge.schemaFieldsAsJava(cached),
         rows,
-        /*truncated*/ rowCount > 1024,
+        // PR #263 (cache correctness fix): the real cap is
+        // CacheBridge.DefaultMaxRows (100,000), not 1024. The truncated
+        // flag is the only wire signal a caller has that the result
+        // is incomplete; using the wrong threshold told callers the
+        // result was complete when in fact we may have silently
+        // dropped rows at the driver.
+        /*truncated*/ rowCount >= CacheBridge.defaultMaxRows(),
         rowCount);
   }
 
