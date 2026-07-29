@@ -111,7 +111,7 @@ trait ResultCache extends Serializable {
     */
   @deprecated("Use invalidateModel(name). The cache key uses the "
     + "YAML-declared version while the journal's CURRENT_VERSION is a "
-    + "separate counter; the two never match.", "0.2.3")
+    + "separate counter; the two never match.", "0.2.2")
   def invalidateByModelAndVersion(name: String, version: Int): Int = 0
 
   /** Return the keys currently held by this cache, in LRU order

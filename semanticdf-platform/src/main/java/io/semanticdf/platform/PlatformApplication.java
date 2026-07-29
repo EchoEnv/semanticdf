@@ -105,7 +105,7 @@ public final class PlatformApplication {
   static AuditEventStore buildAuditEventStoreFromEnv() {
     String persist = System.getenv().getOrDefault("SEMANTICDF_AUDIT_PERSIST", "false");
     if (!"true".equalsIgnoreCase(persist)) {
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: SEMANTICDF_AUDIT_PERSIST not set to true — "
               + "audit events journal-only (no Postgres writes). Set "
               + "SEMANTICDF_AUDIT_PERSIST=true with SEMANTICDF_CATALOG_JDBC_URL "
@@ -121,7 +121,7 @@ public final class PlatformApplication {
     String user = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
     String password =
         System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
-    System.out.println(
+    LOG.info(
         "semanticdf-platform: SEMANTICDF_AUDIT_PERSIST=true \u2014 audit events "
             + "durable in " + AuditEventStore.class.getSimpleName()
             + " against " + redactConnectUrl(jdbcUrl));
@@ -147,7 +147,7 @@ public final class PlatformApplication {
   static ModelStore buildModelStoreFromEnv() {
     String persist = System.getenv().getOrDefault("SEMANTICDF_MODELS_PERSIST", "false");
     if (!"true".equalsIgnoreCase(persist)) {
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: SEMANTICDF_MODELS_PERSIST not set to true — "
               + "model registry journal-only (no Postgres writes). Set "
               + "SEMANTICDF_MODELS_PERSIST=true with SEMANTICDF_CATALOG_JDBC_URL "
@@ -163,7 +163,7 @@ public final class PlatformApplication {
     String user = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
     String password =
         System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
-    System.out.println(
+    LOG.info(
         "semanticdf-platform: SEMANTICDF_MODELS_PERSIST=true \u2014 model registry "
             + "durable in " + ModelStore.class.getSimpleName()
             + " against " + redactConnectUrl(jdbcUrl));
@@ -291,7 +291,7 @@ public final class PlatformApplication {
                 + " must be > 0; falling back to 256");
         entries = 256;
       }
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: SEMANTICDF_RESULT_CACHE=memory -- bounded LRU cache, maxEntries="
               + entries
               + " (set SEMANTICDF_RESULT_CACHE=noop to disable).");
@@ -372,7 +372,7 @@ public final class PlatformApplication {
             () -> {
               try {
                 spark.stop();
-                System.out.println(
+                LOG.info(
                     "semanticdf-platform: early-shutdown SparkSession released");
               } catch (Throwable t) {
                 LOG.warn(
@@ -385,11 +385,11 @@ public final class PlatformApplication {
     if (System.getenv(SdfSession.RemoteUrlEnvVar()) != null) {
       // Control-plane mode. Redact credentials (anything after a
       // ';' or '?' delimiter in sc:// URLs is a token) before logging.
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: Spark Connect mode \u2014 control plane against "
               + redactConnectUrl(System.getenv(SdfSession.RemoteUrlEnvVar())));
     } else {
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: local Spark mode \u2014 master=" + sparkMaster
               + " (set " + SdfSession.RemoteUrlEnvVar() + " to switch to Spark Connect)");
     }
@@ -405,7 +405,7 @@ public final class PlatformApplication {
     ModelRegistry models = new HotReloadingModelRegistry(yamlRegistry);
     StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
 
-    System.out.println(
+    LOG.info(
         "semanticdf-platform: loaded "
             + yamlRegistry.size()
             + " models from "
@@ -440,7 +440,7 @@ public final class PlatformApplication {
             System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
         built = new PostgresStreamCatalog(catalogJdbcUrl, catalogUser, catalogPassword);
       } else {
-        System.out.println(
+        LOG.info(
             "semanticdf-platform: SEMANTICDF_CATALOG_JDBC_URL not set — "
                 + "disabling bulk startup reconciliation. Operators must call "
                 + "/restart manually after JVM restarts.");
@@ -527,7 +527,7 @@ public final class PlatformApplication {
             System.getenv().getOrDefault(
                 "SEMANTICDF_SERVICE_HANDLER_URL",
                 "http://host.docker.internal:" + boundPort);
-        System.out.println(
+        LOG.info(
             "semanticdf-platform: registered deployment with external Restate at "
                 + externalIngress.replaceAll(":8080/?$", ":9070")
                 + " -- service handler URL = " + handlerUrl
@@ -580,7 +580,7 @@ public final class PlatformApplication {
                 try {
                   StartupReconciler.Summary sweepSummary =
                       new StartupReconciler(catalogForSweep, localIngress).run();
-                  System.out.println(
+                  LOG.info(
                       "semanticdf-platform: startup reconciliation complete — "
                           + "total="
                           + sweepSummary.total()
@@ -598,13 +598,13 @@ public final class PlatformApplication {
               "semanticdf-platform-reconcile");
       sweepThread.setDaemon(true);
       sweepThread.start();
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: startup reconciliation scheduled (daemon thread); "
               + "main continues without blocking.");
     }
 
     Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-      System.out.println("semanticdf-platform: shutdown hook firing; bound port "
+      LOG.info("semanticdf-platform: shutdown hook firing; bound port "
           + boundPort + " will be released");
 
       // Graceful drain — stop active streaming queries BEFORE spark.stop().
@@ -621,7 +621,7 @@ public final class PlatformApplication {
       // queries don't block the JVM exit.
       int drained = drainQueries(handles);
       if (drained > 0) {
-        System.out.println("semanticdf-platform: drained " + drained
+        LOG.info("semanticdf-platform: drained " + drained
             + " active streaming query/queries");
       }
 
@@ -635,7 +635,7 @@ public final class PlatformApplication {
       // so operators can see the failure.
       try {
         spark.stop();
-        System.out.println("semanticdf-platform: SparkSession stopped");
+        LOG.info("semanticdf-platform: SparkSession stopped");
       } catch (Throwable t) {
         LOG.warn("semanticdf-platform: spark.stop() failed: " + t.getMessage());
       }
@@ -648,7 +648,7 @@ public final class PlatformApplication {
       if (catalogForShutdown != null) {
         try {
           catalogForShutdown.close();
-          System.out.println("semanticdf-platform: StreamCatalog closed");
+          LOG.info("semanticdf-platform: StreamCatalog closed");
         } catch (Throwable t) {
           LOG.warn(
               "semanticdf-platform: StreamCatalog close() failed: " + t.getMessage());
@@ -660,7 +660,7 @@ public final class PlatformApplication {
       if (auditStore != null) {
         try {
           auditStore.close();
-          System.out.println("semanticdf-platform: AuditEventStore closed");
+          LOG.info("semanticdf-platform: AuditEventStore closed");
         } catch (Throwable t) {
           LOG.warn(
               "semanticdf-platform: AuditEventStore close() failed: " + t.getMessage());
@@ -672,7 +672,7 @@ public final class PlatformApplication {
       if (modelStore != null) {
         try {
           modelStore.close();
-          System.out.println("semanticdf-platform: ModelStore closed");
+          LOG.info("semanticdf-platform: ModelStore closed");
         } catch (Throwable t) {
           LOG.warn(
               "semanticdf-platform: ModelStore close() failed: " + t.getMessage());
@@ -680,7 +680,7 @@ public final class PlatformApplication {
       }
     }, "semanticdf-platform-shutdown"));
 
-    System.out.println("semanticdf-platform listening on http://localhost:" + port);
+    LOG.info("semanticdf-platform listening on http://localhost:" + port);
   }
 
   /**
@@ -852,7 +852,7 @@ public final class PlatformApplication {
         }
       }
     }
-    System.out.println(
+    LOG.info(
         "semanticdf-platform: drain complete — "
             + succeeded
             + " stopped, "
