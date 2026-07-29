@@ -149,6 +149,23 @@ trait ResultCache extends Serializable {
     * surfaces the contract violation at the call site rather than
     * silently leaking entries.
     *
+    * <p><b>Contract for an override:</b>
+    * <ul>
+    *   <li>On HIT, return the cached value without invoking
+    *       `compute`.</li>
+    *   <li>On MISS, coalesce N concurrent identical calls for the
+    *       same `key` into ONE `compute.get()` invocation. The
+    *       typical implementation is a per-key
+    *       `ConcurrentHashMap[String, CompletableFuture]`.</li>
+    *   <li>If `compute` throws, propagate the exception to ALL
+    *       waiters for this key (not just the winner). The cache
+    *       is NOT populated on failure.</li>
+    *   <li>The compute closure is responsible for tagging any
+    *       `putJournaledWithModelAndVersion` call with the correct
+    *       `model` and `version` (the trait cannot supply these
+    *       because it doesn't know the caller's intent).</li>
+    * </ul>
+    *
     * <p>See [[InMemoryResultCache.getOrComputeJournaled]] for the
     * production single-flight pattern.
     */

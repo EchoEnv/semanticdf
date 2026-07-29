@@ -43,18 +43,26 @@ import java.util.Map;
  *   - manifest_hash + lineage_json per version
  *   - the schema in {@link PostgresModelStore}
  *
- * Compilation contract: compile steps run inside
- * {@code Restate.run(...)} so a JVM crash mid-register replays the
- * cached compile/persist without re-executing the side effects.
- * The {@code lastWriteOffset}-equivalent for this service is the
- * {@code CURRENT_VERSION} integer.
+ * Compilation contract: only the durable Postgres persist
+ * ({@code ModelStore.registerIfAbsent}) is wrapped in
+ * {@code Restate.run(...)} — the persist is the only step that
+ * needs replay safety. The compile and lineage steps run in
+ * handler scope (NOT inside {@code Restate.run}) because the
+ * compiled {@code SemanticTable} carries a Spark
+ * {@code Dataset.rdd} chain that Jackson cannot reconstruct
+ * during replay (PR #249). The {@code lastWriteOffset}-equivalent
+ * for this service is the {@code CURRENT_VERSION} integer.
  *
  * Cache invalidation contract: a successful register triggers
- * {@code ResultCache.invalidateByModelAndVersion(name, version)} on
- * the cache seam (no-op if absent). The cache invalidation is
- * deliberately OUTSIDE {@code Restate.run(...)} â cache state is
- * observable but not coordination state, so a re-invocation
- * after a partial failure can re-emit without double-invalidating.
+ * {@code ResultCache.invalidateModel(name)} on the cache seam
+ * (no-op if absent). The cache invalidation is deliberately
+ * OUTSIDE {@code Restate.run(...)} — cache state is observable
+ * but not coordination state, so a re-invocation after a partial
+ * failure can re-emit without double-invalidating. We invalidate
+ * by name (not by name + version) because the cache key uses the
+ * YAML-declared version while the journal's CURRENT_VERSION is a
+ * separate counter — the two never match, so the older
+ * (name, version) form was a silent no-op (see PR #277).
  *
  * Determinism discipline: the {@code registeredAt} on the persisted
  * row uses {@code Restate.instantNow()} (replay-stable), not
@@ -196,17 +204,13 @@ public class ModelService {
       state.set(LAST_INVALIDATED_AT, clock.get().toEpochMilli());
       state.set(REGISTRATION_STATUS, "idle");
 
-      // STEP E: cache invalidation. NOT in Restate.run â cache
+      // STEP E: cache invalidation. NOT in Restate.run — cache
       // state is observable, not coordination, and a re-invocation
-      // can re-emit without double-invalidating.
-      // PR #261 (cache correctness fix): invalidate by model NAME,
-      // not by model NAME + journal CURRENT_VERSION. The cache key
-      // uses the YAML-declared version (`model.version()`), but the
-      // journal's CURRENT_VERSION is a different counter. The two
-      // never matched, so `invalidateByModelAndVersion(name,
-      // persisted.version())` was a no-op for any model whose YAML
-      // didn't declare a `version:` field (the default). Result:
-      // cache served stale rows forever after a re-register.
+      // can re-emit without double-invalidating. We invalidate by
+      // model NAME (not by name + version): the cache key uses the
+      // YAML-declared version, while the journal's CURRENT_VERSION
+      // is a separate counter — a (name, journalVersion) key
+      // would never match (PR #261 / PR #277).
       cache.invalidateModel(modelName);
 
       // STEP F (H3 fix): propagate the new SemanticTable into the
