@@ -68,8 +68,10 @@ PORT=8080 \
   POSTGRES_USER=semanticdf \
   POSTGRES_PASSWORD=semanticdf \
   POSTGRES_DB=semanticdf \
-  mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
+  mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication -Plocal
 ```
+
+The `-Plocal` profile bundles Spark + log4j-core into the runtime classpath (default scope is `provided` for slim production JARs). Spark 3.5.x needs JVM `--add-opens` flags on JDK 17 — the platform ships a `.mvn/jvm.config` so `mvn exec:java -Plocal` works without shell wrappers. The platform's REST surface is on `http://localhost:8080`; the Restate server is on `http://localhost:9070`.
 
 The platform's REST surface is on `http://localhost:8080`; the Restate server is on `http://localhost:9070`.
 
@@ -103,7 +105,7 @@ mvn test
 - **Java 21.** Restate has no Scala SDK. The platform's services are Java; the `semanticdf` library stays Scala and is consumed as a JAR.
 - **Maven.** Matches the parent project. (Gradle would also work; pick one.)
 - **Co-located runtime + services in v1.** One process per node. In P3, split if scale demands independent scaling of the HTTP/ingress tier vs the workflow execution tier.
-- **No custom build profiles yet.** The pom will grow as the platform's needs grow (Spark 4 for the engine adapter, etc.).
+- **Build profiles.** The pom has a `local` profile that bundles Spark + log4j-core into the runtime classpath (needed for `mvn exec:java` on a fresh checkout). Production deployments use neither profile (Spark stays at `provided` scope, used in the cluster). The library's `spark4` profile is independent — they can be composed for local Spark-4 testing.
 
 ## Layout
 
