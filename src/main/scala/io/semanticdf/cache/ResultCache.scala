@@ -152,13 +152,21 @@ trait ResultCache extends Serializable {
   def getOrComputeJournaled(
       key: String,
       compute: java.util.function.Supplier[AnyRef]): AnyRef = {
-    getJournaled(key) match {
-      case Some(v) => v
-      case None =>
-        val v = compute.get()
-        putJournaledWithModelAndVersion(key, v, "", 0)
-        v
-    }
+    // The default impl is unsatisfiable: the row-form put(tag="")
+    // leaks uninvalidateable entries. The platform is the only
+    // intended consumer; its cache (InMemoryResultCache) overrides
+    // this method. Anyone subclassing ResultCache with their own
+    // getJournaled / putJournaledWithModelAndVersion override MUST
+    // also override getOrComputeJournaled — the default in the
+    // row-form getOrCompute silently swallows the thundering herd
+    // (no single-flight), and replicating that for the journaled
+    // path would push the same bug into the platform's hot path.
+    throw new UnsupportedOperationException(
+      "ResultCache.getOrComputeJournaled: no default implementation. "
+        + "Caches that override getJournaled and "
+        + "putJournaledWithModelAndVersion must also override "
+        + "getOrComputeJournaled (see InMemoryResultCache for the "
+        + "single-flight pattern).")
   }
 
   /** Single-flight read-through: if `key` is in the cache, return the
