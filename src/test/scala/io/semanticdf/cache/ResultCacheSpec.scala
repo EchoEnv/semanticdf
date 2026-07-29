@@ -560,12 +560,20 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       StructType(Seq(StructField("x", IntegerType)))), "orders", 1)
     c.putJournaledWithModelAndVersion("j-a", new Object(), "orders", 1)
     c.putJournaledWithModelAndVersion("j-b", new Object(), "orders", 2)
-    // Invalidate orders v1: should remove row-a + j-a, leave j-b (v2).
+    // Unrelated journaled entry tagged with a different model name
+    // (but the same version) — must survive an orders/v1
+    // invalidation. Catches a regression that swapped
+    // `(name, version)` for `version` only.
+    c.putJournaledWithModelAndVersion("j-other", new Object(), "different-model", 1)
+    // Invalidate orders v1: should remove row-a + j-a; leave j-b (v2)
+    // and j-other (different model).
     val n = c.invalidateByModelAndVersion("orders", 1)
     assert(n == 2, s"expected 2 entries removed (1 row + 1 journaled), got $n")
     assert(c.get("row-a").isEmpty, "row-form entry should be gone")
     assert(c.getJournaled("j-a").isEmpty, "journaled-form v1 entry should be gone")
     assert(c.getJournaled("j-b").isDefined, "journaled-form v2 entry must survive")
+    assert(c.getJournaled("j-other").isDefined,
+      "journaled entry tagged with a different model must survive")
   }
 
   // PR-fix #9: post-#278 review. Default getOrComputeJournaled
@@ -581,6 +589,17 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     }
     assert(ex.getMessage.contains("getOrComputeJournaled"),
       "error must point the caller at the offending method")
+
+    // Also exercise the production default (ResultCache.NoOp) directly.
+    // If a future PR adds getJournaled / putJournaledWithModelAndVersion
+    // overrides to NoOp and forgets to add getOrComputeJournaled, the
+    // trait default would throw UOE in production. The anonymous test
+    // above covers the trait default; this one covers the singleton.
+    val noOpEx = intercept[UnsupportedOperationException] {
+      ResultCache.NoOp.getOrComputeJournaled("k", () => new Object())
+    }
+    assert(noOpEx.getMessage.contains("getOrComputeJournaled"),
+      "NoOp.getOrComputeJournaled must throw UOE; an override is required")
   }
 
   test("end-to-end: cache miss after version bump is auto-invalidation") {

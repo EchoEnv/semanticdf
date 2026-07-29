@@ -97,7 +97,7 @@ class ModelServiceStructuralTest {
     // the cache call appears AFTER all three Restate.run steps.
     int persistRun = body.indexOf("\"model.persist\"");
     assertTrue(cacheIdx > persistRun,
-        "cache.invalidateByModelAndVersion must be AFTER the model.persist Restate.run block");
+        "cache.invalidateModel must be AFTER the model.persist Restate.run block");
   }
 
   @Test
