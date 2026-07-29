@@ -98,6 +98,17 @@ class ModelServiceStructuralTest {
     int persistRun = body.indexOf("\"model.persist\"");
     assertTrue(cacheIdx > persistRun,
         "cache.invalidateModel must be AFTER the model.persist Restate.run block");
+    // PR #281 review: the assertion above guards the presence of
+    // the new API call, but does NOT guard against a regression
+    // that re-introduces the old (name, version) call alongside
+    // it (e.g. a botched git revert of PR #277). Symmetric
+    // assertion: the obsolete call must NOT appear in register().
+    int obsoleteIdx = body.indexOf("cache.invalidateByModelAndVersion(");
+    assertTrue(obsoleteIdx < 0,
+        "register() must NOT call cache.invalidateByModelAndVersion(...) "
+            + "(PR #277 \u2014 was a silent no-op due to cache-key / "
+            + "journal-version mismatch; cache.invalidateModel(name) is "
+            + "the only valid call)");
   }
 
   @Test

@@ -147,7 +147,11 @@ trait ResultCache extends Serializable {
     * override [[getJournaled]] and [[putJournaledWithModelAndVersion]]
     * MUST also override this method — throwing from the default
     * surfaces the contract violation at the call site rather than
-    * silently leaking entries.
+    * silently leaking entries. Caches that don't override the
+    * journaled methods (such as the [[NoOp]] production default)
+    * leave the default in place; the platform-side `instanceof`
+    * check in `QueryService.runQuery` routes them to the
+    * row-form fallback path.
     *
     * <p><b>Contract for an override:</b>
     * <ul>

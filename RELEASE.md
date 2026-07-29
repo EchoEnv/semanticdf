@@ -107,7 +107,9 @@ This release lands the foundation of the `semanticdf-platform` module: a Restate
 
 For consumers of `semanticdf` library 0.2.0 → 0.2.1: **no migration required**. The library version bump is on the platform-internal `semanticdf_2.13` artifact only (consumed by `semanticdf-platform`). External consumers of `semanticdf` see no API change.
 
-For operators of the new `semanticdf-platform`: deployment changes only — see `semanticdf-platform/docker-compose.yml` and `semanticdf-platform/README.md`. — file organization + cluster-mode safety
+For operators of the new `semanticdf-platform`: deployment changes only — see `semanticdf-platform/docker-compose.yml` and `semanticdf-platform/README.md`.
+
+## v0.2.0 — file organization + cluster-mode safety
 
 This release tightens the package layout, hardens the library for cluster-mode deployment, and introduces a cache auto-invalidation strategy keyed on model version. No behaviour change for existing batch or streaming terminals.
 
