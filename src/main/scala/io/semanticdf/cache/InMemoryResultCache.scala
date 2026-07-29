@@ -259,7 +259,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
         // via putJournaledWithModelAndVersion(key, v, model, version)
         // (the QueryService does this). Don't fall back to an
         // untagged put here — entries with model="" are
-        // uninvalidateable (issue #9 from post-#278 review).
+        // uninvalidateable.
         ours.complete(v)
         v
       } catch {

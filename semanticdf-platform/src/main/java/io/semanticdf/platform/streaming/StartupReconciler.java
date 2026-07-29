@@ -131,7 +131,7 @@ public final class StartupReconciler {
     List<StreamCatalog.StreamMetadata> streams = catalog.findAll();
     int total = streams.size();
     if (total == 0) {
-      System.out.println(
+      LOG.info(
           "semanticdf-platform: startup reconciliation — catalog empty, no work to do");
       return new Summary(0, 0, 0);
     }
@@ -162,7 +162,7 @@ public final class StartupReconciler {
                 invoked.incrementAndGet();
               } catch (SkippedException skip) {
                 skipped.incrementAndGet();
-                System.out.println(
+                LOG.info(
                     "semanticdf-platform: startup reconciliation skipped "
                         + meta.streamId()
                         + " (status="
@@ -193,7 +193,7 @@ public final class StartupReconciler {
     int i = invoked.get();
     int s = skipped.get();
     int f = failed.get();
-    System.out.println(
+    LOG.info(
         "semanticdf-platform: startup reconciliation complete — total="
             + total
             + " invoked="

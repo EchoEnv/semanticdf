@@ -233,7 +233,7 @@ public class QueryService {
    * Convert a {@link RestateCachedRow} directly to the platform's
    * {@link QueryResult} wire shape, bypassing the {@code Array[Row]}
    * rebuild that the v0.2.2 {@code toQueryResult(CachedResult)}
-   * path required (issue #276).
+   * path required.
    *
    * <p>Performance: per cell, decode the string-encoded value back
    * to a typed Java object (the inverse of {@link #encodeCell}).
