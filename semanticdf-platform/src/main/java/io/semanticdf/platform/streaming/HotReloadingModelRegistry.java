@@ -40,7 +40,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *
  * <p><b>Journal determinism:</b> the mutation is intentionally OUTSIDE
  * any {@code Restate.run(...)} block — like the existing
- * {@code ResultCache.invalidateByModelAndVersion(...)} call at
+ * {@code ResultCache.invalidateModel(...)} call at
  * {@code ModelService.register} STEP E. Cache and registry state are
  * observable but not coordination state; a replay re-emits the mutation,
  * which is idempotent (the overlay already has the entry).

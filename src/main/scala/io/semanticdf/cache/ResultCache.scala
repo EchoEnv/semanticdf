@@ -138,16 +138,19 @@ trait ResultCache extends Serializable {
       key: String, value: AnyRef, model: String, version: Int): Unit = ()
 
   /** Single-flight read-through for journaled-form values.
-    * Returns the journaled value if present; if absent, invokes
-    * `compute`, stores the result under `key` via
-    * [[putJournaledWithModelAndVersion]] (with `model=""` and
-    * `version=0`), and returns the produced value.
     *
-    * <p>Same single-flight contract as [[getOrCompute]]: N
-    * concurrent identical misses coalesce into one `compute.get()`
-    * call. Default impl: non-atomic `get → compute → put` (no
-    * single-flight guarantee). Caches used in production should
-    * override for thundering-herd protection.
+    * <p><b>Default impl is missing on purpose.</b> The previous
+    * default did a non-atomic `get → compute → put` via
+    * [[putJournaledWithModelAndVersion]] with `model=""`, which
+    * produced entries that [[invalidateModel]] could never reach
+    * (the sidecar skips entries with empty model). Caches that
+    * override [[getJournaled]] and [[putJournaledWithModelAndVersion]]
+    * MUST also override this method — throwing from the default
+    * surfaces the contract violation at the call site rather than
+    * silently leaking entries.
+    *
+    * <p>See [[InMemoryResultCache.getOrComputeJournaled]] for the
+    * production single-flight pattern.
     */
   def getOrComputeJournaled(
       key: String,

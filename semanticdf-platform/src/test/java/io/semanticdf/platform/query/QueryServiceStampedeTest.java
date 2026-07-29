@@ -17,6 +17,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.types.DataTypes;
@@ -322,9 +325,14 @@ class QueryServiceStampedeTest {
   // is well-documented.
   @Test
   void interruptedLoser_reSetsInterruptFlag() throws Exception {
-    java.nio.file.Path src = java.nio.file.Path.of(
-        "/home/emilio/app/projects/semanticdf/src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
-    String content = java.nio.file.Files.readString(src);
+    // Resolve the source file relative to the project root so the
+    // test is portable across CI checkouts, forks, and parent-dir
+    // renames. Surefire runs tests with user.dir =
+    // semanticdf-platform/, so the parent is the project root.
+    Path src = Paths.get(System.getProperty("user.dir"))
+        .getParent()
+        .resolve("src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
+    String content = Files.readString(src);
 
     // Both the row-form and journaled-form loser paths must re-set
     // the interrupt flag. The PR-fix replaces the simple
