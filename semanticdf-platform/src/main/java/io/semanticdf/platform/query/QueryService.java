@@ -8,6 +8,7 @@ import io.semanticdf.SemanticTable;
 import io.semanticdf.cache.CacheBridge;
 import io.semanticdf.cache.CacheKey;
 import io.semanticdf.cache.CachedResult;
+import io.semanticdf.cache.InMemoryResultCache;
 import io.semanticdf.cache.ResultCache;
 import io.semanticdf.platform.streaming.ModelRegistry;
 
@@ -133,47 +134,137 @@ public class QueryService {
             request.dimensions(),
             request.where());
 
-    // STEP 3: cache lookup (deterministic; pure).
+    // STEP 3 + STEP 4 + STEP 5: cache lookup with single-flight
+    // read-through (PR #264) AND journaled-form caching
+    // (PR #276).
+    //
+    // Two cache forms:
+    //  - `cache.get(key)` returns the library's `CachedResult` (with
+    //    Array[Row]). Used by callers that don't go through the
+    //    journal (e.g. direct library users).
+    //  - `cache.getJournaled(key)` returns the platform's
+    //    `RestateCachedRow` (with List<Object[]> per row). The
+    //    platform uses this because Restate journals this form,
+    //    so caching it lets us avoid rebuilding `Array[Row]` on
+    //    every cache miss (the redundant materialization that
+    //    v0.2.2 paid — see issue #276).
+    //
+    // On cache MISS, the closure body:
+    //  1. Runs Spark under `Restate.run("query.execute", ...)` for
+    //     journal-safety (replay returns the journaled form without
+    //     re-executing the Spark plan).
+    //  2. Caches the journaled form via `putJournaledWithModelAndVersion`
+    //     so subsequent HIT path skips the Array[Row] rebuild.
+    //
+    // Both happen exactly once per cache key under N concurrent
+    // identical callers (single-flight in the cache layer).
+    //
+    // The HIT path checks `getJournaled` first; if absent (e.g.
+    // legacy callers that populated via `putWithModelAndVersion`,
+    // or noOp cache), falls back to `get`.
+    // PR #276: only the InMemoryResultCache implementation
+    // actually supports the journaled-form methods (the trait
+    // defaults are no-ops). For NoOp / external implementations
+    // we fall back to the library's CachedResult path (which
+    // pays the redundant Array[Row] rebuild on cache miss but
+    // is correct).
+    if (cache instanceof InMemoryResultCache) {
+      InMemoryResultCache mem = (InMemoryResultCache) cache;
+      final Object fresh = mem.getJournaled(cacheKey).isDefined() ? mem.getJournaled(cacheKey).get() : null;
+      if (fresh == null) {
+        final Object computed =
+            mem.getOrComputeJournaled(
+                cacheKey,
+                () -> {
+                  final RestateCachedRow journaled =
+                      Restate.run(
+                          "query.execute",
+                          RestateCachedRow.class,
+                          () -> {
+                            CachedResult cr =
+                                CacheBridge.executeQuery(
+                                    model,
+                                    spark,
+                                    request.measures(),
+                                    request.dimensions(),
+                                    request.where());
+                            return toRestateCachedRow(cr);
+                          });
+                  // PR #276: cache the journaled form. No rebuild
+                  // to Array[Row]; the HIT path decodes directly
+                  // from the journaled form to wire shape.
+                  mem.putJournaledWithModelAndVersion(
+                      cacheKey, journaled, request.modelName(), model.version());
+                  return journaled;
+                });
+        return toQueryResultFromJournaled(model, (RestateCachedRow) computed);
+      }
+      return toQueryResultFromJournaled(model, (RestateCachedRow) fresh);
+    }
+    // Fallback: legacy ResultCache (NoOp / external impl).
+    // Use the v0.2.2 path with the redundant rebuild — at least
+    // it's correct. This branch is taken for NoOp (no cache
+    // anyway) and for any future cache implementations that
+    // don't override the journaled methods.
     Option<CachedResult> cached = cache.get(cacheKey);
     if (cached.isDefined()) {
       return toQueryResult(model, cached.get());
     }
-
-    // STEP 4: cache-miss execution. The Spark call goes inside
-    // Restate.run(...) so a JVM crash mid-query replays the cached
-    // result without re-executing the Spark plan.
-    //
-    // The journal entry uses the platform-local RestateCachedRow (a
-    // Java record with a plain List<Object[]> per row) instead of
-    // the library's CachedResult (which carries Array<Row>). Spark's
-    // Row is abstract, and Jackson cannot deserialize it back on
-    // replay Ã¢ÂÂ that's a real replay-safety bug we surface here via
-    // this conversion at the journal boundary.
     final RestateCachedRow journaled =
         Restate.run(
             "query.execute",
             RestateCachedRow.class,
             () -> {
-              CachedResult fresh =
+              CachedResult cr =
                   CacheBridge.executeQuery(
                       model,
                       spark,
                       request.measures(),
                       request.dimensions(),
                       request.where());
-              return toRestateCachedRow(fresh);
+              return toRestateCachedRow(cr);
             });
-
-    // STEP 5: cache populate. Tags the entry with (model_name, version)
-    // so ModelService.register's invalidateByModelAndVersion(name, version)
-    // hook drops the entry on a model version bump. The cache holds a
-    // CachedResult (non-journaled in-process state); we rebuild it
-    // from the journaled form on replay.
-    final CachedResult fresh = fromRestateCachedRow(journaled);
+    final CachedResult rebuilt = fromRestateCachedRow(journaled);
     cache.putWithModelAndVersion(
-        cacheKey, fresh, request.modelName(), model.version());
+        cacheKey, rebuilt, request.modelName(), model.version());
+    return toQueryResult(model, rebuilt);
+  }
 
-    return toQueryResult(model, fresh);
+  /**
+   * Convert a {@link RestateCachedRow} directly to the platform's
+   * {@link QueryResult} wire shape, bypassing the {@code Array[Row]}
+   * rebuild that the v0.2.2 {@code toQueryResult(CachedResult)}
+   * path required (issue #276).
+   *
+   * <p>Performance: per cell, decode the string-encoded value back
+   * to a typed Java object (the inverse of {@link #encodeCell}).
+   * This is one pass over the result set — no
+   * {@code Array[Row]} intermediate, no second copy of the data.
+   */
+  static QueryResult toQueryResultFromJournaled(
+      SemanticTable model, RestateCachedRow journaled) {
+    java.util.List<String> fieldNames = journaled.fieldNames();
+    java.util.List<String> fieldTypes = journaled.fieldTypes();
+    java.util.List<String[]> cellRows = journaled.rows();
+    int n = cellRows.size();
+    java.util.List<java.util.List<Object>> rows = new java.util.ArrayList<>(n);
+    for (int i = 0; i < n; i++) {
+      String[] cells = cellRows.get(i);
+      int cols = cells.length;
+      java.util.List<Object> typed = new java.util.ArrayList<>(cols);
+      for (int j = 0; j < cols; j++) {
+        typed.add(decodeCell(cells[j], fieldTypes.get(j)));
+      }
+      rows.add(typed);
+    }
+    return new QueryResult(
+        CacheBridge.modelNameOrUnknown(model),
+        fieldNames,
+        rows,
+        // PR #263 (cache correctness fix): the real cap is
+        // CacheBridge.DefaultMaxRows (100,000), not 1024.
+        /*truncated*/ n >= CacheBridge.defaultMaxRows(),
+        n);
   }
 
   /**

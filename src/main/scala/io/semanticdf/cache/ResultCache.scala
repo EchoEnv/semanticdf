@@ -112,6 +112,89 @@ trait ResultCache extends Serializable {
     * have nothing to clear). Used by tests to assert GC reclaim
     * after dropping references. */
   def clear(): Unit = ()
+
+  // --- Journaled-form API (PR #276) ---
+
+  /** Look up a cached journaled-form value. Returns `None` on miss.
+    * The journaled form is whatever the platform-side cache
+    * already serializes for the Restate journal boundary (a
+    * {@code RestateCachedRow} in v0.2.2). Caching this form
+    * avoids the redundant {@code Array[Row]} rebuild that the
+    * v0.2.2 path incurred on every cache miss (see issue #276).
+    *
+    * <p>The library doesn't know about {@code RestateCachedRow}
+    * — the value type is {@code AnyRef} so the trait stays
+    * platform-independent. Concrete caches that don't want this
+    * optimization leave the default no-op.
+    */
+  def getJournaled(key: String): Option[AnyRef] = None
+
+  /** Record a journaled-form value tagged with model + version.
+    * Default impl: no-op. Concrete caches that want the
+    * performance benefit (skipping the {@code Array[Row]}
+    * rebuild) override this and pair it with [[getJournaled]].
+    */
+  def putJournaledWithModelAndVersion(
+      key: String, value: AnyRef, model: String, version: Int): Unit = ()
+
+  /** Single-flight read-through for journaled-form values.
+    * Returns the journaled value if present; if absent, invokes
+    * `compute`, stores the result under `key` via
+    * [[putJournaledWithModelAndVersion]] (with `model=""` and
+    * `version=0`), and returns the produced value.
+    *
+    * <p>Same single-flight contract as [[getOrCompute]]: N
+    * concurrent identical misses coalesce into one `compute.get()`
+    * call. Default impl: non-atomic `get → compute → put` (no
+    * single-flight guarantee). Caches used in production should
+    * override for thundering-herd protection.
+    */
+  def getOrComputeJournaled(
+      key: String,
+      compute: java.util.function.Supplier[AnyRef]): AnyRef = {
+    getJournaled(key) match {
+      case Some(v) => v
+      case None =>
+        val v = compute.get()
+        putJournaledWithModelAndVersion(key, v, "", 0)
+        v
+    }
+  }
+
+  /** Single-flight read-through: if `key` is in the cache, return the
+    * cached value; if not, invoke `compute` to produce it, store it
+    * under `key` (with NO model tag — the caller is responsible for
+    * tagging separately if needed), and return the produced value.
+    *
+    * <p><b>Concurrency contract</b>: for the same `key`, this method
+    * MUST guarantee that `compute.get()` is invoked AT MOST ONCE
+    * even under concurrent access from N threads. Implementations
+    * typically achieve this via a per-key in-flight map (see
+    * [[InMemoryResultCache]]). The default implementation does NOT
+    * guarantee single-flight — it uses a non-atomic `get → compute →
+    * put` pattern which admits the cache stampede bug for caches that
+    * don't override. Concrete caches used in production should
+    * override this method.
+    *
+    * <p>If `compute` throws, the exception propagates to ALL waiters
+    * for this key (caller-visible semantics: "the in-flight compute
+    * failed"), and the cache is NOT populated.
+    *
+    * @param key     cache key (see [[get]])
+    * @param compute supplier that produces the value on miss
+    * @return the cached or freshly-computed value
+    */
+  def getOrCompute(
+      key: String,
+      compute: java.util.function.Supplier[CachedResult]): CachedResult = {
+    get(key) match {
+      case Some(v) => v
+      case None =>
+        val v = compute.get()
+        put(key, v)
+        v
+    }
+  }
 }
 
 object ResultCache {

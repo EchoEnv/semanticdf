@@ -487,9 +487,23 @@ public class StreamingService {
       // Wait up to 5s for query termination. Restate.run journals the call;
       // on replay the journaled boolean is returned without re-running the
       // closure. awaitTermination throws StreamingQueryException if the
-      // query terminated abnormally — we catch and treat as terminated.
-      // The closure also returns true if the handle is absent (post-replay
-      // or stop called before run).
+      // query terminated abnormally.
+      //
+      // PR #265: an abnormal Spark death (StreamingQueryException)
+      // MUST NOT be classified as a clean stop. The v0.2.2 bug
+      // mapped it to `terminated=true` → STATUS=stopped, which
+      // `StartupReconciler.invokeRun` then SKIPS on JVM restart
+      // (it's the same path operator-requested stops take), so the
+      // dead stream was silently never resurrected. ERROR_COUNT
+      // and RECONCILE_BLOCKED were also not incremented, so
+      // operators had no signal. Fix: mark STATUS=failed, set
+      // RECONCILE_BLOCKED=true, bump ERROR_COUNT — mirroring the
+      // startQueryWithFailureTracking pattern. The state mutations
+      // ARE journaled (Restate.run journals state writes performed
+      // inside its closures as part of the completion record;
+      // verified by PR #237).
+      // The closure also returns true if the handle is absent
+      // (post-replay or stop called before run).
       boolean terminated =
           Restate.run(
               "tick",
@@ -501,8 +515,15 @@ public class StreamingService {
                 }
                 try {
                   return Boolean.valueOf(q.awaitTermination(5000));
-                } catch (org.apache.spark.sql.streaming.StreamingQueryException e) {
-                  // Abnormal termination — exit loop.
+                } catch (org.apache.spark.sql.streaming.StreamingQueryException sqe) {
+                  // Abnormal termination — mark failed, not stopped.
+                  // We can't `throw` here (would cause Restate.run to
+                  // retry forever). The state mutations below are the
+                  // durable failure signal.
+                  state.set(STATUS, "failed");
+                  state.set(RECONCILE_BLOCKED, true);
+                  state.set(
+                      ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
                   return Boolean.TRUE;
                 }
               });
@@ -524,9 +545,16 @@ public class StreamingService {
           state.set(STATUS, "stopped");
           return;
         case EXIT_TERMINATED:
-          // Query terminated (naturally, abnormally, or handle gone).
+          // Query terminated. The tick closure already set
+          // STATUS=failed + RECONCILE_BLOCKED=true + bumped ERROR_COUNT
+          // for abnormal Spark deaths (StreamingQueryException). For
+          // natural termination or handle-gone (post-replay / stop
+          // before run), STATUS is still "started" — set it to
+          // "stopped" now. Don't overwrite a "failed" state.
           handles.remove(streamId);
-          state.set(STATUS, "stopped");
+          if (!"failed".equals(state.get(STATUS).orElse(null))) {
+            state.set(STATUS, "stopped");
+          }
           return;
         case CONTINUE:
           // 5s elapsed, query still running, no stop signal. Loop again.
