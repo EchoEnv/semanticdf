@@ -202,6 +202,29 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
     assert(round.status == model.status)
   }
 
+  test("SemanticTable: maxRows round-trips through Java serialization (regression guard for post-#294)") {
+    // The post-#294 audit (architect review) flagged that the new maxRows
+    // field on SemanticTable is a primitive Int and round-trips via the
+    // default Java serialization path, but no existing test pinned it.
+    // Without this assertion, a future regression that changes maxRows
+    // to a non-Serializable wrapper would silently break cluster-mode
+    // round-tripping.
+    import org.apache.spark.sql.functions.sum
+    val model = io.semanticdf.toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("pax_sum", t => sum(t("pax"))))
+      .withMaxRows(42)
+    val round = roundTrip(model)
+    assert(round.maxRows == 42, s"maxRows did not round-trip: ${round.maxRows}")
+    // Also verify the disable path (0).
+    val disabled = io.semanticdf.toSemanticTable(flightsDf, name = Some("flights"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("pax_sum", t => sum(t("pax"))))
+      .withMaxRows(0)
+    val roundDisabled = roundTrip(disabled)
+    assert(roundDisabled.maxRows == 0, s"maxRows=0 did not round-trip: ${roundDisabled.maxRows}")
+  }
+
   test("SemanticTable: round-trip preserves structure (DataFrame is intentionally not Serializable)") {
     // Spark's DataFrame is intentionally not Serializable — the op tree's
     // underlying source cannot cross the JVM boundary. This is a
