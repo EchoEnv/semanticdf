@@ -346,7 +346,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
     * }}}
     */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows)
+    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold)
 
   // -------------------------------------------------------------------------
   // Typed field references (SemanticField typeclass)
@@ -470,6 +470,10 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
         * inherited via the enclosing [[SemanticTable]] scope) so the
         * propagation is visible at the constructor signature. */
       maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
+      /** Opt-in auto-broadcast threshold (bytes) for the join that this
+        * groupBy participates in. Carried from the originating
+        * [[SemanticTable]] for the same reason as `maxRows`. */
+      broadcastJoinThreshold: Option[Long] = None,
   ) {
     /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
     def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
@@ -509,7 +513,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
       var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
       // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
       postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows)
+      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows, broadcastJoinThreshold = this.broadcastJoinThreshold)
     }
   }
 }

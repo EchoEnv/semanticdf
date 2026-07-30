@@ -5,7 +5,7 @@ import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{broadcast, col, lit, sum}
 
 import scala.jdk.CollectionConverters._
-import scala.util.DynamicVariable
+import scala.util.{DynamicVariable, Try}
 
 /** Root of the immutable semantic op tree (DESIGN §4.1).
   *
@@ -436,6 +436,14 @@ final case class SemanticJoinOp(
     leftSide: Option[SemanticTable] = None,
     /** Right-side counterpart of [[leftSide]]. */
     rightSide: Option[SemanticTable] = None,
+    /** Opt-in auto-broadcast threshold (bytes) carried from the originating
+      * [[SemanticTable]] via [[io.semanticdf.SemanticTable.withBroadcastJoinThreshold]].
+      * When `Some(n)`, the equi-join compile path applies `broadcast(right)`
+      * if `rightDf.queryExecution.optimizedPlan.stats.sizeInBytes < n`.
+      * `None` means "no library override — let Spark's cost-based
+      * decision apply". Default `None` for back-compat with hand-constructed
+      * `SemanticJoinOp`s and pre-PR-#299 manifests. */
+    broadcastJoinThreshold: Option[Long] = None,
     /** Names of the columns on the LEFT side that participate in the equi-join
       * predicate. Populated by:
       *   (a) the typed entry points on `SemanticTable.join_*` when called
@@ -817,9 +825,36 @@ final case class SemanticJoinOp(
       leftAgg(lk) === rightAgg(rk)
     }.reduce(_ && _)
 
+    // --- Opt-in auto-broadcast on the right side (size-based) ---
+    // When the user set `withBroadcastJoinThreshold(bytes)`, query
+    // `rightAgg`'s optimised plan stats and apply `broadcast(right)`
+    // if the right side is below the threshold. This OVERRIDES Spark's
+    // `autoBroadcastJoinThreshold` cost-based decision for this query
+    // — the user opted in explicitly, so we trust their size estimate.
+    // `None` threshold means "no override — let Spark decide".
+    //
+    // Spark's `Statistics.sizeInBytes` returns `BigInt`; when stats are
+    // not available, the default is `BigInt(-1)`. Treat that as
+    // "unknown size, skip the hint" rather than broadcasting a side
+    // that may be arbitrarily large.
+    val rightToJoin: DataFrame = broadcastJoinThreshold match {
+      case Some(threshold) =>
+        val sizeBytes: BigInt =
+          Try(rightAgg.queryExecution.optimizedPlan.stats.sizeInBytes)
+            .getOrElse(BigInt(-1))
+        if (sizeBytes >= 0 && sizeBytes < BigInt(threshold)) {
+          SemanticLogger.logBroadcastHint(
+            threshold, sizeBytes.toLong, cardinality.toString)
+          broadcast(rightAgg)
+        } else rightAgg
+      case None => rightAgg
+    }
+
     // --- Execute left-outer join ---
     // For Many: pre-agg prevents fact inflation. For One: no fan-out risk.
-    val joined = leftAgg.join(rightAgg, cond, "leftouter")
+    // `rightToJoin` may be the broadcast-wrapped version if the user's
+    // broadcast threshold applies (see opt-in block above).
+    val joined = leftAgg.join(rightToJoin, cond, "leftouter")
 
     // --- Dedup join keys ---
     // Spark's expression-join keeps BOTH sides' key columns. When both sides use the
