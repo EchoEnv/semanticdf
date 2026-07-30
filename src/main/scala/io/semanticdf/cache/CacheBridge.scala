@@ -35,10 +35,18 @@ object CacheBridge {
    * this is a re-export for backward compat with code that already
    * references the platform-side constant.
    */
+  @deprecated(
+    "Renamed to io.semanticdf.cache.CacheKey.DefaultMaxRows. " +
+      "This re-export exists for binary compat with code compiled " +
+      "against CacheBridge.DefaultMaxRows before v0.2.3.",
+    since = "0.2.3")
   val DefaultMaxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows
 
   /** Java-callable accessor (Java sees Scala `val`s as fields, not
-   * methods, so we expose this method for clean Java syntax). */
+   * methods, so we expose this method for clean Java syntax).
+   *
+   * Note: this method is NOT deprecated (it is the canonical Java API).
+   * Scala callers should prefer `CacheKey.DefaultMaxRows` directly. */
   def defaultMaxRows(): Int = DefaultMaxRows
 
 

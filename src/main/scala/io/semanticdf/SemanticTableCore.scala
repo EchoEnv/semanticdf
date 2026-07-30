@@ -146,7 +146,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
                 // failure propagate through the outer audit handler.
                 // `maxRows > 0` mirrors CacheBridge.executeQuery: apply
                 // df.limit(maxRows) BEFORE collect to bound driver memory.
-                // `maxRows <= 0` disables the cap (escape hatch only).
+                // `maxRows == 0` disables the cap (escape hatch only).
+                // `maxRows < 0` is rejected upstream by withMaxRows's `require`.
                 val capped =
                   if (maxRows > 0) fresh.limit(maxRows) else fresh
                 val rows = capped.collect()
