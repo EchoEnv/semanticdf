@@ -87,5 +87,24 @@ final class SemanticTable private[semanticdf] (
       * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
       * bypass the cache. */
     val resultCache: Option[io.semanticdf.cache.ResultCache] = None,
+    /** Driver-memory safety cap on the rows returned by the cache miss path.
+      *
+      * On a cache miss, `toDataFrame` calls `df.limit(maxRows).collect()` —
+      * the materialised row array is the dominant memory cost of the cache.
+      * Without this cap, a 10M-row query OOMs the driver. The default mirrors
+      * the platform's `CacheBridge.DefaultMaxRows` (100,000) so library and
+      * platform agree on the safety threshold.
+      *
+      * `maxRows > 0`  → apply `df.limit(maxRows)` before `collect()`.
+      * `maxRows <= 0` → no cap (escape hatch; not recommended).
+      *
+      * The cap only affects the cache miss path — cached hits are already
+      * bounded by whatever the producer cached. The cap does not affect
+      * the no-cache fast path (`auditSink.isEmpty && resultCache.isEmpty`),
+      * which returns a lazy DataFrame and lets the caller drive `collect()`.
+      *
+      * Set via the fluent `.withMaxRows(n)` setter. Survives the fluent
+      * chain the same way `resultCache` does. */
+    val maxRows: Int = io.semanticdf.cache.CacheBridge.DefaultMaxRows,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }
