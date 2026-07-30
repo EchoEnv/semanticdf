@@ -112,7 +112,10 @@ final class SemanticTable private[semanticdf] (
       *     row array
       *
       * Set via the fluent `.withMaxRows(n)` setter. Survives the fluent
-      * chain the same way `resultCache` does. */
+      * chain the same way `resultCache` does. Manifest round-trip:
+      * non-default values are emitted under `runtime.maxRows` and
+      * restored on `fromJson` (PR #303). The `maxRows = 0` escape
+      * hatch is preserved (not silently coerced to default). */
     val maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
     /** Opt-in auto-broadcast threshold for joins (size-based, bytes).
       *
@@ -148,9 +151,10 @@ final class SemanticTable private[semanticdf] (
       *
       * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
       * Survives the fluent chain the same way `resultCache` does.
-      * Manifest round-trip is lossy: the threshold is NOT preserved
-      * across `SemanticManifest.toJson` / `fromJson` (the rebuilt
-      * table gets the default `None`). */
+      * Manifest round-trip preserves the threshold: a non-default
+      * value is emitted under `runtime.broadcastJoinThreshold` and
+      * restored on `fromJson` (PR #303). Missing/absent means
+      * `None` (the library default). */
     val broadcastJoinThreshold: Option[Long] = None,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }

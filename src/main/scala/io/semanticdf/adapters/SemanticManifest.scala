@@ -965,6 +965,27 @@ object SemanticManifest {
       }
     }
 
+    // runtime tuning options — preserved across the round-trip so that
+    // a YAML-loaded model keeps its size cap and broadcast hint
+    // (mirrors how resultCache, maxRows, and broadcastJoinThreshold
+    // survive the fluent chain in the Scala DSL). Emitted only when
+    // at least one field is non-default — a missing `runtime` block in
+    // a manifest means "use the library defaults", which keeps legacy
+    // manifests unmodified.
+    //
+    // Note: `maxRows = 0` is the escape hatch (no cap). It's non-default
+    // by construction, so it IS emitted whenever the user explicitly
+    // disabled the cap — the round-trip preserves the disabled state.
+    if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows ||
+        model.broadcastJoinThreshold.isDefined) {
+      val runtimeObj = root.putObject("runtime")
+      if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows)
+        runtimeObj.put("maxRows", model.maxRows)
+      model.broadcastJoinThreshold.foreach { n =>
+        runtimeObj.put("broadcastJoinThreshold", n)
+      }
+    }
+
     root
   }
 
@@ -997,6 +1018,19 @@ object SemanticManifest {
     val measures = readArr(obj, "measures").flatMap(readMeasure).toMap
     val filters  = readArr(obj, "filters").flatMap(readFilter)
     val transforms = readArr(obj, "transforms").flatMap(readTransform)
+
+    // Runtime tuning options (PR #295 + #299). Missing `runtime` block
+    // → use the library defaults. Asymmetric handling reflects the
+    // SemanticTable field types: `maxRows: Int` lives as a plain int
+    // (default = `CacheKey.DefaultMaxRows`), so the reader backfills
+    // the default when the wire is absent. `broadcastJoinThreshold:
+    // Option[Long]` already encodes "absent" as `None`, so no
+    // getOrElse is needed. A legacy manifest without the block
+    // parses cleanly because both fields default to the library
+    // behavior.
+    val runtimeObj        = obj.path("runtime")
+    val maxRowsValue      = optIntField(runtimeObj, "maxRows")
+    val broadcastValue    = optLongField(runtimeObj, "broadcastJoinThreshold")
 
     val base: SemanticOp = if (isStreaming) {
       SemanticStreamingTableOp.of(
@@ -1034,6 +1068,8 @@ object SemanticManifest {
       root        = transformedRoot,
       version     = version,
       sourceTable = sourceTable,
+      maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
+      broadcastJoinThreshold = broadcastValue,
     )
   }
 
@@ -1300,6 +1336,12 @@ object SemanticManifest {
   private def optIntField(parent: com.fasterxml.jackson.databind.JsonNode, name: String): Option[Int] = {
     Option(parent.get(name)).filter(!_.isNull).flatMap { n =>
       if (n.isInt) Some(n.asInt()) else if (n.isLong) Some(n.asLong().toInt) else if (n.isNumber) Some(n.asDouble().toInt) else None
+    }
+  }
+
+  private def optLongField(parent: com.fasterxml.jackson.databind.JsonNode, name: String): Option[Long] = {
+    Option(parent.get(name)).filter(!_.isNull).flatMap { n =>
+      if (n.isLong) Some(n.asLong()) else if (n.isInt) Some(n.asInt().toLong) else if (n.isNumber) Some(n.asDouble().toLong) else None
     }
   }
 
