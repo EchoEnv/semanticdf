@@ -186,6 +186,53 @@ class BroadcastJoinThresholdSpec extends AnyFunSuite with Matchers with SparkSes
   // Fluent chain propagation: every setter must carry broadcastJoinThreshold
   // ----------------------------------------------------------------
 
+  test("right-side withBroadcastJoinThreshold propagates to the op (regression: pre-fix M4 audit finding)") {
+    // Pre-fix: the op's broadcastJoinThreshold was set from the LEFT
+    // side only — `right.withBroadcastJoinThreshold(N)` was silently
+    // dropped. The fix uses `orElse` so RIGHT is the fallback when
+    // LEFT is unset. LEFT still wins when both are set (precedence
+    // preserved).
+    val left  = toSemanticTable(largeFact(spark), name = Some("left"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withMeasures(Measure("n", t => count(lit(1))))
+    val right = toSemanticTable(smallDim(spark), name = Some("right"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withBroadcastJoinThreshold(2L * 1024 * 1024)
+
+    val joined = left.join_one(right, (l, r) => l("k") === r("k"))
+    val op = joined.root.asInstanceOf[SemanticJoinOp]
+    op.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+  }
+
+  test("LEFT-side withBroadcastJoinThreshold wins when both sides set (precedence preserved)") {
+    val left = toSemanticTable(largeFact(spark), name = Some("left"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withBroadcastJoinThreshold(8L * 1024 * 1024)  // LEFT's value
+    val right = toSemanticTable(smallDim(spark), name = Some("right"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withBroadcastJoinThreshold(2L * 1024 * 1024)  // RIGHT's value
+
+    val joined = left.join_one(right, (l, r) => l("k") === r("k"))
+    val op = joined.root.asInstanceOf[SemanticJoinOp]
+    op.broadcastJoinThreshold shouldBe Some(8L * 1024 * 1024)
+  }
+
+  test("right-side withBroadcastJoinThreshold propagates through join_many (regression: pre-fix M4 audit finding)") {
+    // join_many had the same bug as join_one (PR #300 added the
+    // propagation for join_many but only from the LEFT). The fix is
+    // shared across both paths.
+    val fact = toSemanticTable(largeFact(spark), name = Some("fact"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withMeasures(Measure("n", t => count(lit(1))))
+    val dim = toSemanticTable(smallDim(spark), name = Some("dim"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withBroadcastJoinThreshold(2L * 1024 * 1024)
+
+    val joined = fact.join_many(dim, (l, r) => l("k") === r("k"))
+    val op = joined.root.asInstanceOf[SemanticJoinOp]
+    op.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+  }
+
   test("withRowFilter preserves broadcastJoinThreshold (regression: silent reset to None)") {
     // Pre-fix: withRowFilter called `new SemanticTable(...)` without
     // passing `broadcastJoinThreshold = broadcastJoinThreshold`, silently
