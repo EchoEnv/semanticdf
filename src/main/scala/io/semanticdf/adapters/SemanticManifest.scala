@@ -777,18 +777,22 @@ object SemanticManifest {
       // same predicate object the writer captured. The AST is
       // already a `Predicate` (fromJson guarantees it).
       predicateAst = jAst,
-      // Auto-broadcast threshold carried from the LEFT side. This
-      // mirrors the construction site in `join_one` / `join_many`
-      // (SemanticTableMutation.scala), where the op's
-      // broadcastJoinThreshold is populated from
-      // `this.broadcastJoinThreshold` (the LEFT SemanticTable). On
-      // round-trip, the LEFT side's runtime is already preserved by
-      // `readManifest` (PR #303), so the op's threshold survives
-      // the round-trip. Without this, a user who set
-      // `left.withBroadcastJoinThreshold(n).join_on(...)` silently
-      // loses the override on the op after restoring from a joined
-      // manifest.
-      broadcastJoinThreshold = leftT.broadcastJoinThreshold,
+      // Auto-broadcast threshold carried from either side. Mirrors
+      // the construction site in `join_one` / `join_many`
+      // (SemanticTableMutation.scala), where the op's threshold is
+      // populated from `this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold)`.
+      // Precedence: LEFT wins if both sides carry a threshold;
+      // RIGHT is the fallback so a user who set the threshold on
+      // the right side (intuitively: "I know this dimension table
+      // is small") gets the broadcast hint. On round-trip, each
+      // side's runtime is already preserved by `readManifest` (PR
+      // #303), so the op's threshold survives the round-trip via
+      // the same `orElse` rule. Without this, a user who set the
+      // threshold on the right side silently loses the override
+      // on the op after restoring from a joined manifest (the
+      // same class of bug that PR #306 fixed for the in-memory
+      // join path).
+      broadcastJoinThreshold = leftT.broadcastJoinThreshold.orElse(rightT.broadcastJoinThreshold),
       // Path C: also carry the extra dims/measures so the runtime
       // identity (alias-prefixed dims, etc.) is preserved.
       extraDimensions = jExtraDims,

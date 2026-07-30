@@ -171,6 +171,30 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
     } finally spark.stop()
   }
 
+  test("joined envelope: RIGHT-side withBroadcastJoinThreshold survives the round-trip (regression: post-#306 audit)") {
+    // PR #304 added the LEFT-side round-trip for the op's
+    // broadcastJoinThreshold but used `leftT.broadcastJoinThreshold`
+    // (LEFT-only). PR #306 widened the in-memory join path to
+    // `orElse(this, other)`, but the joined-manifest reader was
+    // not updated. This test pins the right-side survival.
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+        .withBroadcastJoinThreshold(2L * 1024 * 1024)
+
+      val joined = lT.join_on(rT, "id" -> "id")
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      val op = restored.root.asInstanceOf[SemanticJoinOp]
+      op.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+    } finally spark.stop()
+  }
+
   test("SemanticJoinOp's broadcastJoinThreshold survives the round-trip (regression: op construction)") {
     // The op's `broadcastJoinThreshold` is set at join construction
     // time from the LEFT side's `withBroadcastJoinThreshold(n)` call.
