@@ -20,6 +20,13 @@ import org.apache.spark.sql.Column
   * val customerId = Dimension.entity("customer_id", t => t("customer_id"))
   * }}}
   *
+  * The primary constructor is `private[semanticdf]` — only the companion
+  * factories and same-package callers (adapter code, in-package tests)
+  * can build a `Dimension` directly. Outside callers must use the
+  * factories. This enforces the S2-4 audit recommendation: the
+  * `derived`-on-non-time-dim rule fires at the only legitimate
+  * construction sites.
+  *
   * The `expr` function produces the Spark [[Column]] for this dimension at
   * compile time. `t` is a [[SemanticScope]] — call `t("col_name")` to reference
   * a source column, or compose Spark expressions on top of it
@@ -40,7 +47,7 @@ import org.apache.spark.sql.Column
   *                          with `smallestTimeGrain = Some("day")` raises
   *                          `IllegalArgumentException`. `None` = no restriction.
   */
-final class Dimension(
+final class Dimension private[semanticdf] (
     val name: String,
     val expr: SemanticScope => Column,
     val description: Option[String] = None,
@@ -69,12 +76,11 @@ final class Dimension(
       * `derived:` part and declare the derived dimensions explicitly. */
     val derived: Seq[String] = Seq.empty,
 ) extends Serializable {
-  // Data-design audit S2-4: the `derived` field is only honored on
-  // time dimensions. Without this check, a caller could build
-  // `Dimension.copy(derived = Seq("year"), isTimeDimension = false)`
-  // and the rejection would fire only at the next `withDimensions`
-  // call — leaving an invalid value in user code. Catch it at
-  // construction.
+  // The `derived` field is only honored on time dimensions. Without this
+  // check, a caller could build `Dimension.copy(derived = Seq("year"),
+  // isTimeDimension = false)` and the rejection would fire only at the
+  // next `withDimensions` call — leaving an invalid value in user code.
+  // Catch it at construction.
   require(
     derived.isEmpty || isTimeDimension,
     s"Dimension('$name') has `derived` set but is not a time dimension. " +
