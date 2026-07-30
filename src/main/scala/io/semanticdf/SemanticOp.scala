@@ -5,7 +5,7 @@ import org.apache.spark.sql.{Column, DataFrame, SparkSession}
 import org.apache.spark.sql.functions.{broadcast, col, lit, sum}
 
 import scala.jdk.CollectionConverters._
-import scala.util.{DynamicVariable, Try}
+import scala.util.DynamicVariable
 
 /** Root of the immutable semantic op tree (DESIGN §4.1).
   *
@@ -833,16 +833,22 @@ final case class SemanticJoinOp(
     // — the user opted in explicitly, so we trust their size estimate.
     // `None` threshold means "no override — let Spark decide".
     //
-    // Spark's `Statistics.sizeInBytes` returns `BigInt`; when stats are
-    // not available, the default is `BigInt(-1)`. Treat that as
-    // "unknown size, skip the hint" rather than broadcasting a side
-    // that may be arbitrarily large.
+    // Spark's `Statistics.sizeInBytes` returns `BigInt`. The base
+    // default (when stats aren't computed by the optimizer) is
+    // `BigInt(Long.MaxValue)`. A value of `BigInt(Long.MaxValue)`
+    // fails the `< threshold` check for any realistic threshold, so
+    // the broadcast hint is correctly skipped when stats are unknown.
+    // Note: `LeafNode.computeStats` (the base implementation) throws
+    // `UnsupportedOperationException`. Any exception from this call
+    // propagates to the caller — standard Spark sources
+    // (LogicalRelation, InMemoryRelation, Project, Aggregate, etc.)
+    // all override `computeStats`, so this is only reachable with
+    // hand-rolled Catalyst DSL plans.
     val rightToJoin: DataFrame = broadcastJoinThreshold match {
       case Some(threshold) =>
-        val sizeBytes: BigInt =
-          Try(rightAgg.queryExecution.optimizedPlan.stats.sizeInBytes)
-            .getOrElse(BigInt(-1))
-        if (sizeBytes >= 0 && sizeBytes < BigInt(threshold)) {
+        val sizeBytes = rightAgg.queryExecution.optimizedPlan.stats.sizeInBytes
+        val thresh    = BigInt(threshold)
+        if (sizeBytes < thresh && sizeBytes >= 0) {
           SemanticLogger.logBroadcastHint(
             threshold, sizeBytes.toLong, cardinality.toString)
           broadcast(rightAgg)

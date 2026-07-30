@@ -119,17 +119,32 @@ final class SemanticTable private[semanticdf] (
       * When `Some(n)`, the equi-join compile path queries
       * `df.queryExecution.optimizedPlan.stats.sizeInBytes` on the right
       * side of every `join_one` / `join_many` and applies
-      * `broadcast(right)` if the right side is smaller than `n`. This
+      * `broadcast(right)` if that side is smaller than `n`. This
       * overrides Spark's `autoBroadcastJoinThreshold` cost-based
       * decision for this specific query.
+      *
+      * For `join_many`, the right side passed to the broadcast check
+      * is the BSL safe-aggregation of the original right side at the
+      * join-grain keys (see `preAggregateAtGrain`). That's typically
+      * much smaller than the raw right side — set the threshold
+      * against the post-aggregation estimate, not the raw table size.
       *
       * `None` (the default) means "no library override — let Spark
       * decide" — the existing `autoBroadcastJoinThreshold` (default
       * 10MB) still applies.
       *
+      * Escape hatch: the builder accepts `bytes = 0` and converts it
+      * to `None` here (rather than `Some(0)`). The two values are
+      * semantically identical: "no override". This mirrors the
+      * `maxRows == 0` convention.
+      *
       * Opt-in by design: forcing broadcast can backfire on large
       * sides (driver OOM). Users opt in only when they KNOW the right
       * side is small (dimension table, lookup table, etc.).
+      *
+      * Note: cross joins (`join_cross`) and the streaming foreachBatch
+      * path don't honour this threshold — the broadcast hint is only
+      * emitted in `compileEquiJoin` (used by `join_one` / `join_many`).
       *
       * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
       * Survives the fluent chain the same way `resultCache` does.

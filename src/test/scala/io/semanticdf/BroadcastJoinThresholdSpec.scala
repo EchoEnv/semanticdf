@@ -80,6 +80,29 @@ class BroadcastJoinThresholdSpec extends AnyFunSuite with Matchers with SparkSes
     op.broadcastJoinThreshold shouldBe Some(1024L * 1024L)
   }
 
+  test("withBroadcastJoinThreshold set BEFORE join_many propagates to SemanticJoinOp (regression guard for post-#299 bug)") {
+    // PR #300: pre-fix, join_manyWithKeys silently dropped the threshold
+    // even when set BEFORE the call. This test pins the propagation.
+    val fact = toSemanticTable(largeFact(spark), name = Some("fact"))
+      .withDimensions(Dimension("k", t => t("k")))
+      .withMeasures(Measure("n", t => count(lit(1))))
+    val dim = toSemanticTable(smallDim(spark), name = Some("dim"))
+      .withDimensions(Dimension("k", t => t("k")))
+
+    val joined = fact.withBroadcastJoinThreshold(1024L * 1024L)
+      .join_many(dim, (l, r) => l("k") === r("k"))
+
+    val op = joined.root.asInstanceOf[SemanticJoinOp]
+    op.broadcastJoinThreshold shouldBe Some(1024L * 1024L)
+
+    // The optimized plan should also carry the broadcast hint on the
+    // right side (since cardinality = Many still goes through
+    // compileEquiJoin).
+    val logicalPlan = joined.execute(spark).queryExecution.optimizedPlan.toString
+    assert(logicalPlan.toLowerCase.contains("broadcast"),
+      s"expected broadcast hint in join_many plan; got:\n$logicalPlan")
+  }
+
   test("withBroadcastJoinThreshold survives where / groupBy / aggregate") {
     val dim = toSemanticTable(smallDim(spark), name = Some("dim"))
       .withBroadcastJoinThreshold(1024L)

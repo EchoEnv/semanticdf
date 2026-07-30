@@ -680,6 +680,11 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       rightRoot = rightRoot,
       leftSide  = Some(this),
       rightSide = Some(other),
+      // Auto-broadcast threshold carried from the originating table.
+      // Applied in compile() if the right side's stats.sizeInBytes
+      // is below this value. Without this, withBroadcastJoinThreshold
+      // is silently dropped on the join_many path.
+      broadcastJoinThreshold = this.broadcastJoinThreshold,
       leftKeys = leftKeysIn,
       rightKeys = rightKeysIn,
       onExprString = onExprStringIn,
