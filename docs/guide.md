@@ -210,7 +210,7 @@ section below for the full mechanics.
 
 ### ResultDecoder on the way out
 
-The `ResultDecoder.derive[T]` macro (PR `#64`) does the same kind of
+The `ResultDecoder.derive[T]` macro does the same kind of
 "compile from structure" at the *result* side: a `case class
 CarrierCount(carrier: String, count: Long)` becomes a typed decoder
 that reads `row.getString(0)` and `row.getLong(1)`. The decoder is
@@ -706,7 +706,7 @@ The 15-line example above is *the* Scala-side streaming terminal. The streaming 
 | **CLI** (`sdf`) | Same five verbs, same model-only surface. `sdf query <streaming-model>` runs the filter-only path against the streaming source. The `sdf` binary never starts, stops, or holds a stream. | [`examples/cli-consumer/README.md`](../../examples/cli-consumer/README.md) §*Streaming models* |
 | **Operator program** | Owns `StreamingConfig` construction, the `toStreamingQuery` call, `awaitTermination()` / `query.stop()`. *Not* a library surface; *not* an MCP/CLI surface. | The 15-line example above is the canonical operator workflow. |
 
-One model file, four read-only surfaces, one operator surface. The semantic-layer / operator-lifecycle boundary is structural — see [`docs/feature-roadmap.md`](feature-roadmap.md) §2.3 for the rationale.
+One model file, four read-only surfaces, one operator surface. The semantic-layer / operator-lifecycle boundary is structural — see [`docs/adr/0002-streaming-batch-first-streaming-shaped.md`](adr/0002-streaming-batch-first-streaming-shaped.md) for the rationale.
 
 ### `queryAs[T]` — typed one-shot bundle
 
@@ -754,7 +754,7 @@ Notes:
   resolution find it.
 - The case class must be top-level (not nested inside a method or
   class) for Spark's `newProductEncoder` to find a no-arg constructor.
-- See [`docs/phase-E-plan.md`](phase-E-plan.md) for the design
+- See [`docs/backlog-type-safety.md`](backlog-type-safety.md) for the design
   rationale and the macro mechanics.
 
 The construction API (`toSemanticTable(df).withDimensions(...).withMeasures(...)`)
@@ -996,7 +996,7 @@ Other compile-time catches:
 - **Arities 1–4 are fully type-checked at compile time.**
 - **`FieldRef[T]` is a value class** — no allocation on the hot path.
 - **Same approach on the result side** — `ResultDecoder.derive[T]`
-  (PR `#64`) does the compile-time generation for `case class`
+  does the compile-time generation for `case class`
   decoders.
 
 For details on why the typeclass pattern was chosen over a richer DSL,

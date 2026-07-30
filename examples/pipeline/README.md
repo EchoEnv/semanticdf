@@ -230,7 +230,7 @@ materializations:
 
 The pipeline reads the materialization specs, generates the aggregated tables, and writes them. The semantic model stays available for ad-hoc queries; the materialized tables serve dashboards.
 
-This is a future enhancement, gated on real consumer demand. See `docs/first-consumer-plan.md` for when to add it.
+This is a future enhancement, gated on real consumer demand.
 
 ## Querying the gold catalog (demo mode)
 
