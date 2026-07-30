@@ -26,10 +26,12 @@ import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
 object StreamingSupport {
 
   /** Single source of truth for the "is a streaming DataFrame" invariant.
-    * All three sites that build a streaming root call this:
+    * All three sites that build a streaming root reach this (two call
+    * it directly, one through the `of` factory):
     *   - [[StreamingSource]]'s primary constructor (the typed wrapper)
     *   - [[SemanticStreamingTableOp.of]]'s factory (the op-tree root)
-    *   - [[package.toStreamingSemanticTable]] (the package-level factory)
+    *   - [[package.toStreamingSemanticTable]] (the package-level factory;
+    *     reaches this via the `of` factory above)
     * If the rule ever needs to change (e.g., require a `trigger` option
     * alongside `isStreaming`), there is exactly one place to edit. */
   private[semanticdf] def requireStreamingSource(stream: DataFrame, site: String): Unit = {

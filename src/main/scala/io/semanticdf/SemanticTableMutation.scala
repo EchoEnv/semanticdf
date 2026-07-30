@@ -82,16 +82,16 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
   def withDimensions(dims: Dimension*): SemanticTable = {
     // Materialize derived-time dims (siblings of any base time-dim with `derived` non-empty).
     // Fails loud on:
-    //   - `derived` declared on a non-time dim
     //   - a name in `derived` that's not in {"year", "month", "day"}
     //   - collisions across declared + derived names
+    //
+    // (Previously this block also validated `derived`-on-non-time-dim. That
+    // check is now in the `Dimension` primary constructor (see Model.scala),
+    // which fires at `new Dimension(...)` time. The duplicate here was
+    // unreachable post-PR-#290; removed in the post-audit cleanup.)
     val materialized: Seq[Dimension] = dims.flatMap { d =>
       if (d.derived.isEmpty) Seq(d)
       else {
-        if (!d.isTimeDimension)
-          throw new IllegalArgumentException(
-            s"dimension '${d.name}' declares derived=[${d.derived.mkString(",")}] but is not a time dimension. " +
-            s"`derived` only applies to Dimension.time.")
         val siblings: Seq[Dimension] = d.derived.map { part =>
           val partCol: Column = part match {
             case "year"  => year(col(d.name))
