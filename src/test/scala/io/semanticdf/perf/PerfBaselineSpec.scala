@@ -152,4 +152,75 @@ class PerfBaselineSpec extends AnyFunSuite with SparkSessionFixture with Flights
     info(s"[perf] invalidateModel on 256 entries: median=${median}ms")
     assert(cache.keys().isEmpty, "invalidate should drop everything tagged with the model")
   }
+
+  // ----------------------------------------------------------------
+  // 1M-row scale baseline (post-PR #294 follow-up)
+  //
+  // The 30-row baseline above is the floor for every path, but it
+  // tells us nothing about how the library behaves under realistic
+  // data sizes. This block establishes the v0.2.2 numbers on a
+  // 1,000,000-row synthetic table so future regressions at scale
+  // are visible in surefire output.
+  //
+  // NOTE: the 1M-row numbers include DataFrame creation cost (the
+  // synthetic DataFrame is built once per test invocation). To
+  // isolate query-time cost, see the warmup pattern below: the
+  // first `q.toDataFrame(spark)` populates the cache AND warms the
+  // Spark plan; the second call is the "cache hit" measurement.
+  // ----------------------------------------------------------------
+
+  /** Synthesise a 1M-row table with a carrier column. 4 distinct
+    * carriers, randomised distance/pax, deterministic seed. */
+  private def largeFlightsDf = {
+    val session = spark
+    import session.implicits._
+    import scala.util.Random
+    val rng = new Random(2024)
+    val carriers = Seq("AA", "UA", "DL", "B6")
+    val rows = (1 to 1_000_000).map { i =>
+      (carriers(rng.nextInt(carriers.size)),
+       (rng.nextDouble() * 3000 + 100).toInt,
+       (rng.nextDouble() * 400 + 1).toInt)
+    }
+    spark.createDataFrame(spark.sparkContext.parallelize(rows, 8))
+      .toDF("carrier", "distance", "passengers")
+  }
+
+  test("perf: 1M-row groupBy+aggregate (cache miss, fresh cache per run)") {
+    // The cache key is only computed when auditRequest is set; we must call
+    // .query(...) explicitly to populate it. Otherwise the cache is bypassed
+    // and the "miss" path is the no-cache fast path.
+    //
+    // To actually measure miss cost, we use a fresh cache per sample so
+    // each call is a true miss (no shared LRU state between samples).
+    val df  = largeFlightsDf
+    val t   = toSemanticTable(df, name = Some("flights_1M"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+    val samples = (0 until 11).map { _ =>
+      val cache = ResultCache.inMemory(maxEntries = 4)
+      val q = t.withResultCache(cache).query(
+        measures = Seq("flight_count"), dimensions = Seq("carrier"))
+      val t0 = System.nanoTime()
+      q.toDataFrame(spark).collect()
+      (System.nanoTime() - t0) / 1000000L
+    }
+    val sorted = samples.sorted
+    val median = sorted(sorted.size / 2)
+    info(s"[perf] 1M-row groupBy (cache miss, fresh cache per run): median=${median}ms")
+  }
+
+  test("perf: 1M-row groupBy+aggregate (cache hit, after warm-up)") {
+    // Warm-up: populate the cache AND warm the Spark plan.
+    val df  = largeFlightsDf
+    val t   = toSemanticTable(df, name = Some("flights_1M_hit"))
+      .withDimensions(Dimension("carrier", t => t("carrier")))
+      .withMeasures(Measure("flight_count", t => count(lit(1))))
+    val cache = ResultCache.inMemory(maxEntries = 4)
+    val q = t.withResultCache(cache).query(
+      measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    q.toDataFrame(spark).collect()  // warm-up: cache miss, also warms Spark
+    val median = medianMs { q.toDataFrame(spark).collect() }
+    info(s"[perf] 1M-row groupBy (cache hit, after warm-up): median=${median}ms")
+  }
 }
