@@ -25,9 +25,15 @@ import org.scalatest.matchers.should.Matchers._
   * These tests pin the cap:
   *   1. Default behaviour unchanged for typical workloads (30-row fixture).
   *   2. `withMaxRows(n)` actually caps the result to n rows on cache miss.
-  *   3. `maxRows <= 0` disables the cap (escape hatch).
+  *   3. `maxRows == 0` disables the cap (escape hatch).
   *   4. Chainable methods (`.where`, `.groupBy`) preserve `maxRows`.
-  *   5. Cached hits return the cached rows unchanged (already bounded).
+  *   5. Cache hits return the cached rows unchanged regardless of maxRows
+  *      (the cap only affects the miss path; cached rows are already bounded
+  *      by whatever the producer cached).
+  *   6. Two queries with different maxRows produce different cache keys,
+  *      so a tighter cap on the second call gets a fresh miss path
+  *      (regression guard for the cache-key bug fixed post-#294).
+  *   7. `withMaxRows(-1)` throws `IllegalArgumentException`.
   */
 class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
 
@@ -89,5 +95,76 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
     chained.maxRows shouldBe 2
     val rows = chained.toDataFrame(spark).collect()
     rows.length shouldBe 2  // cap applies through the chain
+  }
+
+  // ----------------------------------------------------------------
+  // Cache hit / cache key regression guards
+  // ----------------------------------------------------------------
+
+  test("same maxRows produces a cache hit on a repeated query") {
+    // Two identical queries (same shape, same maxRows) share a cache entry.
+    // First call: cache miss (3 carriers → all 3 rows cached).
+    // Second call: cache hit — the cached 3 rows are returned unchanged.
+    val cache = ResultCache.inMemory(maxEntries = 4)
+    val producer = perCarrierModel.withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    producer.toDataFrame(spark).collect()  // miss, populates cache with 3 rows
+    // Second call with the same shape: cache hit, 3 rows returned.
+    val second = perCarrierModel.withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    val rows = second.toDataFrame(spark).collect()
+    rows.length shouldBe 3  // cache hit returns the producer's full result
+  }
+
+  test("tighter maxRows produces a cache miss with the cap applied (not a stale hit)") {
+    // After the post-#294 cache-key fix, two queries with different
+    // maxRows produce different cache keys. A subsequent call with a
+    // tighter cap must run the miss path (with the cap applied), NOT
+    // return the producer's uncapped result. This is the regression
+    // guard for the bug where the cache key omitted maxRows.
+    val cache = ResultCache.inMemory(maxEntries = 4)
+    val producer = perCarrierModel.withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    producer.toDataFrame(spark).collect()  // miss, 3 rows cached
+    val tighter = perCarrierModel.withResultCache(cache).withMaxRows(1)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    val rows = tighter.toDataFrame(spark).collect()
+    rows.length shouldBe 1  // cache miss with cap=1, not stale cache hit
+  }
+
+  test("different maxRows produces a different cache key (regression guard for post-#294 bug)") {
+    // A user who calls query() twice with different maxRows must get two
+    // separate cache entries, not a hit on the higher-cap row. Pre-fix, the
+    // cache key omitted maxRows, so the second call (with a tighter cap)
+    // would silently receive the producer's full uncapped result.
+    val cache = ResultCache.inMemory(maxEntries = 4)
+    val producer = perCarrierModel.withResultCache(cache)
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
+    producer.toDataFrame(spark).collect()  // miss, populates cache
+    val producerKey = CacheKey.forRequest(
+      io.semanticdf.audit.QueryRequest(
+        model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
+      CacheBridge.DefaultMaxRows)
+    val tighterKey = CacheKey.forRequest(
+      io.semanticdf.audit.QueryRequest(
+        model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
+      2)
+    // Different maxRows → different cache keys. Plain assertion (the
+    // Matchers DSL `should not equal` resolves ambiguously here).
+    assert(producerKey != tighterKey, "different maxRows must produce different cache keys")
+    assert(producerKey.isDefined)
+    assert(tighterKey.isDefined)
+  }
+
+  // ----------------------------------------------------------------
+  // Validation
+  // ----------------------------------------------------------------
+
+  test("withMaxRows(-1) throws IllegalArgumentException") {
+    val ex = intercept[IllegalArgumentException] {
+      perCarrierModel.withMaxRows(-1)
+    }
+    ex.getMessage should include("withMaxRows")
+    ex.getMessage should include("-1")
   }
 }

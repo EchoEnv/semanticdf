@@ -97,7 +97,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       // request is well-formed (has a model).
       val cacheKeyOpt: Option[String] =
         if (auditRequest.isEmpty) None
-        else resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req))
+        else resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req, maxRows))
 
       // Cache check: on hit, rebuild a DataFrame from the cached rows
       // and skip Spark's planner entirely. This is the "best performance"
@@ -170,9 +170,19 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
                 }
                 (rebuilt, rows.length.toLong)
               case None =>
-                // No cache key. Just compile; the caller collects.
+                // No cache key (audit-only path: resultCache is None, but
+                // auditSink is set so the audit event needs an accurate
+                // rowCount). Apply the maxRows cap here too so the
+                // driver's collect() doesn't OOM on a 10M-row query
+                // when the cache isn't configured.
                 val fresh = root.compile(spark)
-                (fresh, 0L)
+                val capped =
+                  if (maxRows > 0) fresh.limit(maxRows) else fresh
+                val rows = capped.collect()
+                val rebuilt =
+                  spark.createDataFrame(
+                    spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
+                (rebuilt, rows.length.toLong)
             }
           }
 
@@ -322,11 +332,18 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * ([[io.semanticdf.cache.CacheBridge.DefaultMaxRows]] = 100,000)
     * protects against OOM on unexpectedly large results.
     *
-    * `n <= 0` disables the cap — not recommended for production.
+    * `n == 0` disables the cap (escape hatch only — not recommended for
+    * production). `n < 0` throws `IllegalArgumentException` since
+    * `Dataset.limit` itself rejects negative values.
     *
-    * The cap survives the fluent chain the same way [[resultCache]] does. */
-  def withMaxRows(n: Int): SemanticTable =
+    * The cap survives the fluent chain the same way [[resultCache]] does.
+    * The cap also participates in the result-cache key (see
+    * [[io.semanticdf.cache.CacheKey.forRequest]]) so two queries that
+    * differ only in `maxRows` produce different cache entries. */
+  def withMaxRows(n: Int): SemanticTable = {
+    require(n >= 0, s"SemanticTable.withMaxRows: n must be non-negative, got: $n")
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = n)
+  }
 
   /** Internal: stamp the captured request shape for audit emission.
     * Called by [[query]] once the chain is built. Not part of the public

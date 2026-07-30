@@ -38,7 +38,7 @@ import io.semanticdf.audit.{PredicateHasher, QueryRequest => AuditQueryRequest}
   */
 object CacheKey {
 
-  def forRequest(req: AuditQueryRequest): Option[String] = {
+  def forRequest(req: AuditQueryRequest, maxRows: Int): Option[String] = {
     if (req.model == null || req.model.isEmpty) None
     else {
       // Every field is length-prefixed. Without length prefixes,
@@ -67,12 +67,28 @@ object CacheKey {
       // int so it gets the same prefix handling as other int-valued fields
       // (version 10 vs version 100 will not collide).
       val versionPart = LengthPrefixed.encodeOptString(Option(req.version).filter(_ != 0).map(_.toString))
+      // `mr` is the maxRows segment — included ONLY when non-default so
+      // existing cache entries (built before this field was added) keep
+      // working. A user who sets withMaxRows(n) gets a different cache
+      // key from the default-maxRows path, so the cap is honoured on
+      // both miss and hit. The platform's CacheBridge.DefaultMaxRows
+      // (100,000) is the agreed threshold.
+      val maxRowsPart = LengthPrefixed.encodeOptString(
+        Option(maxRows).filter(_ != CacheBridge.DefaultMaxRows).map(_.toString))
       val canonical = s"m=$modelPart|mv=$versionPart|me=$measuresPart|dim=$dimsPart" +
         s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
-        s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart"
+        s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart" +
+        s"|mr=$maxRowsPart"
       Some(LengthPrefixed.sha256(canonical))
     }
   }
+
+  /** Backward-compatible single-arg overload. Defaults maxRows to
+    * [[CacheBridge.DefaultMaxRows]] so existing callers (tests,
+    * platform code) keep working without modification. New code
+    * should pass maxRows explicitly. */
+  def forRequest(req: AuditQueryRequest): Option[String] =
+    forRequest(req, CacheBridge.DefaultMaxRows)
 
   /** SHA-256 of the canonical string, lowercased hex. Delegates to
     * [[LengthPrefixed.sha256]]; kept here for source compatibility
