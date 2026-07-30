@@ -565,6 +565,15 @@ object SemanticManifest {
     dig.put("joins",            1)
     dig.put("isStreaming",      findStreamOp(model.root).isDefined)
 
+    // Outer envelope runtime tuning (PR #303 follow-up). Each side's
+    // own runtime is already carried by the per-side single-table
+    // `runtime` block emitted above. The outer block here preserves
+    // the `withMaxRows` / `withBroadcastJoinThreshold` values that
+    // the caller set on the JOINED model specifically (post-join
+    // query() path). Emitted only when non-default, mirroring the
+    // single-table writer.
+    writeRuntime(root, model)
+
     val out = mapper.writeValueAsString(root)
     if (prettyPrint) out else out
   }
@@ -622,6 +631,13 @@ object SemanticManifest {
     val version     = optIntField(modelObj, "version").getOrElse(0)
     val joinedName  = optStringField(modelObj, "name")
     val joinedStatus= optStringField(modelObj, "status").getOrElse("published")
+
+    // Outer envelope runtime tuning (PR #303 follow-up). Each side
+    // already preserves its own runtime via the per-side readManifest
+    // call below. The outer block here carries the runtime set on
+    // the joined model specifically (post-join query() path). Missing
+    // block → library defaults, mirroring the single-table reader.
+    val (maxRowsValue, broadcastValue) = readRuntime(obj)
 
     // Embedded per-side single-table manifests.
     val leftManifest  = modelObj.path("left")
@@ -761,6 +777,18 @@ object SemanticManifest {
       // same predicate object the writer captured. The AST is
       // already a `Predicate` (fromJson guarantees it).
       predicateAst = jAst,
+      // Auto-broadcast threshold carried from the LEFT side. This
+      // mirrors the construction site in `join_one` / `join_many`
+      // (SemanticTableMutation.scala), where the op's
+      // broadcastJoinThreshold is populated from
+      // `this.broadcastJoinThreshold` (the LEFT SemanticTable). On
+      // round-trip, the LEFT side's runtime is already preserved by
+      // `readManifest` (PR #303), so the op's threshold survives
+      // the round-trip. Without this, a user who set
+      // `left.withBroadcastJoinThreshold(n).join_on(...)` silently
+      // loses the override on the op after restoring from a joined
+      // manifest.
+      broadcastJoinThreshold = leftT.broadcastJoinThreshold,
       // Path C: also carry the extra dims/measures so the runtime
       // identity (alias-prefixed dims, etc.) is preserved.
       extraDimensions = jExtraDims,
@@ -806,6 +834,8 @@ object SemanticManifest {
       version     = version,
       sourceTable = None,
       status      = ModelStatus.fromString(joinedStatus).getOrElse(ModelStatus.Published),
+      maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
+      broadcastJoinThreshold = broadcastValue,
     )
   }
 
@@ -976,15 +1006,7 @@ object SemanticManifest {
     // Note: `maxRows = 0` is the escape hatch (no cap). It's non-default
     // by construction, so it IS emitted whenever the user explicitly
     // disabled the cap — the round-trip preserves the disabled state.
-    if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows ||
-        model.broadcastJoinThreshold.isDefined) {
-      val runtimeObj = root.putObject("runtime")
-      if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows)
-        runtimeObj.put("maxRows", model.maxRows)
-      model.broadcastJoinThreshold.foreach { n =>
-        runtimeObj.put("broadcastJoinThreshold", n)
-      }
-    }
+    writeRuntime(root, model)
 
     root
   }
@@ -1028,9 +1050,7 @@ object SemanticManifest {
     // getOrElse is needed. A legacy manifest without the block
     // parses cleanly because both fields default to the library
     // behavior.
-    val runtimeObj        = obj.path("runtime")
-    val maxRowsValue      = optIntField(runtimeObj, "maxRows")
-    val broadcastValue    = optLongField(runtimeObj, "broadcastJoinThreshold")
+    val (maxRowsValue, broadcastValue) = readRuntime(obj)
 
     val base: SemanticOp = if (isStreaming) {
       SemanticStreamingTableOp.of(
@@ -1342,6 +1362,47 @@ object SemanticManifest {
   private def optLongField(parent: com.fasterxml.jackson.databind.JsonNode, name: String): Option[Long] = {
     Option(parent.get(name)).filter(!_.isNull).flatMap { n =>
       if (n.isLong) Some(n.asLong()) else if (n.isInt) Some(n.asInt().toLong) else if (n.isNumber) Some(n.asDouble().toLong) else None
+    }
+  }
+
+  /** Read the `runtime` block from a manifest object (single-table or
+    * joined envelope). Returns `(maxRows: Option[Int], broadcastJoinThreshold: Option[Long])`.
+    * Both options are `None` when the block is absent — a legacy
+    * manifest without `runtime` parses cleanly. Used by both the
+    * single-table reader (`readManifest`) and the joined-envelope
+    * reader (`fromJoinedJson`) to avoid duplicating the extraction.
+    */
+  private def readRuntime(
+      obj: com.fasterxml.jackson.databind.JsonNode,
+  ): (Option[Int], Option[Long]) = {
+    val runtimeObj = obj.path("runtime")
+    (
+      optIntField(runtimeObj, "maxRows"),
+      optLongField(runtimeObj, "broadcastJoinThreshold"),
+    )
+  }
+
+  /** Write the `runtime` block on a manifest root node (single-table or
+    * joined envelope). Emitted only when at least one field is
+    * non-default — a missing `runtime` block in a manifest means "use
+    * the library defaults", which keeps legacy manifests unmodified.
+    * `maxRows = 0` is the escape hatch (no cap) and is non-default by
+    * construction, so it IS emitted when the user explicitly disabled
+    * the cap. Used by both `buildJsonTree` (single-table) and
+    * `toJoinedJson` (joined envelope) to avoid duplicating the emission.
+    */
+  private def writeRuntime(
+      root: com.fasterxml.jackson.databind.node.ObjectNode,
+      model: SemanticTable,
+  ): Unit = {
+    if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows ||
+        model.broadcastJoinThreshold.isDefined) {
+      val runtimeObj = root.putObject("runtime")
+      if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows)
+        runtimeObj.put("maxRows", model.maxRows)
+      model.broadcastJoinThreshold.foreach { n =>
+        runtimeObj.put("broadcastJoinThreshold", n)
+      }
     }
   }
 
