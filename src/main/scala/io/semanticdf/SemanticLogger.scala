@@ -103,6 +103,12 @@ private[semanticdf] object SemanticLogger extends Logging {
     s"join($cardinality) on [$grainCols]$pre"
   }
 
+  /** Emitted when an opt-in broadcast hint fires (right side smaller
+    * than the user's threshold). */
+  def logBroadcastHint(threshold: Long, actualSize: Long, cardinality: String): Unit = debug {
+    s"join($cardinality): broadcast hint applied (right=${actualSize}B < threshold=${threshold}B)"
+  }
+
   /** Emitted when a terminal produces the final DataFrame. */
   def logTerminalOutput(columns: Seq[String], rowCountHint: String): Unit = debug {
     s"produced ${columns.size} columns, $rowCountHint"

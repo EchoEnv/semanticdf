@@ -114,5 +114,28 @@ final class SemanticTable private[semanticdf] (
       * Set via the fluent `.withMaxRows(n)` setter. Survives the fluent
       * chain the same way `resultCache` does. */
     val maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
+    /** Opt-in auto-broadcast threshold for joins (size-based, bytes).
+      *
+      * When `Some(n)`, the equi-join compile path queries
+      * `df.queryExecution.optimizedPlan.stats.sizeInBytes` on the right
+      * side of every `join_one` / `join_many` and applies
+      * `broadcast(right)` if the right side is smaller than `n`. This
+      * overrides Spark's `autoBroadcastJoinThreshold` cost-based
+      * decision for this specific query.
+      *
+      * `None` (the default) means "no library override — let Spark
+      * decide" — the existing `autoBroadcastJoinThreshold` (default
+      * 10MB) still applies.
+      *
+      * Opt-in by design: forcing broadcast can backfire on large
+      * sides (driver OOM). Users opt in only when they KNOW the right
+      * side is small (dimension table, lookup table, etc.).
+      *
+      * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
+      * Survives the fluent chain the same way `resultCache` does.
+      * Manifest round-trip is lossy: the threshold is NOT preserved
+      * across `SemanticManifest.toJson` / `fromJson` (the rebuilt
+      * table gets the default `None`). */
+    val broadcastJoinThreshold: Option[Long] = None,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }
