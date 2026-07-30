@@ -469,7 +469,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
         * aggregated table. Explicitly held as a field (rather than
         * inherited via the enclosing [[SemanticTable]] scope) so the
         * propagation is visible at the constructor signature. */
-      maxRows: Int = io.semanticdf.cache.CacheBridge.DefaultMaxRows,
+      maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
   ) {
     /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
     def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =

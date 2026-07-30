@@ -141,19 +141,22 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
     val producer = perCarrierModel.withResultCache(cache)
       .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
     producer.toDataFrame(spark).collect()  // miss, populates cache
-    val producerKey = CacheKey.forRequest(
-      io.semanticdf.audit.QueryRequest(
-        model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
-      CacheBridge.DefaultMaxRows)
-    val tighterKey = CacheKey.forRequest(
-      io.semanticdf.audit.QueryRequest(
-        model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
-      2)
-    // Different maxRows → different cache keys. Plain assertion (the
-    // Matchers DSL `should not equal` resolves ambiguously here).
-    assert(producerKey != tighterKey, "different maxRows must produce different cache keys")
-    assert(producerKey.isDefined)
-    assert(tighterKey.isDefined)
+    val (Some(producerKey), Some(tighterKey)) = (
+      CacheKey.forRequest(
+        io.semanticdf.audit.QueryRequest(
+          model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
+        CacheBridge.DefaultMaxRows),
+      CacheKey.forRequest(
+        io.semanticdf.audit.QueryRequest(
+          model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
+        2),
+    )
+    // Extract to String so we can compare values directly (ScalaTest's
+    // `should not equal` matcher doesn't resolve cleanly for Option[String]
+    // here, and `producerKey != tighterKey` on Options would also compare
+    // the Some/None structure).
+    assert(producerKey != tighterKey,
+      "different maxRows must produce different cache keys")
   }
 
   // ----------------------------------------------------------------
@@ -166,5 +169,31 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
     }
     ex.getMessage should include("withMaxRows")
     ex.getMessage should include("-1")
+  }
+
+  // ----------------------------------------------------------------
+  // SemanticGroupBy propagation
+  // ----------------------------------------------------------------
+
+  test("groupBy().aggregate() preserves maxRows; maxRows = 0 disables the cap") {
+    // The aggregate path builds a fresh SemanticTable from the
+    // SemanticGroupBy state. The new maxRows field must flow through,
+    // including the `== 0` escape-hatch sentinel. Don't call .query()
+    // on the aggregate result — query() re-nests the aggregate, which
+    // fails (SemanticAggregateOp can't unwrap a nested aggregate).
+    val aggregated = perCarrierModel
+      .withMaxRows(0)
+      .groupBy("carrier")
+      .aggregate("flight_count")
+    aggregated.maxRows shouldBe 0  // cap disabled on the aggregate result
+  }
+
+  test("groupBy().aggregate() preserves a non-default maxRows cap") {
+    // Positive case: the cap survives the chain into the aggregate.
+    val aggregated = perCarrierModel
+      .withMaxRows(2)
+      .groupBy("carrier")
+      .aggregate("flight_count")
+    aggregated.maxRows shouldBe 2  // 3 carriers, cap=2 preserved
   }
 }

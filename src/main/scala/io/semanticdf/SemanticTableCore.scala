@@ -329,7 +329,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * Mirrors the platform's `CacheBridge.executeQuery` row cap: a
     * positive value applies `df.limit(maxRows)` before `.collect()` so the
     * materialised row array is bounded. The default
-    * ([[io.semanticdf.cache.CacheBridge.DefaultMaxRows]] = 100,000)
+    * ([[io.semanticdf.cache.CacheKey.DefaultMaxRows]] = 100,000)
     * protects against OOM on unexpectedly large results.
     *
     * `n == 0` disables the cap (escape hatch only — not recommended for
