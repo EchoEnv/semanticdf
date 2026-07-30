@@ -181,4 +181,23 @@ class BroadcastJoinThresholdSpec extends AnyFunSuite with Matchers with SparkSes
     withRows shouldBe withoutRows
     withRows shouldBe 10  // 10 fact rows match a dim row (range(0..9))
   }
+
+  // ----------------------------------------------------------------
+  // Fluent chain propagation: every setter must carry broadcastJoinThreshold
+  // ----------------------------------------------------------------
+
+  test("withRowFilter preserves broadcastJoinThreshold (regression: silent reset to None)") {
+    // Pre-fix: withRowFilter called `new SemanticTable(...)` without
+    // passing `broadcastJoinThreshold = broadcastJoinThreshold`, silently
+    // resetting the field to None. The fix adds the missing parameter.
+    val dim = toSemanticTable(smallDim(spark), name = Some("dim"))
+      .withBroadcastJoinThreshold(1024L * 1024L)
+    val chained = dim.withRowFilter(
+      name = "f",
+      expr = "k >= 0",
+      description = None,
+      metadata = Map.empty,
+    )
+    chained.broadcastJoinThreshold shouldBe Some(1024L * 1024L)
+  }
 }

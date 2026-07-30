@@ -266,6 +266,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       version,
       sourceTable,
       status, auditSink, auditRequest, resultCache, maxRows = maxRows,
+      broadcastJoinThreshold = broadcastJoinThreshold,
     )
 
   /** Set the per-model schema version. Returns a NEW SemanticTable (immutability preserved).
