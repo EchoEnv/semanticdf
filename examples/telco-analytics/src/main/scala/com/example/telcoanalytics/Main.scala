@@ -24,7 +24,7 @@ import org.apache.spark.sql.functions._
   * See the [[Refs]] object — phantom-typed witnesses for every dimension
   * and measure. Downstream calls use the typed refs (groupByDimensions,
   * aggregateMeasures, SortKey). A typo in a ref name is a compile error.
-  * See `examples/starter/Main.scala` and `docs/phase-E-plan.md` for the
+  * See `examples/starter/Main.scala` and `docs/backlog-type-safety.md` for the
   * full story.
   *
   * Run:

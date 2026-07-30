@@ -30,7 +30,7 @@ import org.apache.spark.sql.functions._
   * and measure. Downstream calls use the typed refs (groupByDimensions,
   * aggregateMeasures, SortKey, Predicate.Eq/Gt). A typo in a ref name is
   * a compile error. See `examples/starter/Main.scala` and
-  * `docs/phase-E-plan.md` for the full story.
+  * `docs/backlog-type-safety.md` for the full story.
   *
   * Run:
   *   1. mvn install the parent semanticdf project

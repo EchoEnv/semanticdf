@@ -26,7 +26,7 @@ import org.apache.spark.sql.functions._
   * as a phantom-typed witness. Downstream calls use the typed refs:
   * `groupByDimensions(customerId)`, `aggregateMeasures(orderCount, ...)`,
   * `SortKey.desc(orderAmount)`. A typo in a ref name is a compile error, not
-  * a runtime error. See `examples/starter/Main.scala` and `docs/phase-E-plan.md`
+  * a runtime error. See `examples/starter/Main.scala` and `docs/backlog-type-safety.md`
   * for the full story.
   *
   * Run:

@@ -26,7 +26,7 @@ import org.apache.spark.sql.types.{DataTypes, StructField, StructType}
   * and measure used in the semantic queries. Downstream calls use the
   * typed refs (groupByDimensions, aggregateMeasures, SortKey). A typo
   * in a ref name is a compile error. See `examples/starter/Main.scala`
-  * and `docs/phase-E-plan.md` for the full story.
+  * and `docs/backlog-type-safety.md` for the full story.
   *
   * Note: the pipeline steps 1-6 use raw Spark DataFrame APIs, not
   * semanticdf — they're for transforming raw CSVs into parquet, not
