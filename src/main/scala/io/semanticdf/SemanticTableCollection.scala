@@ -502,7 +502,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
       var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
       // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
       postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache)
+      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows)
     }
   }
 }

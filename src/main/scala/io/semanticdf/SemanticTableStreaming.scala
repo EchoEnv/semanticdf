@@ -243,7 +243,8 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
               // first micro-batch's result could be returned for
               // every subsequent batch. Disabling the cache here
               // means each batch is computed fresh.
-              resultCache = None)
+              resultCache = None,
+              maxRows = maxRows)
             val t0 = System.nanoTime()
             val result = batchModel.toDataFrame(spark)
             emitStreamingAudit(result, t0)(spark)
