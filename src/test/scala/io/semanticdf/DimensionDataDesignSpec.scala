@@ -1,6 +1,7 @@
 package io.semanticdf
 
 import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers
 
 /**
  * Regression tests for the data-design audit fix to [[Dimension]]:
@@ -10,8 +11,12 @@ import org.scalatest.funsuite.AnyFunSuite
  *
  * Without these tests, a future regression (someone deleting the
  * `require`, or weakening the predicate) would not be caught.
+ *
+ * Pure unit tests — no SparkSession needed. The constructor `require`
+ * fires before any DataFrame would be touched, so a session fixture
+ * would only add CI startup cost.
  */
-class DimensionDataDesignSpec extends AnyFunSuite with SparkSessionFixture {
+class DimensionDataDesignSpec extends AnyFunSuite with Matchers {
 
   test("Dimension.time(..., derived = Seq('year')) is accepted") {
     val d = Dimension.time(
@@ -19,8 +24,8 @@ class DimensionDataDesignSpec extends AnyFunSuite with SparkSessionFixture {
       t => t("flight_date"),
       derived = Seq("year"),
     )
-    assert(d.derived == Seq("year"))
-    assert(d.isTimeDimension)
+    d.derived shouldBe Seq("year")
+    d.isTimeDimension shouldBe true
   }
 
   test("Dimension with derived on a plain dim is rejected at construction") {
@@ -34,10 +39,7 @@ class DimensionDataDesignSpec extends AnyFunSuite with SparkSessionFixture {
         derived = Seq("year"),
       )
     }
-    assert(
-      ex.getMessage.contains("not a time dimension"),
-      s"expected error to mention 'not a time dimension', got: ${ex.getMessage}"
-    )
+    ex.getMessage should include ("not a time dimension")
   }
 
   test("Dimension.copy(derived = Seq('year'), isTimeDimension = false) is rejected") {
@@ -48,17 +50,13 @@ class DimensionDataDesignSpec extends AnyFunSuite with SparkSessionFixture {
     val ex = intercept[IllegalArgumentException] {
       time.copy(isEntity = true, isTimeDimension = false)
     }
-    assert(
-      ex.getMessage.contains("not a time dimension"),
-      s"expected error to mention 'not a time dimension', got: ${ex.getMessage}"
-    )
+    ex.getMessage should include ("not a time dimension")
   }
 
-  test("Dimension.time(...).copy() with empty derived is accepted") {
-    // Empty `derived` is fine on a time dim (it's the default).
+  test("Dimension.copy can clear derived while preserving time-dimension status") {
     val time = Dimension.time("flight_date", t => t("flight_date"), derived = Seq("year"))
     val cleared = time.copy(derived = Seq.empty)
-    assert(cleared.derived.isEmpty)
-    assert(cleared.isTimeDimension)
+    cleared.derived shouldBe Seq.empty
+    cleared.isTimeDimension shouldBe true
   }
 }

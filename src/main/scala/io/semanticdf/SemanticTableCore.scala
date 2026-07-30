@@ -938,8 +938,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     //    post-agg filter nodes, or re-groups them as a single AND with
     //    `mixed = false`. The arm was dead code with a misleading
     //    comment — fixed in the data-design audit S2-6. See
-    //    Predicate.splitFilter at predicate/Predicate.scala:233 for the
-    //    partitioning rule that makes the AND arm unreachable.)
+    //    [[Predicate.splitFilter]] for the partitioning rule that makes
+    //    the AND arm unreachable.)
     allFilters.foreach { f =>
       val mixed = f.predicate match {
         case Predicate.Or(children @ _*) =>
