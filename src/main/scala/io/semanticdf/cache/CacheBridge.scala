@@ -95,7 +95,7 @@ object CacheBridge {
       measures: java.util.List[String],
       dims: java.util.List[String],
       where: String,
-  ): CachedResult = executeQuery(model, spark, measures, dims, where, 100000)
+  ): CachedResult = executeQuery(model, spark, measures, dims, where, DefaultMaxRows)
 
   /** Convert a {@link CachedResult} to the platform's
     * {@code List<List<Object>>} positional wire shape, with each
