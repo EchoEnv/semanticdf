@@ -19,7 +19,7 @@ import org.scalatest.matchers.should.Matchers._
   * no upper bound — a 10M-row query OOMs the driver. The fix mirrors the
   * platform's `CacheBridge.executeQuery` row cap: a `maxRows: Int` field on
   * [[io.semanticdf.SemanticTable]] defaults to
-  * [[CacheBridge.DefaultMaxRows]] (100,000) and applies `df.limit(maxRows)`
+  * [[CacheKey.DefaultMaxRows]] (100,000) and applies `df.limit(maxRows)`
   * before `collect()` on cache miss.
   *
   * These tests pin the cap:
@@ -47,9 +47,9 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
   // Default behaviour
   // ----------------------------------------------------------------
 
-  test("default maxRows = CacheBridge.DefaultMaxRows (100_000)") {
+  test("default maxRows = CacheKey.DefaultMaxRows (100_000)") {
     val t = perCarrierModel.withResultCache(ResultCache.inMemory(maxEntries = 4))
-    t.maxRows shouldBe CacheBridge.DefaultMaxRows
+    t.maxRows shouldBe CacheKey.DefaultMaxRows
   }
 
   test("default cap does not affect the 30-row flights fixture") {
@@ -145,7 +145,7 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
       CacheKey.forRequest(
         io.semanticdf.audit.QueryRequest(
           model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
-        CacheBridge.DefaultMaxRows),
+        CacheKey.DefaultMaxRows),
       CacheKey.forRequest(
         io.semanticdf.audit.QueryRequest(
           model = "flights", measures = Seq("flight_count"), dimensions = Seq("carrier")),
