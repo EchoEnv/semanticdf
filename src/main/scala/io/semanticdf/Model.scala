@@ -69,6 +69,18 @@ final class Dimension(
       * `derived:` part and declare the derived dimensions explicitly. */
     val derived: Seq[String] = Seq.empty,
 ) extends Serializable {
+  // Data-design audit S2-4: the `derived` field is only honored on
+  // time dimensions. Without this check, a caller could build
+  // `Dimension.copy(derived = Seq("year"), isTimeDimension = false)`
+  // and the rejection would fire only at the next `withDimensions`
+  // call — leaving an invalid value in user code. Catch it at
+  // construction.
+  require(
+    derived.isEmpty || isTimeDimension,
+    s"Dimension('$name') has `derived` set but is not a time dimension. " +
+      "`derived` is only honored on time dimensions; use Dimension.time(...) " +
+      "to construct a time dim, or remove `derived` from this copy."
+  )
 
   /** Returns a copy of this dimension with zero or more fields replaced.
     * Present because `Dimension` is a `final class` (not a case class), so

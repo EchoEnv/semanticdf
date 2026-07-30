@@ -25,6 +25,18 @@ import org.apache.spark.sql.streaming.{StreamingQuery, Trigger}
   */
 object StreamingSupport {
 
+  /** Single source of truth for the "is a streaming DataFrame" invariant.
+    * All three sites that build a streaming root call this:
+    *   - [[StreamingSource]]'s primary constructor (the typed wrapper)
+    *   - [[SemanticStreamingTableOp.of]]'s factory (the op-tree root)
+    *   - [[package.toStreamingSemanticTable]] (the package-level factory)
+    * If the rule ever needs to change (e.g., require a `trigger` option
+    * alongside `isStreaming`), there is exactly one place to edit. */
+  private[semanticdf] def requireStreamingSource(stream: DataFrame, site: String): Unit = {
+    require(stream.isStreaming,
+      s"$site requires a streaming DataFrame (from spark.readStream).")
+  }
+
   /** A typed wrapper for a streaming `DataFrame` (the result of
     * `spark.readStream`).
     *
@@ -33,8 +45,7 @@ object StreamingSupport {
     * [[SemanticTable.toStreamingQuery]] requires a model whose root
     * is a [[SemanticStreamingTableOp]] (built from this source). */
   final case class StreamingSource(stream: DataFrame) {
-    require(stream.isStreaming,
-      "StreamingSource requires a streaming DataFrame (from spark.readStream).")
+    requireStreamingSource(stream, "StreamingSource")
   }
 
   /** Options for [[SemanticTable.toStreamingQuery]].

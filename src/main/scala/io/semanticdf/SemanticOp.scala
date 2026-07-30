@@ -362,17 +362,31 @@ final case class SemanticTableOp(
   * compile against each micro-batch DataFrame the same way they
   * compile against a batch source.
   */
-final case class SemanticStreamingTableOp(
+final case class SemanticStreamingTableOp private (
     stream: DataFrame,
     name: Option[String] = None,
     description: Option[String] = None,
     dimensions: Map[String, Dimension] = Map.empty,
     measures: Map[String, Measure] = Map.empty,
 ) extends SemanticOp {
-  require(stream.isStreaming,
-    "SemanticStreamingTableOp requires a streaming DataFrame (from spark.readStream). " +
-    "Use toStreamingSemanticTable(...) at the package level to construct a streaming model.")
   override def compile(spark: SparkSession): DataFrame = stream
+}
+
+object SemanticStreamingTableOp {
+  /** Smart constructor: validates the streaming invariant once
+    * (delegated to [[StreamingSupport.requireStreamingSource]] — the
+    * single source of truth). Use this in preference to the primary
+    * constructor in any code that needs to build a streaming root. */
+  def of(
+      stream: DataFrame,
+      name: Option[String] = None,
+      description: Option[String] = None,
+      dimensions: Map[String, Dimension] = Map.empty,
+      measures: Map[String, Measure] = Map.empty,
+  ): SemanticStreamingTableOp = {
+    StreamingSupport.requireStreamingSource(stream, "SemanticStreamingTableOp")
+    new SemanticStreamingTableOp(stream, name, description, dimensions, measures)
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -105,10 +105,10 @@ package object semanticdf {
       description: Option[String] = None,
       sourceTable: Option[String] = None,
   ): SemanticTable = {
-    require(stream.isStreaming,
-      "toStreamingSemanticTable requires a streaming DataFrame (from spark.readStream)")
+    // Delegate to the smart constructor — the streaming invariant is
+    // enforced in one place (StreamingSupport.requireStreamingSource).
     new SemanticTable(
-      SemanticStreamingTableOp(stream, name, description),
+      SemanticStreamingTableOp.of(stream, name, description),
       sourceTable = sourceTable,
     )
   }

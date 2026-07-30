@@ -927,16 +927,19 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
         warnings += s"time dimension '$n' has no smallestTimeGrain — atTimeGrain() will raise on any request"
     }
 
-    // 4. AND or OR predicate that mixes dim + measure categories (WARNING).
+    // 4. OR predicate that mixes dim + measure categories (WARNING).
     //    The whole predicate goes post-agg (which may not be the user's intent).
     //    Note: `where()` already splits ANDs into separate filter nodes at
     //    construction time, so AND never reaches this check. OR is preserved
     //    intact and is the case users will actually see in practice.
+    //
+    //    (Previously this match had a `Predicate.And` arm that was
+    //    unreachable: `splitFilter` either splits AND into separate
+    //    post-agg filter nodes, or re-groups them as a single AND with
+    //    `mixed = false`. The arm was dead code with a misleading
+    //    comment — fixed in the data-design audit S2-6.)
     allFilters.foreach { f =>
       val mixed = f.predicate match {
-        case Predicate.And(children @ _*) =>
-          children.exists(p => Predicate.referencesMeasure(p, measureNames)) &&
-          children.exists(p => !Predicate.referencesMeasure(p, measureNames))
         case Predicate.Or(children @ _*) =>
           children.exists(p => Predicate.referencesMeasure(p, measureNames)) &&
           children.exists(p => !Predicate.referencesMeasure(p, measureNames))

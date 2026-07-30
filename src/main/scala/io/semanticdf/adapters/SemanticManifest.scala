@@ -999,7 +999,7 @@ object SemanticManifest {
     val transforms = readArr(obj, "transforms").flatMap(readTransform)
 
     val base: SemanticOp = if (isStreaming) {
-      SemanticStreamingTableOp(
+      SemanticStreamingTableOp.of(
         stream      = source,
         name        = name,
         description = description,
