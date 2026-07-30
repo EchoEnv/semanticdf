@@ -554,8 +554,11 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       rightSide = Some(other),
       // Auto-broadcast threshold carried from the originating table.
       // Applied in compile() if the right side's stats.sizeInBytes
-      // is below this value.
-      broadcastJoinThreshold = this.broadcastJoinThreshold,
+      // is below this value. Precedence: LEFT wins if both sides
+      // carry a threshold; RIGHT is the fallback so a user who sets
+      // the threshold on the right side (intuitively: "I know this
+      // dimension table is small") gets the broadcast hint.
+      broadcastJoinThreshold = this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold),
       // When the caller used a typed key entry point, the keys are
       // pre-populated. When the caller used the lambda form, run the
       // probe to extract them at construction time. Either way, the
@@ -683,8 +686,11 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       // Auto-broadcast threshold carried from the originating table.
       // Applied in compile() if the right side's stats.sizeInBytes
       // is below this value. Without this, withBroadcastJoinThreshold
-      // is silently dropped on the join_many path.
-      broadcastJoinThreshold = this.broadcastJoinThreshold,
+      // is silently dropped on the join_many path. Precedence: LEFT
+      // wins if both sides carry a threshold; RIGHT is the fallback so
+      // a user who sets the threshold on the right side (intuitively:
+      // "I know this dimension table is small") gets the broadcast.
+      broadcastJoinThreshold = this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold),
       leftKeys = leftKeysIn,
       rightKeys = rightKeysIn,
       onExprString = onExprStringIn,
