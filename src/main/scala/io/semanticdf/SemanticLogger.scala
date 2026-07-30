@@ -113,4 +113,64 @@ private[semanticdf] object SemanticLogger extends Logging {
   def logTerminalOutput(columns: Seq[String], rowCountHint: String): Unit = debug {
     s"produced ${columns.size} columns, $rowCountHint"
   }
+
+  /** Emitted when `withBroadcastJoinThreshold` is set and AQE is enabled.
+    *
+    * AQE re-plans broadcast decisions after the initial optimizer passes,
+    * based on runtime shuffle stats. Two situations where the user's
+    * threshold may be overridden by AQE:
+    *
+    *   1. `spark.sql.adaptive.autoBroadcastJoinThreshold = -1` — AQE has
+    *      broadcast disabled entirely. The plan-time broadcast hint is
+    *      preserved, but AQE may swap it at runtime for a shuffle hash
+    *      join if post-shuffle stats look large.
+    *
+    *   2. User's threshold > AQE's threshold. AQE will broadcast only
+    *      sides <= AQE's threshold; right sides between AQE's and the
+    *      user's threshold get the plan-time hint but AQE may still
+    *      re-plan them.
+    *
+    * No-op when AQE is disabled — the user's threshold is the only
+    * broadcast arbiter in that case.
+    *
+    * The check is cheap (two `RuntimeConfig.getOption` lookups) and runs
+    * once per `compileEquiJoin` call. If log noise becomes a concern in
+    * multi-join queries, gate this with a `ThreadLocal` sentinel.
+    */
+  def logAqeBroadcastConflict(
+      userThreshold: Long,
+      sparkSession: SparkSession,
+  ): Unit = {
+    val conf = sparkSession.conf
+    val aqeEnabled = conf.getOption("spark.sql.adaptive.enabled")
+      .exists(_.equalsIgnoreCase("true"))
+    if (!aqeEnabled) return
+
+    // `spark.sql.adaptive.autoBroadcastJoinThreshold` is `createOptional`
+    // (see Spark SQLConf). When unset, it falls back to the non-adaptive
+    // `spark.sql.autoBroadcastJoinThreshold` — default 10 MiB.
+    val aqeThreshold: Long = conf.getOption(
+      "spark.sql.adaptive.autoBroadcastJoinThreshold"
+    ).flatMap(s => scala.util.Try(s.toLong).toOption).getOrElse {
+      val fallback = conf.get("spark.sql.autoBroadcastJoinThreshold", "10485760")
+      scala.util.Try(fallback.toLong).getOrElse(10485760L)
+    }
+
+    if (aqeThreshold == -1L) {
+      warn {
+        s"withBroadcastJoinThreshold=${userThreshold}B is set, but AQE has broadcast " +
+          "disabled (spark.sql.adaptive.autoBroadcastJoinThreshold=-1). AQE may rewrite " +
+          "the planned broadcast as a shuffle hash join at runtime. To keep the override " +
+          "effective, set spark.sql.adaptive.autoBroadcastJoinThreshold to at least your " +
+          "withBroadcastJoinThreshold value (or disable AQE: spark.sql.adaptive.enabled=false)."
+      }
+    } else if (userThreshold > aqeThreshold) {
+      warn {
+        s"withBroadcastJoinThreshold=${userThreshold}B exceeds AQE's " +
+          s"adaptive.autoBroadcastJoinThreshold=${aqeThreshold}B. AQE may re-plan and " +
+          "NOT broadcast at runtime for right sides between those two sizes. Either lower " +
+          "your threshold to <= AQE's, or raise AQE's threshold to match."
+      }
+    }
+  }
 }

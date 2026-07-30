@@ -146,6 +146,13 @@ final class SemanticTable private[semanticdf] (
       * path don't honour this threshold — the broadcast hint is only
       * emitted in `compileEquiJoin` (used by `join_one` / `join_many`).
       *
+      * Note: AQE re-plans broadcast decisions at runtime. If AQE is
+      * on and `spark.sql.adaptive.autoBroadcastJoinThreshold` is
+      * lower than this threshold (or set to `-1` to disable), AQE
+      * may rewrite the planned broadcast as a shuffle hash join.
+      * A warning is logged at WARN level when this conflict is
+      * detected — see `SemanticLogger.logAqeBroadcastConflict`.
+      *
       * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
       * Survives the fluent chain the same way `resultCache` does.
       * Manifest round-trip is lossy: the threshold is NOT preserved

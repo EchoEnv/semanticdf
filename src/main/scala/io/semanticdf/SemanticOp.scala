@@ -846,6 +846,9 @@ final case class SemanticJoinOp(
     // hand-rolled Catalyst DSL plans.
     val rightToJoin: DataFrame = broadcastJoinThreshold match {
       case Some(threshold) =>
+        // Warn if AQE may override the user's threshold at runtime.
+        // No-op when AQE is disabled — see SemanticLogger.logAqeBroadcastConflict.
+        SemanticLogger.logAqeBroadcastConflict(threshold, rightAgg.sparkSession)
         val sizeBytes = rightAgg.queryExecution.optimizedPlan.stats.sizeInBytes
         val thresh    = BigInt(threshold)
         if (sizeBytes < thresh && sizeBytes >= 0) {
