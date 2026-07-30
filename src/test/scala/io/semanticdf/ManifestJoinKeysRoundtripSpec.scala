@@ -107,4 +107,178 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
       assert(meta.cardinality == "one")
     } finally spark.stop()
   }
+
+  // -- joined-manifest runtime preservation (PR #303 follow-up) -----------
+  //
+  // The outer `new SemanticTable(...)` constructed by `fromJoinedJson`
+  // previously did not pass `maxRows` or `broadcastJoinThreshold`,
+  // silently dropping any runtime tuning the caller set on the joined
+  // model. Each side preserves its own runtime via the single-table
+  // round-trip (PR #303), but the OUTER envelope was lossy. These tests
+  // pin the outer-envelope preservation.
+
+  test("joined envelope preserves outer maxRows (regression: post-#303 DE H2)") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id").withMaxRows(50_000)
+      assert(joined.maxRows == 50_000)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.maxRows shouldBe 50_000
+    } finally spark.stop()
+  }
+
+  test("joined envelope preserves outer maxRows = 0 (escape hatch round-trips)") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id").withMaxRows(0)
+      assert(joined.maxRows == 0)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.maxRows shouldBe 0
+    } finally spark.stop()
+  }
+
+  test("joined envelope preserves outer broadcastJoinThreshold") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined =
+        lT.join_on(rT, "id" -> "id").withBroadcastJoinThreshold(2L * 1024 * 1024)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+    } finally spark.stop()
+  }
+
+  test("SemanticJoinOp's broadcastJoinThreshold survives the round-trip (regression: op construction)") {
+    // The op's `broadcastJoinThreshold` is set at join construction
+    // time from the LEFT side's `withBroadcastJoinThreshold(n)` call.
+    // Before PR #304, `fromJoinedJson` reconstructed the
+    // `SemanticJoinOp` with `broadcastJoinThreshold = None` (default),
+    // silently dropping the override even though the LEFT side's
+    // runtime was preserved. This test pins the op-level propagation.
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      // Set BEFORE the join — the LEFT side's value flows into the op
+      val joined =
+        lT.withBroadcastJoinThreshold(2L * 1024 * 1024).join_on(rT, "id" -> "id")
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      val op = restored.root.asInstanceOf[SemanticJoinOp]
+      op.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+    } finally spark.stop()
+  }
+
+  test("joined envelope: per-side and outer runtime preserved independently") {
+    // The LEFT side's runtime is preserved by the per-side single-table
+    // round-trip (PR #303). The OUTER envelope's runtime is preserved
+    // by PR #304. Both must survive the round-trip independently.
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+        .withMaxRows(50_000)  // LEFT side's runtime
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id").withMaxRows(75_000)  // OUTER's runtime
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+
+      restored.maxRows shouldBe 75_000  // OUTER
+      val op = restored.root.asInstanceOf[SemanticJoinOp]
+      op.leftSide.get.maxRows shouldBe 50_000  // LEFT preserved
+      op.rightSide.get.maxRows shouldBe io.semanticdf.cache.CacheKey.DefaultMaxRows  // RIGHT untouched
+    } finally spark.stop()
+  }
+
+  test("joined envelope: join_many cardinality preserves outer runtime") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_many_on(rT, Seq("id"), Seq("id")).withMaxRows(20_000)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.maxRows shouldBe 20_000
+      val op = restored.root.asInstanceOf[SemanticJoinOp]
+      op.cardinality shouldBe JoinCardinality.Many
+    } finally spark.stop()
+  }
+
+  test("joined envelope: join_cross cardinality preserves outer runtime") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_cross(rT).withMaxRows(15_000)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.maxRows shouldBe 15_000
+      val op = restored.root.asInstanceOf[SemanticJoinOp]
+      op.cardinality shouldBe JoinCardinality.Cross
+    } finally spark.stop()
+  }
+
+  test("joined envelope OMITS runtime block when both outer fields are at default") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id")
+      assert(joined.broadcastJoinThreshold.isEmpty)
+      assert(joined.maxRows == io.semanticdf.cache.CacheKey.DefaultMaxRows)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      // The outer envelope's `runtime` block is omitted because both
+      // outer fields are at default. Each side may still carry its own
+      // `runtime` block if it had non-default values.
+      val outerTree = new com.fasterxml.jackson.databind.ObjectMapper().readTree(json)
+      outerTree.has("runtime") shouldBe false
+    } finally spark.stop()
+  }
 }
