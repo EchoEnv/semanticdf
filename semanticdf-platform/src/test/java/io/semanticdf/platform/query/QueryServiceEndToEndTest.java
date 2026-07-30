@@ -123,7 +123,7 @@ class QueryServiceEndToEndTest {
             List.of("c", "d"),
             List.of("carrier"),
             /* where */ "",
-            /* maxRows */ 100_000);
+            /* maxRows */ CacheBridge.defaultMaxRows());
 
     assertEquals("flights", flightsModel.name().isDefined() ? flightsModel.name().get() : "?",
         "model name resolves");
@@ -186,7 +186,7 @@ class QueryServiceEndToEndTest {
     // First call: execute + populate.
     CachedResult fresh =
         CacheBridge.executeQuery(
-            flightsModel, spark, List.of("c"), List.of("carrier"), "", 100_000);
+            flightsModel, spark, List.of("c"), List.of("carrier"), "", CacheBridge.defaultMaxRows());
     recording.putWithModelAndVersion(key, fresh, "flights", flightsModel.version());
 
     scala.Option<CachedResult> cached = recording.get(key);
