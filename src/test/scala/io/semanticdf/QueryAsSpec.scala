@@ -19,7 +19,7 @@ import org.scalatest.matchers.should.Matchers
 case class CarrierCountSpecRow(flight_count: Long)
 
 /** Tests for the [[SemanticTable.queryAs]] typed-bundled-query terminal
-  * (Phase E1, see `docs/phase-E-plan.md`).
+  * (Phase E1, see `docs/backlog-type-safety.md`).
   *
   * `queryAs[T]` is the typed-flavor sibling of `query(...)`:
   *  - `query(...)` returns a `SemanticTable` for further chaining.

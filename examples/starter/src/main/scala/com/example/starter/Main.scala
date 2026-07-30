@@ -169,7 +169,7 @@ object Main {
       // The Refs object is the only place a field name is hard-coded; all
       // downstream consumers (groupByDimensions, aggregateMeasures, where,
       // SortKey.asc/desc) are type-checked at compile time. See README and
-      // docs/phase-E-plan.md for the full story.
+      // docs/backlog-type-safety.md for the full story.
       object Refs {
         // Phantom tags — one per field you want to reference by type.
         sealed trait Carrier
@@ -271,7 +271,7 @@ object Main {
       //
       // Compare to Q1 (above): zero ref-string typos are possible here because
       // every dimension/measure is a typed handle. See README and
-      // docs/phase-E-plan.md for the full story.
+      // docs/backlog-type-safety.md for the full story.
 
       Logger.info("--- Q8 (typed): Top carriers (parallel to Q1 with compile-time ref safety) ---")
       flights
