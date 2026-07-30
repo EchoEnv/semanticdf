@@ -85,6 +85,91 @@ class SemanticManifestSpec
       round.measures.keySet shouldBe Set("count")
     }
 
+    // -- 1a. runtime fields (maxRows / broadcastJoinThreshold) round-trip ----
+
+    it("round-trips maxRows (regression: maxRows was dropped on round-trip; see PR #295 + #302)") {
+      // PR #295 added maxRows to SemanticTable as a runtime safety cap; PR #302
+      // standardised the default to CacheKey.DefaultMaxRows. Before this PR,
+      // SemanticManifest.toJson did not emit maxRows and fromJson did not
+      // restore it, so a YAML→manifest→SemanticTable round-trip silently
+      // dropped the cap. After the fix: the value is preserved.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1, "a"))),
+        StructType(Seq(
+          StructField("id",   IntegerType),
+          StructField("kind", StringType),
+        ))
+      )
+      val model = toSemanticTable(df, name = Some("kpi_facts"))
+        .withDimensions(Dimension("kind", _ => df("kind")))
+        .withMeasures(Measure("count", _ => F.lit(1)))
+        .withMaxRows(50_000)
+
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.maxRows shouldBe 50_000
+    }
+
+    it("round-trips maxRows = 0 (escape hatch \u2014 the no-cap sentinel survives)") {
+      // 0 is the escape hatch (\"no cap\"). It must round-trip as 0, NOT
+      // silently coerce to the default \u2014 that would re-apply the cap on
+      // tables that intentionally opt out.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMaxRows(0)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.maxRows shouldBe 0
+    }
+
+    it("round-trips broadcastJoinThreshold (regression: threshold was dropped on round-trip; see PR #299)") {
+      // PR #299 added the opt-in broadcast threshold. The manifest
+      // round-trip should preserve it so a YAML-deployed model can
+      // opt into broadcast hints via the YAML plumbing.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withBroadcastJoinThreshold(2L * 1024 * 1024)
+
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.broadcastJoinThreshold shouldBe Some(2L * 1024 * 1024)
+    }
+
+    it("round-trips broadcastJoinThreshold = None (default, no override)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.broadcastJoinThreshold shouldBe None
+    }
+
+    it("OMITS the runtime block when both fields are at default (leg-2026-07-30 wire-format minimalism)") {
+      // When maxRows = CacheKey.DefaultMaxRows (100000) AND
+      // broadcastJoinThreshold = None, the writer does NOT emit the
+      // runtime block at all. This keeps legacy manifests unmodified
+      // and makes the wire format minimal. A legacy manifest without
+      // the block parses cleanly via the reader's getOrElse defaults.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+        .withMaxRows(io.semanticdf.cache.CacheKey.DefaultMaxRows)
+      assert(model.broadcastJoinThreshold.isEmpty)
+
+      val json = SemanticManifest.toJson(model)
+      json should not include "\"runtime\""
+    }
+
     // -- 1b. identity fields (added in v0.1.11) -------------------------------
 
     it("id-round-trips via the new two-arg toJson") {

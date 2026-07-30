@@ -111,6 +111,22 @@
         }
       }
     },
+    "runtime": {
+      "type": "object",
+      "description": "Runtime tuning options for the model. Preserved across the manifest round-trip so YAML-deploys can carry non-default tuning. Missing \u0060runtime\u0060 block \u2192 use library defaults. Only emitted when at least one field is non-default.",
+      "properties": {
+        "maxRows": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Driver-memory safety cap on rows. 0 disables the cap (escape hatch, mirrors the fluent chain convention)."
+        },
+        "broadcastJoinThreshold": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Opt-in auto-broadcast threshold for join_one/join_many, in bytes. Absent means no library override (Spark's autoBroadcastJoinThreshold applies)."
+        }
+      }
+    },
     "digest":    { "type": "object" },
     "warnings":  { "type": "array", "items": { "type": "string" } }
   },
