@@ -38,6 +38,16 @@ import io.semanticdf.audit.{PredicateHasher, QueryRequest => AuditQueryRequest}
   */
 object CacheKey {
 
+  /** Default row cap for the cache miss collect path.
+    *
+    * Lives here (foundational hashing layer) rather than in [[CacheBridge]]
+    * (Java facade) so the constant can be referenced without dragging
+    * the facade's import into the cache-key module. [[CacheBridge.DefaultMaxRows]]
+    * re-exports this for backward compat with code that already references
+    * the platform-side constant.
+    */
+  val DefaultMaxRows: Int = 100000
+
   def forRequest(req: AuditQueryRequest, maxRows: Int): Option[String] = {
     if (req.model == null || req.model.isEmpty) None
     else {
@@ -71,10 +81,9 @@ object CacheKey {
       // existing cache entries (built before this field was added) keep
       // working. A user who sets withMaxRows(n) gets a different cache
       // key from the default-maxRows path, so the cap is honoured on
-      // both miss and hit. The platform's CacheBridge.DefaultMaxRows
-      // (100,000) is the agreed threshold.
+      // both miss and hit.
       val maxRowsPart = LengthPrefixed.encodeOptString(
-        Option(maxRows).filter(_ != CacheBridge.DefaultMaxRows).map(_.toString))
+        Option(maxRows).filter(_ != DefaultMaxRows).map(_.toString))
       val canonical = s"m=$modelPart|mv=$versionPart|me=$measuresPart|dim=$dimsPart" +
         s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart" +
@@ -84,11 +93,11 @@ object CacheKey {
   }
 
   /** Backward-compatible single-arg overload. Defaults maxRows to
-    * [[CacheBridge.DefaultMaxRows]] so existing callers (tests,
-    * platform code) keep working without modification. New code
-    * should pass maxRows explicitly. */
+    * [[DefaultMaxRows]] so existing callers (tests, platform code)
+    * keep working without modification. New code should pass maxRows
+    * explicitly. */
   def forRequest(req: AuditQueryRequest): Option[String] =
-    forRequest(req, CacheBridge.DefaultMaxRows)
+    forRequest(req, DefaultMaxRows)
 
   /** SHA-256 of the canonical string, lowercased hex. Delegates to
     * [[LengthPrefixed.sha256]]; kept here for source compatibility

@@ -92,19 +92,27 @@ final class SemanticTable private[semanticdf] (
       * On a cache miss, `toDataFrame` calls `df.limit(maxRows).collect()` —
       * the materialised row array is the dominant memory cost of the cache.
       * Without this cap, a 10M-row query OOMs the driver. The default mirrors
-      * the platform's `CacheBridge.DefaultMaxRows` (100,000) so library and
+      * the canonical `CacheKey.DefaultMaxRows` (100,000) so library and
       * platform agree on the safety threshold.
       *
       * `maxRows > 0`  → apply `df.limit(maxRows)` before `collect()`.
-      * `maxRows <= 0` → no cap (escape hatch; not recommended).
+      * `maxRows == 0` → no cap (escape hatch; not recommended).
       *
-      * The cap only affects the cache miss path — cached hits are already
-      * bounded by whatever the producer cached. The cap does not affect
-      * the no-cache fast path (`auditSink.isEmpty && resultCache.isEmpty`),
-      * which returns a lazy DataFrame and lets the caller drive `collect()`.
+      * The cap applies on every path that materialises rows on the
+      * caller's behalf: the cache-miss path AND the audit-only
+      * no-cache-key path (`auditSink=Some, resultCache=None`,
+      * `auditRequest=Some`). The audit-only path is no longer lazy
+      * (it collects capped rows so the emitted `AuditEvent.rowCount`
+      * is accurate rather than 0).
+      *
+      * The cap does NOT apply on:
+      *   - the no-cache fast path (`auditSink.isEmpty && resultCache.isEmpty`),
+      *     which returns a lazy DataFrame and lets the caller drive `collect()`
+      *   - the cache-hit path, where the producer already bounded the cached
+      *     row array
       *
       * Set via the fluent `.withMaxRows(n)` setter. Survives the fluent
       * chain the same way `resultCache` does. */
-    val maxRows: Int = io.semanticdf.cache.CacheBridge.DefaultMaxRows,
+    val maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }

@@ -30,8 +30,12 @@ object CacheBridge {
    *
    * <p>Java callers use the [[defaultMaxRows()]] accessor; Scala callers
    * use [[DefaultMaxRows]] directly.
+   *
+   * <p>Canonical definition lives at [[io.semanticdf.cache.CacheKey.DefaultMaxRows]];
+   * this is a re-export for backward compat with code that already
+   * references the platform-side constant.
    */
-  val DefaultMaxRows: Int = 100000
+  val DefaultMaxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows
 
   /** Java-callable accessor (Java sees Scala `val`s as fields, not
    * methods, so we expose this method for clean Java syntax). */
