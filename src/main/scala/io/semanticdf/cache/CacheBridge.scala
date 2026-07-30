@@ -28,7 +28,7 @@ object CacheBridge {
    * against this value (not against 1024) so the wire signal matches
    * the actual data loss.
    *
-   * <p>Java callers use the [[defaultMaxRows()]] accessor; Scala callers
+   * <p>Java callers use the [[defaultMaxRows]] accessor; Scala callers
    * use [[DefaultMaxRows]] directly.
    *
    * <p>Canonical definition lives at [[io.semanticdf.cache.CacheKey.DefaultMaxRows]];
@@ -36,9 +36,9 @@ object CacheBridge {
    * references the platform-side constant.
    */
   @deprecated(
-    "Renamed to io.semanticdf.cache.CacheKey.DefaultMaxRows. " +
-      "This re-export exists for binary compat with code compiled " +
-      "against CacheBridge.DefaultMaxRows before v0.2.3.",
+    "Use [[io.semanticdf.cache.CacheKey.DefaultMaxRows]] instead. " +
+      "Re-export kept for binary compatibility with code compiled " +
+      "before v0.2.3.",
     since = "0.2.3")
   val DefaultMaxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows
 
@@ -47,7 +47,7 @@ object CacheBridge {
    *
    * Note: this method is NOT deprecated (it is the canonical Java API).
    * Scala callers should prefer `CacheKey.DefaultMaxRows` directly. */
-  def defaultMaxRows(): Int = DefaultMaxRows
+  def defaultMaxRows(): Int = io.semanticdf.cache.CacheKey.DefaultMaxRows
 
 
   /**

@@ -42,9 +42,8 @@ object CacheKey {
     *
     * Lives here (foundational hashing layer) rather than in [[CacheBridge]]
     * (Java facade) so the constant can be referenced without dragging
-    * the facade's import into the cache-key module. [[CacheBridge.DefaultMaxRows]]
-    * re-exports this for backward compat with code that already references
-    * the platform-side constant.
+    * the facade's import into the cache-key module. Java callers should
+    * use [[CacheBridge.defaultMaxRows]] (the canonical Java accessor).
     */
   val DefaultMaxRows: Int = 100000
 
