@@ -213,24 +213,74 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
   }
 
   // ----------------------------------------------------------------
+  // query()+withMaterialize: the dormant-auditRequest fast path
+  // ----------------------------------------------------------------
+
+  test("query().toDataFrame(): materializeLevel survives copyAuditRequest and the fast path applies persist") {
+    // Regression test for the post-#314 audit M3 finding. The
+    // `query()` chain internally calls `copyAuditRequest` (an internal
+    // setter on SemanticTable) to stamp the captured request. The
+    // resulting SemanticTable has `auditRequest = Some(...)` but
+    // `auditSink = None, resultCache = None` — still the fast path.
+    // We need to verify two things:
+    //   1. The field survives copyAuditRequest (regression: forgetting
+    //      to thread `materializeLevel = materializeLevel` would silently
+    //      drop it, mirroring the pre-#305 withRowFilter bug).
+    //   2. The fast path applies persist on the resulting table (the
+    //      auditSink.isEmpty && resultCache.isEmpty gate still passes).
+    val m = baseModel(spark).withMaterialize(StorageLevel.MEMORY_AND_DISK_SER)
+    val queried = m.query(measures = Seq("n"), dimensions = Seq("k"))
+    queried.materializeLevel shouldBe Some(StorageLevel.MEMORY_AND_DISK_SER)
+    queried.auditRequest shouldBe defined  // confirms we went through copyAuditRequest
+    queried.auditSink shouldBe None        // confirms we hit the fast path
+    queried.resultCache shouldBe None
+
+    val df = queried.toDataFrame(spark)
+    try {
+      df.storageLevel shouldBe StorageLevel.MEMORY_AND_DISK_SER
+    } finally df.unpersist()
+  }
+
+  // ----------------------------------------------------------------
   // Streaming batchModel: materializeLevel defaults to None
   // ----------------------------------------------------------------
 
-  test("streaming batchModel: materializeLevel is None regardless of parent's setting") {
-    // We can't easily spin up a streaming query in a unit test, but
-    // we can verify the field defaults behavior: the streaming path
-    // constructs SemanticTable via named args that don't include
-    // materializeLevel, so the constructor's default (None) applies.
-    // This is the design guarantee — verified by the constructor's
-    // default param value, not by behavior. See SemanticTableStreaming.scala:237.
+  test("streaming batchModel: materializeLevel defaults to None (constructor default applies)") {
+    // The streaming `batchModel` in `SemanticTableStreaming.scala:237`
+    // constructs a `new SemanticTable(...)` via named args. None of
+    // those named args include `materializeLevel`, so the constructor's
+    // default (`None`) applies — per-microbatch persist would be
+    // meaningless because each batch's DataFrame is consumed once via
+    // `foreachBatch` and then discarded.
+    //
+    // This test verifies the design guarantee: the constructor's
+    // default for `materializeLevel` is `None`, so the streaming path
+    // automatically doesn't persist. We construct the SAME shape the
+    // streaming path constructs (with the same named-args pattern —
+    // `materializeLevel` deliberately omitted) and assert the field
+    // defaults to `None` regardless of the parent's value.
+    //
+    // CAVEAT: this test does NOT call the actual streaming batchModel
+    // code (which is inline in `SemanticTableStreaming.scala:237`).
+    // A regression in the real batchModel (e.g., someone adding
+    // `materializeLevel = this.materializeLevel` thinking that's
+    // "preserving") wouldn't be caught here. The structural assertion
+    // is the best we can do without spinning up a streaming query in
+    // a unit test. The M4 finding from the post-#314 audit (architect
+    // review) flagged this trade-off; deferring the refactor that
+    // extracts `batchModel` into a testable method.
     val model = baseModel(spark).withMaterialize(StorageLevel.MEMORY_ONLY)
-    // Simulate the streaming batchModel's construction pattern.
     val batchModel = new SemanticTable(
       model.root, Nil, model.version, model.sourceTable, model.status,
       auditSink = None,
       auditRequest = model.auditRequest,
       resultCache = None,
       maxRows = model.maxRows,
+      // NOTE: real `SemanticTableStreaming.batchModel` does NOT pass
+      // `broadcastJoinThreshold` either — this test passes it to keep
+      // the construction shape flexible. The design-critical check is
+      // the absence of `materializeLevel`, which the real code also
+      // omits.
       broadcastJoinThreshold = model.broadcastJoinThreshold,
       // materializeLevel deliberately NOT set — defaults to None
     )

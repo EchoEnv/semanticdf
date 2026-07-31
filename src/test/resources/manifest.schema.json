@@ -124,6 +124,18 @@
           "type": "integer",
           "minimum": 1,
           "description": "Opt-in auto-broadcast threshold for join_one/join_many, in bytes. Absent means no library override (Spark's autoBroadcastJoinThreshold applies)."
+        },
+        "materializeLevel": {
+          "type": "object",
+          "description": "Opt-in DataFrame persistence (Spark StorageLevel) for the fast path of toDataFrame. Encoded as 5 fields (useDisk/useMemory/useOffHeap/deserialized/replication) for lossless round-trip of all 13 standard named StorageLevels and any custom-built instance. Absent means no persist (the library default).",
+          "required": ["useDisk", "useMemory", "useOffHeap", "deserialized", "replication"],
+          "properties": {
+            "useDisk":      { "type": "boolean", "description": "Allow storage on local disk." },
+            "useMemory":    { "type": "boolean", "description": "Allow storage in JVM heap." },
+            "useOffHeap":   { "type": "boolean", "description": "Allow storage in off-heap memory (requires spark.memory.offHeap.enabled=true)." },
+            "deserialized": { "type": "boolean", "description": "Store as deserialized Java objects (true) or serialized bytes (false). Serialized reduces memory but adds CPU." },
+            "replication":  { "type": "integer", "minimum": 1, "description": "Replication factor (1 = no replication; >1 trades memory for fault tolerance)." }
+          }
         }
       }
     },
