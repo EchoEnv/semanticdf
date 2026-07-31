@@ -226,6 +226,12 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
     // the parity check fails with a clear message naming the two paths.
     val repoSchemaPath = repoRoot.resolve("schemas/manifest.schema.json")
     val classpathStream = getClass.getClassLoader.getResourceAsStream("manifest.schema.json")
+    if (classpathStream == null)
+      throw new IllegalStateException(
+        "manifest.schema.json (from src/test/resources) not found on the test classpath; " +
+        "Maven's standard src/test/resources -> target/test-classes copy didn't run. " +
+        "Check the build lifecycle (the schema is in `schemas/` and copied by the " +
+        "Maven resources plugin).")
     val (repoTree, classpathTree) =
       try {
         val repo      = mapper.readTree(Files.readString(repoSchemaPath))
