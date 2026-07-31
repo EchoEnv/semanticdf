@@ -65,7 +65,16 @@ final class SemanticTable private[semanticdf] (
       * Set via the fluent `.withAuditSink(sink)` setter. Survives the
       * fluent chain (`.query(...).limit(...).toDataFrame(...)` keeps
       * the sink) so a single setter call at the model level covers
-      * every downstream query. */
+      * every downstream query.
+      *
+      * Join-construction propagation (post-#307 audit M3): when the
+      * outer table is constructed by `join_one` / `join_many` /
+      * `join_cross`, the outer's `auditSink` is
+      * `orElse(this.auditSink, other.auditSink)` — LEFT wins when both
+      * sides set a sink; RIGHT is the fallback so a user who set
+      * the sink on the right side (intuitively: "audit this join
+      * result") gets the sink. Implementation: `joinAuditSink`
+      * helper in `SemanticTableMutation`. */
     val auditSink: Option[io.semanticdf.audit.AuditSink] = None,
     /** Captured request shape for audit emission. Populated by
       * [[query]] (and the streaming variants); preserved across the
@@ -73,7 +82,18 @@ final class SemanticTable private[semanticdf] (
       * request, not the post-chain op tree.
       *
       * Default `None`. When `auditSink` is also `None`, this field
-      * is dormant — no hashing cost. */
+      * is dormant — no hashing cost.
+      *
+      * Join-construction propagation (post-#307 audit M3): when the
+      * outer table is constructed by `join_one` / `join_many` /
+      * `join_cross`, the outer's `auditRequest` is
+      * `orElse(this.auditRequest, other.auditRequest)` — LEFT wins
+      * when both sides set a request; RIGHT is the fallback. The
+      * captured request is needed to compute the cache key
+      * (see [[io.semanticdf.cache.CacheKey.forRequest]]), so the
+      * propagation rule matches `resultCache` (they're set/cleared
+      * together). Implementation: `joinAuditRequest` helper in
+      * `SemanticTableMutation`. */
     val auditRequest: Option[AuditQueryRequest] = None,
     /** Result cache — when set, every `toDataFrame` / `execute` call
       * that traces back to a `query()` invocation checks the cache
@@ -85,7 +105,18 @@ final class SemanticTable private[semanticdf] (
       * The cache key is derived from `auditRequest`, so the
       * fluent chain must capture the request via `query(...)` for
       * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
-      * bypass the cache. */
+      * bypass the cache.
+      *
+      * Join-construction propagation (post-#307 audit M3): when the
+      * outer table is constructed by `join_one` / `join_many` /
+      * `join_cross`, the outer's `resultCache` is
+      * `orElse(this.resultCache, other.resultCache)` — LEFT wins
+      * when both sides set a cache; RIGHT is the fallback so a
+      * user who set the cache on the right side (intuitively:
+      * "cache the join result") gets the cache. Note that
+      * `auditRequest` follows the same `orElse` rule (they're
+      * set/cleared together). Implementation: `joinResultCache`
+      * helper in `SemanticTableMutation`. */
     val resultCache: Option[io.semanticdf.cache.ResultCache] = None,
     /** Driver-memory safety cap on the rows returned by the cache miss path.
       *
@@ -115,7 +146,16 @@ final class SemanticTable private[semanticdf] (
       * chain the same way `resultCache` does. Manifest round-trip:
       * non-default values are emitted under `runtime.maxRows` and
       * restored on `fromJson` (PR #303). The `maxRows = 0` escape
-      * hatch is preserved (not silently coerced to default). */
+      * hatch is preserved (not silently coerced to default).
+      *
+      * Join-construction propagation (post-#307 audit M3): when the
+      * outer table is constructed by `join_one` / `join_many` /
+      * `join_cross`, the outer's `maxRows` is
+      * `min(this.maxRows, other.maxRows)` — the tighter cap wins.
+      * The `0 = no-cap` sentinel propagates correctly because
+      * `min(100_000, 0) = 0` (a user who disabled the cap on
+      * either side gets a cap-less join result). Implementation:
+      * `joinMaxRows` helper in `SemanticTableMutation`. */
     val maxRows: Int = io.semanticdf.cache.CacheKey.DefaultMaxRows,
     /** Opt-in auto-broadcast threshold for joins (size-based, bytes).
       *

@@ -485,6 +485,29 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
   /** Internal: shared body of `join_one` overloads. Calls the probe-based
     * `extractJoinKeys` helper when the caller used the lambda
     * form; the typed entry points pre-populate the keys directly. */
+
+  // --- Join-construction propagation helpers (post-#307 audit M3) ---
+  //
+  // The post-join wrapper (join_one / join_many / join_cross) used to
+  // take the LEFT side's runtime fields verbatim. A user who set
+  // `right.withMaxRows(n)` / `right.withResultCache(c)` / etc. on
+  // the right side would silently lose the override after the
+  // join. These helpers define the propagation rule for each field
+  // (LEFT-wins / RIGHT-fallback via orElse for Option-typed fields;
+  // MIN for the int cap so the tighter cap wins, with the `0 =
+  // no-cap` sentinel respected). Single source of truth for the
+  // rule — every join method calls these.
+  private[semanticdf] def joinMaxRows(other: SemanticTable): Int =
+    math.min(this.maxRows, other.maxRows)
+  private[semanticdf] def joinAuditSink(other: SemanticTable): Option[io.semanticdf.audit.AuditSink] =
+    this.auditSink.orElse(other.auditSink)
+  private[semanticdf] def joinAuditRequest(other: SemanticTable): Option[io.semanticdf.audit.QueryRequest] =
+    this.auditRequest.orElse(other.auditRequest)
+  private[semanticdf] def joinResultCache(other: SemanticTable): Option[io.semanticdf.cache.ResultCache] =
+    this.resultCache.orElse(other.resultCache)
+  private[semanticdf] def joinBroadcastThreshold(other: SemanticTable): Option[Long] =
+    this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold)
+
   private[semanticdf] def join_oneWithKeys(
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
@@ -589,14 +612,22 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           version = 0,
           sourceTable = None,
           status = ModelStatus.Published,
-          auditSink = this.auditSink,
-          auditRequest = this.auditRequest,
-          resultCache,
-          maxRows = maxRows,
-          broadcastJoinThreshold = broadcastJoinThreshold)
+          auditSink              = joinAuditSink(other),
+          auditRequest           = joinAuditRequest(other),
+          resultCache            = joinResultCache(other),
+          maxRows                = joinMaxRows(other),
+          broadcastJoinThreshold = joinBroadcastThreshold(other),
+        )
       }
     }
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold)
+    new SemanticTable(
+      join,
+      auditSink              = joinAuditSink(other),
+      auditRequest           = joinAuditRequest(other),
+      resultCache            = joinResultCache(other),
+      maxRows                = joinMaxRows(other),
+      broadcastJoinThreshold = joinBroadcastThreshold(other),
+    )
   }
 
   /** Join with a one-to-many / fan-out relationship (`join_many`).
@@ -708,14 +739,22 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           version = 0,
           sourceTable = None,
           status = ModelStatus.Published,
-          auditSink = this.auditSink,
-          auditRequest = this.auditRequest,
-          resultCache,
-          maxRows = maxRows,
-          broadcastJoinThreshold = broadcastJoinThreshold)
+          auditSink              = joinAuditSink(other),
+          auditRequest           = joinAuditRequest(other),
+          resultCache            = joinResultCache(other),
+          maxRows                = joinMaxRows(other),
+          broadcastJoinThreshold = joinBroadcastThreshold(other),
+        )
       }
     }
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold)
+    new SemanticTable(
+      join,
+      auditSink              = joinAuditSink(other),
+      auditRequest           = joinAuditRequest(other),
+      resultCache            = joinResultCache(other),
+      maxRows                = joinMaxRows(other),
+      broadcastJoinThreshold = joinBroadcastThreshold(other),
+    )
   }
 
   /** Cross join (Cartesian product) with another semantic table (`join_cross`).
@@ -736,6 +775,13 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       leftSide  = Some(this),
       rightSide = Some(other),
     )
-    new SemanticTable(join, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold)
+    new SemanticTable(
+      join,
+      auditSink              = joinAuditSink(other),
+      auditRequest           = joinAuditRequest(other),
+      resultCache            = joinResultCache(other),
+      maxRows                = joinMaxRows(other),
+      broadcastJoinThreshold = joinBroadcastThreshold(other),
+    )
   }
 }
