@@ -63,6 +63,13 @@ private[audit] final class JsonlStdoutSink extends AuditSink {
         "elapsed_ms" -> event.elapsedMs,
         "status"     -> event.status,
       )
+      // `executed_plan` — the actual Spark plan that ran (post-#310
+      // addition). Captures the real query plan operators can inspect
+      // for filter-pushdown verification, partition-skew diagnosis, etc.
+      // Deliberately NOT part of the dedupHash (see AuditEvent doc);
+      // emitted only when the audit event reached the compile step
+      // (i.e., the cache-hit fast path leaves it absent).
+      event.executedPlan.foreach(payload.put("executed_plan", _))
       event.error.foreach(payload.put("error", _))
       event.requester.foreach(payload.put("requester", _))
       event.requestId.foreach(payload.put("request_id", _))
