@@ -35,11 +35,12 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
 
   // The schema is loaded from the test classpath (src/test/resources/
   // manifest.schema.json). To keep a single source of truth, the test
-  // resource is byte-identical to schemas/manifest.schema.json at the
-  // repo root. Any drift between the two fails the build at the next
-  // `mvn test` because this spec validates against the classpath copy.
-  // (Both are committed; a future PR could derive one from the other
-  // at build time via a Maven resource-filter / properties step.)
+  // resource MUST be byte-identical to schemas/manifest.schema.json at
+  // the repo root. The "schema parity" test below enforces this on
+  // every `mvn test` run; a hand-edit to one copy that doesn't land in
+  // the other fails the build before CI. (Both are committed; a
+  // future PR could derive one from the other at build time via a
+  // Maven resource-filter / properties step.)
   private val SCHEMA_RESOURCE = "manifest.schema.json"
 
   // Lazy load: only resolve the schema + scan the repo once per spec class
@@ -164,11 +165,75 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
       matLevel.isObject shouldBe true
     }
     // The 5-field encoding requires all of these (PR #314 wire format).
+    // The post-#315 audit flagged that the test only checked presence,
+    // not types or constraints. A regression that flipped `type: boolean`
+    // to `type: string` on any field would silently slip through, then
+    // bite downstream tools that introspect the schema. Tighten the
+    // assertion to check both presence AND shape.
     val required = List("useDisk", "useMemory", "useOffHeap", "deserialized", "replication")
+    val expectedTypes = Map(
+      "useDisk"      -> "boolean",
+      "useMemory"    -> "boolean",
+      "useOffHeap"   -> "boolean",
+      "deserialized" -> "boolean",
+      "replication"  -> "integer",
+    )
     required.foreach { f =>
+      val prop = matLevel.path("properties").path(f)
       withClue(s"schema.properties.runtime.properties.materializeLevel.properties.$f is missing: ") {
-        matLevel.path("properties").path(f).isObject shouldBe true
+        prop.isObject shouldBe true
       }
+      withClue(s"schema.properties.runtime.properties.materializeLevel.properties.$f has wrong type (expected ${expectedTypes(f)}): ") {
+        prop.path("type").asText() shouldBe expectedTypes(f)
+      }
+    }
+    // `replication` is `StorageLevel.apply`'s last arg (Int) and is
+    // always >= 1 in Spark — `StorageLevel.NONE` has replication = 1,
+    // the standard levels go up to 3 (DISK_ONLY_3). A regression that
+    // dropped `minimum: 1` would let hand-rolled manifests declare
+    // replication = 0, which StorageLevel.apply rejects.
+    withClue("schema.properties.runtime.properties.materializeLevel.properties.replication.minimum must be 1: ") {
+      matLevel.path("properties").path("replication").path("minimum").asInt(0) shouldBe 1
+    }
+    // `required` array forces all 5 fields on the writer. The writer
+    // always emits all 5 (PR #314 wire format); a hand-rolled manifest
+    // missing any field is rejected — matches Spark's StorageLevel
+    // semantics (no optional fields).
+    val requiredList = matLevel.path("required").asScala.map(_.asText).toSet
+    withClue(s"schema.properties.runtime.properties.materializeLevel.required must include all 5 fields: ") {
+      requiredList shouldBe required.toSet
+    }
+  }
+
+  test("schemas/manifest.schema.json (repo root) == src/test/resources/manifest.schema.json (test classpath)") {
+    // The two copies exist for different audiences:
+    //   1. `schemas/manifest.schema.json` — public artifact shipped
+    //      with the repo (visible in source control, linkable from docs).
+    //   2. `src/test/resources/manifest.schema.json` — classpath copy
+    //      loaded by `getResourceAsStream` for in-process validation.
+    // They MUST be byte-identical: the public schema is the same shape
+    // as what the library validates against in tests. Drift between
+    // them means a hand-edit to one copy didn't land in the other, so
+    // the public schema and the test-validated schema disagree — a
+    // silent regression for downstream tooling that introspects the
+    // public schema to discover fields.
+    //
+    // Falsification (post-#315 audit MED-1, Architect): the comment on
+    // line 35 previously claimed this test existed. It didn't. Inject
+    // drift into the repo-root copy only (leave classpath untouched) —
+    // the manifest-validation spec still passes (it loads the classpath
+    // copy), so drift goes undetected. This test now closes that gap:
+    // the parity check fails with a clear message naming the two paths.
+    val repoSchemaPath = repoRoot.resolve("schemas/manifest.schema.json")
+    val classpathStream = getClass.getClassLoader.getResourceAsStream("manifest.schema.json")
+    val (repoTree, classpathTree) =
+      try {
+        val repo      = mapper.readTree(Files.readString(repoSchemaPath))
+        val classpath = mapper.readTree(classpathStream)
+        (repo, classpath)
+      } finally classpathStream.close()
+    withClue(s"drift between $repoSchemaPath and src/test/resources/manifest.schema.json: ") {
+      repoTree shouldBe classpathTree
     }
   }
 }
