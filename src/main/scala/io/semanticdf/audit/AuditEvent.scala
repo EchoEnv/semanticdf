@@ -84,6 +84,25 @@ final case class AuditEvent(
       * site (no default) so the contract is "always set." Use
       * [[AuditEvent.dedupHashOf]] to compute. */
     dedupHash:    String,
+    /** The Spark execution plan that produced the result, captured via
+      * `df.queryExecution.executedPlan.toString()` after the
+      * query's `.collect()` completed. Lets operators see the
+      * actual query plan that ran (not just the requested shape)
+      * so they can debug slow queries, verify filter pushdown,
+      * and diagnose partition skew. The string can be large for
+      * wide plans — consider truncation for very long plans.
+      *
+      * `None` when:
+      *   - the audit path didn't reach the compile step (error
+      *     path before compile, no cache path with auditSink-only,
+      *     etc.)
+      *   - the compile step failed and we have no DataFrame to inspect
+      *
+      * Deliberately NOT part of [[dedupHash]] — the executed plan
+      * contains internal counters, plan IDs, and operator-specific
+      * metadata that aren't stable across replays. Including it
+      * would defeat the replay-safe contract. */
+    executedPlan: Option[String] = None,
 )
 
 object AuditEvent {

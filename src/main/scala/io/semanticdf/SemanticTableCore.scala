@@ -106,6 +106,13 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       val cachedOpt: Option[io.semanticdf.cache.CachedResult] =
         cacheKeyOpt.flatMap(key => resultCache.get.get(key))
 
+      // Captures the actual Spark execution plan that ran. Set by
+      // both the cache-hit and cache-miss paths (after `compile()`)
+      // so the audit event can surface the real plan operators
+      // ran, not the requested shape. Remains `None` on the cache
+      // HIT path (no compile happens) and on the error path.
+      var executedPlanCapture: Option[String] = None
+
       try {
         val (df, rowCount) =
           if (cachedOpt.isDefined) {
@@ -169,6 +176,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
                   spark.createDataFrame(
                     spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
                 }
+                executedPlanCapture = Some(fresh.queryExecution.executedPlan.toString())
                 (rebuilt, rows.length.toLong)
               case None =>
                 // No cache key (audit-only path: resultCache is None, but
@@ -183,6 +191,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
                 val rebuilt =
                   spark.createDataFrame(
                     spark.sparkContext.parallelize(rows.toSeq), fresh.schema)
+                executedPlanCapture = Some(fresh.queryExecution.executedPlan.toString())
                 (rebuilt, rows.length.toLong)
             }
           }
@@ -203,6 +212,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
             rowCount   = rowCount,
             elapsedMs  = elapsedMs,
             status     = "ok",
+            executedPlan = executedPlanCapture,
             // dedupHash is the replay-safe contract key; computed
             // from the 6 query-shape fields only (excludes ts,
             // elapsedMs, rowCount, status, error, requester, requestId).
