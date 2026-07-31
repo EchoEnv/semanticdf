@@ -637,7 +637,7 @@ object SemanticManifest {
     // call below. The outer block here carries the runtime set on
     // the joined model specifically (post-join query() path). Missing
     // block → library defaults, mirroring the single-table reader.
-    val (maxRowsValue, broadcastValue) = readRuntime(obj)
+    val (maxRowsValue, broadcastValue, materializeValue) = readRuntime(obj)
 
     // Embedded per-side single-table manifests.
     val leftManifest  = modelObj.path("left")
@@ -840,6 +840,7 @@ object SemanticManifest {
       status      = ModelStatus.fromString(joinedStatus).getOrElse(ModelStatus.Published),
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
+      materializeLevel = materializeValue,
     )
   }
 
@@ -1054,7 +1055,7 @@ object SemanticManifest {
     // getOrElse is needed. A legacy manifest without the block
     // parses cleanly because both fields default to the library
     // behavior.
-    val (maxRowsValue, broadcastValue) = readRuntime(obj)
+    val (maxRowsValue, broadcastValue, materializeValue) = readRuntime(obj)
 
     val base: SemanticOp = if (isStreaming) {
       SemanticStreamingTableOp.of(
@@ -1094,6 +1095,7 @@ object SemanticManifest {
       sourceTable = sourceTable,
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
+      materializeLevel = materializeValue,
     )
   }
 
@@ -1378,11 +1380,12 @@ object SemanticManifest {
     */
   private def readRuntime(
       obj: com.fasterxml.jackson.databind.JsonNode,
-  ): (Option[Int], Option[Long]) = {
+  ): (Option[Int], Option[Long], Option[org.apache.spark.storage.StorageLevel]) = {
     val runtimeObj = obj.path("runtime")
     (
       optIntField(runtimeObj, "maxRows"),
       optLongField(runtimeObj, "broadcastJoinThreshold"),
+      readStorageLevel(runtimeObj),
     )
   }
 
@@ -1400,14 +1403,63 @@ object SemanticManifest {
       model: SemanticTable,
   ): Unit = {
     if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows ||
-        model.broadcastJoinThreshold.isDefined) {
+        model.broadcastJoinThreshold.isDefined ||
+        model.materializeLevel.isDefined) {
       val runtimeObj = root.putObject("runtime")
       if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows)
         runtimeObj.put("maxRows", model.maxRows)
       model.broadcastJoinThreshold.foreach { n =>
         runtimeObj.put("broadcastJoinThreshold", n)
       }
+      model.materializeLevel.foreach { level =>
+        writeStorageLevel(runtimeObj.putObject("materializeLevel"), level)
+      }
     }
+  }
+
+  /** Serialize a `StorageLevel` as a JSON object with the 5 fields
+    * Spark uses internally (useDisk / useMemory / useOffHeap /
+    * deserialized / replication). Round-trip is lossless for ALL 13
+    * standard `StorageLevel` named instances (`MEMORY_ONLY`,
+    * `MEMORY_AND_DISK`, `OFF_HEAP`, etc.) and for any custom-built
+    * instance constructed via the 5-arg `StorageLevel` apply.
+    *
+    * String-based encoding (e.g. `"MEMORY_ONLY"`) was an alternative
+    * but rejected because it would force the library to maintain a
+    * name mapping table for custom-built instances — the 5-field
+    * encoding works for any apply input, including the future ones
+    * Spark may add. */
+  private def writeStorageLevel(
+      node: com.fasterxml.jackson.databind.node.ObjectNode,
+      level: org.apache.spark.storage.StorageLevel,
+  ): Unit = {
+    node.put("useDisk",      level.useDisk)
+    node.put("useMemory",    level.useMemory)
+    node.put("useOffHeap",   level.useOffHeap)
+    node.put("deserialized", level.deserialized)
+    node.put("replication",  level.replication)
+  }
+
+  /** Inverse of [[writeStorageLevel]]. Returns `None` if the field is
+    * absent (the library default = no persist). */
+  private def readStorageLevel(
+      parent: com.fasterxml.jackson.databind.JsonNode,
+  ): Option[org.apache.spark.storage.StorageLevel] = {
+    val node = parent.path("materializeLevel")
+    if (node.isMissingNode || node.isNull) None
+    else if (node.isObject) {
+      // Use the apply factory rather than `new StorageLevel(...)` —
+      // the constructor is private on the case class and Scala 2.13
+      // Java-interop doesn't always resolve the right overload when
+      // the Scala class has multiple apply methods.
+      Some(org.apache.spark.storage.StorageLevel(
+        useDisk      = node.path("useDisk").asBoolean(false),
+        useMemory    = node.path("useMemory").asBoolean(false),
+        useOffHeap   = node.path("useOffHeap").asBoolean(false),
+        deserialized = node.path("deserialized").asBoolean(true),
+        replication  = node.path("replication").asInt(1),
+      ))
+    } else None
   }
 
   private def optBoolField(parent: com.fasterxml.jackson.databind.JsonNode, name: String): Boolean = {
