@@ -342,4 +342,45 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
       restored.materializeLevel shouldBe None
     } finally spark.stop()
   }
+
+  // -- salt round-trip (joined envelope) --------------------------------
+
+  test("joined envelope round-trips salt on the OUTER (skew-handling hint)") {
+    // Salt is a session-global AQE config — the joined-manifest reader
+    // restores it on the OUTER SemanticTable. The op's salt is not
+    // restored (it's a derived field; AQE handles actual skew
+    // handling from the OUTER table's salt).
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id")
+        .withSalt(10)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.salt shouldBe Some(10)
+    } finally spark.stop()
+  }
+
+  test("joined envelope round-trips salt = None (default, no skew-handling)") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id")
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.salt shouldBe None
+    } finally spark.stop()
+  }
 }

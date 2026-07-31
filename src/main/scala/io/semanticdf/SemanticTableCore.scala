@@ -75,6 +75,19 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def toDataFrame(implicit spark: SparkSession): DataFrame = toDataFrameInternal(spark, io.semanticdf.audit.Clock.systemDefault)
   def toDataFrame()(implicit spark: SparkSession, clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault): DataFrame = toDataFrameInternal(spark, clock)
   private def toDataFrameInternal(spark: SparkSession, clock: () => java.time.Instant): DataFrame = {
+    // Translate `salt = Some(n)` into Spark AQE skew handling. AQE
+    // detects skewed partitions at runtime and broadcasts them
+    // automatically — the production-grade solution. Config is
+    // session-global; setting it once enables skew handling for all
+    // subsequent joins. We never disable it (matches Spark 3.2+
+    // default). Setting the same value twice is a no-op on the
+    // SparkSession side. The `conf.set` calls are inexpensive
+    // (they don't trigger a recompile).
+    salt.foreach { n =>
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
+    }
+
     if (auditSink.isEmpty && resultCache.isEmpty) {
       // Fast path: no audit, no cache. Apply `materializeLevel` here
       // if set — subsequent actions on the returned DataFrame reuse
@@ -290,6 +303,7 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       status, auditSink, auditRequest, resultCache, maxRows = maxRows,
       broadcastJoinThreshold = broadcastJoinThreshold,
       materializeLevel = materializeLevel,
+      salt = salt,
     )
 
   /** Set the per-model schema version. Returns a NEW SemanticTable (immutability preserved).
@@ -305,7 +319,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def version(v: Int): SemanticTable = {
     require(v >= 0, s"SemanticTable.version must be non-negative, got: $v")
     new SemanticTable(root, postAggPredicates, version = v, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
   }
 
   /** Set the model's lifecycle status. Returns a NEW SemanticTable (immutability
@@ -320,7 +335,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def status(s: ModelStatus): SemanticTable = {
     require(s != null, "SemanticTable.status: ModelStatus must be non-null")
     new SemanticTable(root, postAggPredicates, version, sourceTable, s, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
   }
 
   /** Install an [[io.semanticdf.audit.AuditSink]] on this table.
@@ -336,7 +352,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * `Some(io.semanticdf.audit.AuditSink.JsonlStdout)`. */
   def withAuditSink(sink: AuditSink): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, Some(sink), auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
 
   /** Install a [[io.semanticdf.cache.ResultCache]] on this table.
     *
@@ -351,7 +368,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * `Some(io.semanticdf.cache.ResultCache.inMemory(256))`. */
   def withResultCache(cache: io.semanticdf.cache.ResultCache): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, Some(cache), maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
 
   /** Set the driver-memory safety cap applied on the cache-miss collect path.
     *
@@ -372,7 +390,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def withMaxRows(n: Int): SemanticTable = {
     require(n >= 0, s"SemanticTable.withMaxRows: n must be non-negative, got: $n")
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = n, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
   }
 
   /** Opt-in auto-broadcast threshold for joins (size-based, bytes).
@@ -400,7 +419,43 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       root, postAggPredicates, version, sourceTable, status,
       auditSink, auditRequest, resultCache, maxRows,
       broadcastJoinThreshold = if (bytes == 0L) None else Some(bytes),
-      materializeLevel = materializeLevel)
+      materializeLevel = materializeLevel,
+      salt = salt)
+  }
+
+  /** Opt-in skew-handling hint for equi-joins. When set, the
+    * next `toDataFrame` call configures Spark AQE to handle
+    * skewed partitions: sets
+    * `spark.sql.adaptive.skewJoin.enabled = true` and
+    * `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`. Spark
+    * AQE then detects skewed partitions at runtime and broadcasts
+    * them automatically — the production-grade solution.
+    *
+    * The `n` parameter is the skew-handling factor (Spark's
+    * `skewedPartitionFactor`): a partition is considered skewed if
+    * its size exceeds `n * median_size`. Spark's default is `5`. A
+    * larger `n` makes skew detection more conservative (only
+    * very-skewed partitions are broadcast); a smaller `n` is more
+    * aggressive. `n = 0` disables the hint (mirrors the
+    * `broadcastJoinThreshold = 0` convention — the field becomes
+    * `None`); `n >= 1` enables skew handling.
+    *
+    * The hint is a session-global config, not per-query. Setting it
+    * once enables skew handling for all subsequent joins in the
+    * same SparkSession. The library never disables it. See
+    * [[SemanticTable.salt]] for the full contract: skew
+    * motivation, trade-offs, sentinel conventions, propagation
+    * rules, and why a custom `rand() * n` salt column would be
+    * wrong (it doesn't match across sides for shuffled joins). */
+  def withSalt(n: Int): SemanticTable = {
+    require(n >= 0,
+      s"SemanticTable.withSalt: n must be non-negative, got: $n")
+    new SemanticTable(
+      root, postAggPredicates, version, sourceTable, status,
+      auditSink, auditRequest, resultCache, maxRows,
+      broadcastJoinThreshold = broadcastJoinThreshold,
+      materializeLevel = materializeLevel,
+      salt = if (n == 0) None else Some(n))
   }
 
   /** Opt-in DataFrame persistence. When set, the fast path of
@@ -431,7 +486,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       root, postAggPredicates, version, sourceTable, status,
       auditSink, auditRequest, resultCache, maxRows,
       broadcastJoinThreshold,
-      materializeLevel = Some(level))
+      materializeLevel = Some(level),
+      salt = salt)
   }
 
   /** Internal: stamp the captured request shape for audit emission.
@@ -439,7 +495,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * API — callers should let [[query]] capture the request. */
   private[semanticdf] def copyAuditRequest(req: AuditQueryRequest): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, Some(req), resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
 
   /** Drop the captured audit request. The cache key is derived from
     * the audit request, so dropping it also disables the result
@@ -450,7 +507,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * wrong rows. */
   private[semanticdf] def invalidateAuditRequest(): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, None, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
 
   /** Same as [[explainSemantic(spark:org.apache.spark.sql.SparkSession, scope:io.semanticdf.SemanticTable#Scope)]]
     * but accepts an optional SparkSession (e.g. for a static-only view). */
@@ -585,7 +643,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       SemanticFilterOp(r, p)
     }
     val next = new SemanticTable(newRoot, postAggPredicates ++ post, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
     // If auditRequest was set by an earlier query() call, the new
     // filter changes the result. Drop the audit request so the
     // cache key doesn't match the pre-filter query.
@@ -598,7 +657,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * sometimes needed when the dimension is derived from a measure). */
   def having(pred: Predicate): SemanticTable = {
     val next = new SemanticTable(root, postAggPredicates :+ pred, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
     // If auditRequest was set by an earlier query() call, the new
     // post-agg filter changes the result. Drop the audit request so
     // the cache key doesn't match the pre-filter query.
@@ -617,14 +677,16 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     // If auditRequest is set (came from query()), drop it so the
     // cache key reflects the new shape. Otherwise preserve.
     val next = new SemanticTable(SemanticOrderByOp(root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
     if (auditRequest.isDefined) next.invalidateAuditRequest() else next
   }
 
   /** Limit the result to the first `n` rows. Composes with [[orderBy]]. */
   def limit(n: Int): SemanticTable = {
     val next = new SemanticTable(SemanticLimitOp(root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
     if (auditRequest.isDefined) next.invalidateAuditRequest() else next
   }
 
@@ -656,7 +718,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     * @return a new SemanticTable that emits a hinted DataFrame */
   def withHint(strategy: String, params: Any*): SemanticTable =
     new SemanticTable(SemanticHintOp(root, strategy, params.toSeq), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel)
+          materializeLevel = materializeLevel,
+          salt = salt)
 
   /** One-shot bundled query.
     *
@@ -768,15 +831,20 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     case t: SemanticTableOp => t.dimensions.get(name)
     case j: SemanticJoinOp  => j.mergedModel.dimensions.get(name)
     case SemanticFilterOp(src, _)     => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveDimension(name)
+          materializeLevel = materializeLevel,
+          salt = salt).resolveDimension(name)
     case SemanticOrderByOp(src, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveDimension(name)
+          materializeLevel = materializeLevel,
+          salt = salt).resolveDimension(name)
     case SemanticLimitOp(src, _)      => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveDimension(name)
+          materializeLevel = materializeLevel,
+          salt = salt).resolveDimension(name)
     case SemanticHintOp(src, _, _)    => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveDimension(name)
+          materializeLevel = materializeLevel,
+          salt = salt).resolveDimension(name)
     case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveDimension(name)
+          materializeLevel = materializeLevel,
+          salt = salt).resolveDimension(name)
     case _ => SemanticOp.rootModel(root).flatMap(_.dimensions.get(name))
   }
 
@@ -786,15 +854,18 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     case SemanticFilterOp(src, _) =>
       // Unwrap filters to find the underlying model.
       new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveAllMeasureNames
+          materializeLevel = materializeLevel,
+          salt = salt).resolveAllMeasureNames
     case SemanticHintOp(src, _, _) =>
       // Hint is a Spark planner wrapper; recurse to find the underlying model.
       new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveAllMeasureNames
+          materializeLevel = materializeLevel,
+          salt = salt).resolveAllMeasureNames
     case SemanticTransformsOp(src, _) =>
       // Transforms don't change the measure catalog; recurse to the source.
       new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveAllMeasureNames
+          materializeLevel = materializeLevel,
+          salt = salt).resolveAllMeasureNames
     case _ =>
       SemanticOp.rootModel(root).map(_.measures.keySet).getOrElse(Set.empty)
   }
@@ -826,11 +897,13 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       // Pre-join row filters are transparent — unwrap to find the underlying table.
       case SemanticRowFilterOp(src, _, _, _, _) =>
         new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).requireRoot(label)
+          materializeLevel = materializeLevel,
+          salt = salt).requireRoot(label)
       // Transforms are applied at compile time; unwrap to find the underlying table.
       case SemanticTransformsOp(src, _) =>
         new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).requireRoot(label)
+          materializeLevel = materializeLevel,
+          salt = salt).requireRoot(label)
       // Query wrappers (WHERE / ORDER BY / LIMIT / HINT) layer over the model —
       // they don't expose a SemanticTableOp root, so users must join first.
       case SemanticFilterOp(_, _) | SemanticOrderByOp(_, _) |
@@ -1110,21 +1183,28 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     case j: SemanticJoinOp  => j.mergedModel
     case SemanticAggregateOp(src, _, _) =>
       new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     case SemanticFilterOp(src, _)  => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     // Pre-join row filters do not change the declared model — unwrap transparently.
     case SemanticRowFilterOp(src, _, _, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     case SemanticOrderByOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     case SemanticLimitOp(src, _)   => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     case SemanticHintOp(src, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
     // Transforms are transparent — they don't change the declared model.
     case SemanticTransformsOp(src, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
-          materializeLevel = materializeLevel).resolveRootModel
+          materializeLevel = materializeLevel,
+          salt = salt).resolveRootModel
   }
 
   /** Build the streaming windowed-aggregation pipeline that the

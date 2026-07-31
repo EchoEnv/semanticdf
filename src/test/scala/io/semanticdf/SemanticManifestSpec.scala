@@ -272,6 +272,33 @@ class SemanticManifestSpec
       round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.OFF_HEAP)
     }
 
+    it("round-trips salt = 10 (skew-handling hint)") {
+      // `salt` is a plain integer count of skew-handling buckets.
+      // When non-default, emitted under `runtime.salt` in the JSON
+      // wire format and restored on `fromJson`. The field is a HINT
+      // — the library translates it to Spark AQE skew handling at
+      // toDataFrame time (see SaltSpec).
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withSalt(10)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.salt shouldBe Some(10)
+    }
+
+    it("round-trips salt = None (default, no skew-handling)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.salt shouldBe None
+    }
+
     // -- 1b. identity fields (added in v0.1.11) -------------------------------
 
     it("id-round-trips via the new two-arg toJson") {

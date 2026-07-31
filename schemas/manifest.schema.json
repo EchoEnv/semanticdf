@@ -136,6 +136,11 @@
             "deserialized": { "type": "boolean", "description": "Store as deserialized Java objects (true) or serialized bytes (false). Serialized reduces memory but adds CPU." },
             "replication":  { "type": "integer", "minimum": 1, "description": "Replication factor (1 = no replication; >1 trades memory for fault tolerance)." }
           }
+        },
+        "salt": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Opt-in skew-handling hint for equi-joins. When set, the library configures Spark AQE skew handling (`spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`) so skewed partitions are broadcast automatically. Absent means no skew handling (the library default)."
         }
       }
     },

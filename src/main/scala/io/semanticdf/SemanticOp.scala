@@ -457,6 +457,27 @@ final case class SemanticJoinOp(
       * Default `None` for back-compat with hand-constructed
       * `SemanticJoinOp`s and pre-PR-#299 manifests. */
     broadcastJoinThreshold: Option[Long] = None,
+    /** Skew-handling hint carried from the originating
+      * [[io.semanticdf.SemanticTable]] via
+      * [[io.semanticdf.SemanticTable.withSalt]]. When `Some(n)`,
+      * the originating `SemanticTable.toDataFrame` translates this
+      * into Spark AQE skew handling (session-global config). This
+      * field is preserved across in-memory join construction sites
+      * (`join_oneWithKeys`, `join_manyWithKeys`) via
+      * `this.salt.orElse(other.salt)` — LEFT wins when both sides
+      * carry a salt; RIGHT is the fallback.
+      *
+      * `compileEquiJoin` does NOT read this field directly — the
+      * actual skew handling is set up in `toDataFrameInternal` via
+      * `spark.conf.set(...)`, driven by the OUTER
+      * [[io.semanticdf.SemanticTable.salt]] field. This field's
+      * purpose is preservation across `withDimensions` /
+      * `withMeasures` rewrites (in-memory) and for manifest round-
+      * trip / introspection.
+      *
+      * Default `None` for back-compat with hand-constructed
+      * `SemanticJoinOp`s and pre-PR-with-salt manifests. */
+    salt: Option[Int] = None,
     /** Names of the columns on the LEFT side that participate in the equi-join
       * predicate. Populated by:
       *   (a) the typed entry points on `SemanticTable.join_*` when called
