@@ -207,5 +207,58 @@ final class SemanticTable private[semanticdf] (
       * restored on `fromJson` (PR #303). Missing/absent means
       * `None` (the library default). */
     val broadcastJoinThreshold: Option[Long] = None,
+    /** Opt-in DataFrame persistence (a.k.a. "materialize" — pre-collect
+      * caching). When `Some(level)`, the fast path of `toDataFrame`
+      * (the `auditSink.isEmpty && resultCache.isEmpty` branch) calls
+      * `df.persist(level)` on the compiled DataFrame before returning
+      * it, so subsequent actions on the returned `DataFrame` reuse the
+      * persisted storage instead of re-executing the Spark plan.
+      *
+      * The audit/cache branch (when `auditSink` or `resultCache` is
+      * set) does NOT honour this flag — the row cache already
+      * returns a `parallelize`-based DataFrame that's effectively
+      * `MEMORY_ONLY` for the duration of the call, so re-running the
+      * Spark plan would be redundant. Applying `persist` to the
+      * compiled DataFrame in the audit/cache branch would also leak
+      * cluster storage (the user never sees the compiled DataFrame,
+      * only the `parallelize` rebuild), so it's deliberately
+      * suppressed there. Set via the fluent `.withMaterialize(level)`
+      * setter.
+      *
+      * Lifecycle (this is the whole reason this setter exists):
+      * `df.persist(level)` is a marker; the persist happens on the
+      * next action. The library does NOT retain a `DataFrame`
+      * reference on the table (deliberately — see the design doc for
+      * the multi-thread / leak analysis), so `unpersist()` is the
+      * caller's responsibility: call `df.unpersist()` on the
+      * `DataFrame` you got from `toDataFrame()`. The library does not
+      * expose an `unpersist()` method on `SemanticTable` precisely
+      * to avoid the volatile-ref race + cluster memory leak.
+      *
+      * Streaming path: `batchModel` (in `SemanticTableStreaming`)
+      * constructs the per-micro-batch `SemanticTable` via named
+      * args that don't include `materializeLevel`, so the field
+      * defaults to `None` on each batch and persist does NOT fire
+      * per micro-batch. Persisting per micro-batch would be
+      * meaningless (each batch's DataFrame is consumed once via
+      * `foreachBatch`).
+      *
+      * Sentinel: `None` (the default) means "no persist". The
+      * library does not pre-curate a subset of Spark's storage
+      * levels — the full `org.apache.spark.storage.StorageLevel`
+      * enum is the API surface. Operators who know Spark already
+      * know the enum. Storage level choice is the operator's
+      * responsibility: `MEMORY_ONLY` on a 10M-row query can OOM the
+      * cluster; the library can't paper over that.
+      *
+      * Join-construction propagation (post-#309 audit pattern):
+      * when the outer table is constructed by `join_one` /
+      * `join_many` / `join_cross`, the outer's `materializeLevel` is
+      * `orElse(this.materializeLevel, other.materializeLevel)` —
+      * LEFT wins when both sides set a level; RIGHT is the fallback
+      * so a user who set the level on the right side (intuitively:
+      * "I want the join result persisted") gets it. Implementation:
+      * `joinMaterializeLevel` helper in `SemanticTableMutation`. */
+    val materializeLevel: Option[org.apache.spark.storage.StorageLevel] = None,
 ) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
 }

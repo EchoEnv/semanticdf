@@ -346,7 +346,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
     * }}}
     */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold)
+    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold, materializeLevel)
 
   // -------------------------------------------------------------------------
   // Typed field references (SemanticField typeclass)
@@ -474,6 +474,14 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
         * groupBy participates in. Carried from the originating
         * [[SemanticTable]] for the same reason as `maxRows`. */
       broadcastJoinThreshold: Option[Long] = None,
+      /** Opt-in DataFrame persistence carried from the originating
+        * [[SemanticTable]] for the same reason as `maxRows` /
+        * `broadcastJoinThreshold`. When `Some(level)`, the fast path
+        * of `toDataFrame` calls `df.persist(level)` after the groupBy's
+        * aggregate op is compiled. Defaults to `None` so the audit/cache
+        * path returns a `parallelize`-based DataFrame and the persist
+        * is not applied (avoids leaking cluster storage). */
+      materializeLevel: Option[org.apache.spark.storage.StorageLevel] = None,
   ) {
     /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
     def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
@@ -513,7 +521,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
       var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
       // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
       postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows, broadcastJoinThreshold = this.broadcastJoinThreshold)
+      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows, broadcastJoinThreshold = this.broadcastJoinThreshold, materializeLevel = this.materializeLevel)
     }
   }
 }

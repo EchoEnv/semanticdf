@@ -170,6 +170,108 @@ class SemanticManifestSpec
       json should not include "\"runtime\""
     }
 
+    // -- 1a.2 materializeLevel round-trip -----------------------------------
+
+    it("round-trips materializeLevel = MEMORY_ONLY (5-field JSON encoding, lossless)") {
+      // materializeLevel is a Spark StorageLevel enum. The wire
+      // format encodes it as 5 fields (useDisk/useMemory/useOffHeap/
+      // deserialized/replication) — lossless for all 13 named levels
+      // and for any custom instance built via StorageLevel.apply(...).
+      // Lossless round-trip means a YAML-deployed model can opt into
+      // DataFrame persistence via the YAML plumbing.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+        .withDimensions(Dimension("id", _ => df("id")))
+        .withMaterialize(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+    }
+
+    it("round-trips materializeLevel = MEMORY_AND_DISK (different level, also lossless)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMaterialize(org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.MEMORY_AND_DISK)
+    }
+
+    it("round-trips materializeLevel = MEMORY_ONLY_SER (deserialized=false is part of the encoding)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMaterialize(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+    }
+
+    it("round-trips materializeLevel = None (default, no persist)") {
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe None
+    }
+
+    it("runtime block emission: omits materializeLevel sub-object when None (leg-2026-07-30 wire-format minimalism)") {
+      // When materializeLevel = None, the writer does NOT emit the
+      // materializeLevel sub-object under runtime. The reader tolerates
+      // a missing sub-object by returning None. Together: a manifest
+      // with only maxRows set has a runtime block without materializeLevel,
+      // and a manifest with materializeLevel set has both.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df)
+        .withMaxRows(50_000)  // non-default; triggers runtime block
+      // materializeLevel is None by default
+      val json = SemanticManifest.toJson(model)
+      json should include ("\"runtime\"")
+      json should not include ("\"materializeLevel\"")
+    }
+
+    it("round-trips materializeLevel = DISK_ONLY (useDisk=true, useMemory=false path)") {
+      // DISK_ONLY exercises the useDisk=true / useMemory=false combo —
+      // the only standard level where useDisk differs from useMemory.
+      // A default-flags bug in readStorageLevel would silently coerce
+      // this to MEMORY_ONLY (or OFF_HEAP, etc).
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMaterialize(org.apache.spark.storage.StorageLevel.DISK_ONLY)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.DISK_ONLY)
+    }
+
+    it("round-trips materializeLevel = OFF_HEAP (useOffHeap=true path)") {
+      // OFF_HEAP exercises the useOffHeap=true path — the only
+      // standard level with useOffHeap=true. A default-flags bug
+      // would silently coerce this to MEMORY_ONLY.
+      val df = spark.createDataFrame(
+        spark.sparkContext.parallelize(Seq(Row(1))),
+        StructType(Seq(StructField("id", IntegerType)))
+      )
+      val model = toSemanticTable(df).withMaterialize(org.apache.spark.storage.StorageLevel.OFF_HEAP)
+      val json = SemanticManifest.toJson(model)
+      val round = SemanticManifest.fromJson(json, df)
+      round.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.OFF_HEAP)
+    }
+
     // -- 1b. identity fields (added in v0.1.11) -------------------------------
 
     it("id-round-trips via the new two-arg toJson") {

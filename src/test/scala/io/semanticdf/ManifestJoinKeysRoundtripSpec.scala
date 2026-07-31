@@ -305,4 +305,41 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
       outerTree.has("runtime") shouldBe false
     } finally spark.stop()
   }
+
+  // -- materializeLevel round-trip (joined envelope) ----------------------
+
+  test("joined envelope round-trips materializeLevel on the OUTER (LEFT-wins precedence)") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id")
+        .withMaterialize(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.materializeLevel shouldBe Some(org.apache.spark.storage.StorageLevel.MEMORY_ONLY)
+    } finally spark.stop()
+  }
+
+  test("joined envelope round-trips materializeLevel = None (default, no override)") {
+    val spark = makeSpark()
+    try {
+      val lSrc = leftDf(spark)
+      val rSrc = rightDf(spark)
+      val lT = toSemanticTable(lSrc, name = Some("L"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val rT = toSemanticTable(rSrc, name = Some("R"))
+        .withDimensions(Dimension("id", _ => org.apache.spark.sql.functions.col("id")))
+      val joined = lT.join_on(rT, "id" -> "id")
+
+      val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
+      val restored = SemanticManifest.fromJoinedJson(json, lSrc, rSrc)
+      restored.materializeLevel shouldBe None
+    } finally spark.stop()
+  }
 }
