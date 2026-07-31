@@ -149,6 +149,17 @@ final class SemanticTable private[semanticdf] (
       * path don't honour this threshold — the broadcast hint is only
       * emitted in `compileEquiJoin` (used by `join_one` / `join_many`).
       *
+      * Join-construction propagation rule (PR #306): when the
+      * threshold is set on EITHER side of a `join_one` / `join_many`,
+      * the op's `broadcastJoinThreshold` is populated via
+      * `this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold)`.
+      * Precedence: LEFT wins when both sides carry a threshold; RIGHT
+      * is the fallback so a user who set the threshold on the right
+      * side (intuitively: "I know this dimension table is small")
+      * gets the broadcast hint. The same `orElse` rule applies to
+      * the joined-manifest reader (PR #307) so round-trip preserves
+      * the threshold regardless of which side carried it.
+      *
       * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
       * Survives the fluent chain the same way `resultCache` does.
       * Manifest round-trip preserves the threshold: a non-default
