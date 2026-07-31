@@ -260,9 +260,10 @@ public class QueryService {
         CacheBridge.modelNameOrUnknown(model),
         fieldNames,
         rows,
-        // Truncation flag at the real cap (CacheBridge.DefaultMaxRows,
-        // 100,000 rows), not the historical 1024 threshold.
-        /*truncated*/ n >= CacheBridge.defaultMaxRows(),
+        // Truncation flag at the real cap (the env-var-aware
+        // effectiveMaxRows, falling back to CacheBridge.DefaultMaxRows
+        // = 100,000), not the historical 1024 threshold.
+        /*truncated*/ n >= CacheBridge.effectiveMaxRows(),
         n);
   }
 
@@ -539,13 +540,14 @@ public class QueryService {
         CacheBridge.modelNameOrUnknown(model),
         CacheBridge.schemaFieldsAsJava(cached),
         rows,
-        // Truncation flag at the real cap (CacheBridge.DefaultMaxRows,
-        // 100,000 rows), not the historical 1024 threshold. The
+        // Truncation flag at the real cap (the env-var-aware
+        // effectiveMaxRows, falling back to CacheBridge.DefaultMaxRows
+        // = 100,000), not the historical 1024 threshold. The
         // truncated flag is the only wire signal a caller has that
         // the result is incomplete; using the wrong threshold told
         // callers the result was complete when in fact we may have
         // silently dropped rows at the driver.
-        /*truncated*/ rowCount >= CacheBridge.defaultMaxRows(),
+        /*truncated*/ rowCount >= CacheBridge.effectiveMaxRows(),
         rowCount);
   }
 

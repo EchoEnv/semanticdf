@@ -49,6 +49,47 @@ object CacheBridge {
    * Scala callers should prefer `CacheKey.DefaultMaxRows` directly. */
   def defaultMaxRows(): Int = io.semanticdf.cache.CacheKey.DefaultMaxRows
 
+  /** Environment variable name that operators can set to override
+    * the 5-arg `executeQuery` row cap. The env-var value must be
+    * a non-negative `Int`; the existing `0 = no-cap` sentinel is
+    * preserved. Unset / invalid values fall back to
+    * `CacheKey.DefaultMaxRows` (100,000).
+    *
+    * Use case: operators running a 10M-row analytical query set
+    * `SEMANTICDF_MAX_ROWS=5000000` to raise the driver-memory
+    * cap without changing code. The Scala constructor-time
+    * `withMaxRows(n)` setter remains the per-model way. */
+  val MaxRowsEnvVar: String = "SEMANTICDF_MAX_ROWS"
+
+  /** Parse the env-var map to an effective maxRows override. Pure
+    * function (extracted for testability). Returns `None` when the
+    * env-var is unset, malformed, negative, or out of `Int` range.
+    * `0` is accepted (the existing `0 = no-cap` sentinel). */
+  def parseEnvMaxRows(env: Map[String, String]): Option[Int] =
+    env.get(MaxRowsEnvVar).flatMap { s =>
+      scala.util.Try(s.toInt).toOption.filter(_ >= 0)
+    }
+
+  /** Test-only override. When `Some`, takes precedence over the
+    * env-var lookup. Production code never sets this; tests use it
+    * to exercise the env-var path without touching the ambient
+    * JVM environment. Not thread-safe — parallel test runners
+    * using this var must serialize access (the project's tests
+    * run sequentially). */
+  private[cache] var envMaxRowsOverride: Option[Int] = None
+
+  /** Effective maxRows: test override > env-var > library default.
+    * Used by the 5-arg `executeQuery` overload and as the canonical
+    * answer to "what cap is currently in effect" for callers that
+    * need to know (e.g. computing a `truncated` flag on the wire).
+    *
+    * Java callers invoke this as `CacheBridge.effectiveMaxRows()`
+    * (Scala's parameterless `def` is callable with or without
+    * parens from Java; the parens style matches the existing
+    * `defaultMaxRows()` accessor). */
+  def effectiveMaxRows: Int =
+    envMaxRowsOverride.getOrElse(parseEnvMaxRows(sys.env).getOrElse(DefaultMaxRows))
+
 
   /**
    * Run a model query against the given spark session, returning a
@@ -84,18 +125,23 @@ object CacheBridge {
     new CachedResult(rows, capped.schema)
   }
 
-  /** Same as the 6-arg overload with a default 100,000-row driver-memory
-   * cap. This is a hard guard: very large results narrow at the
-   * driver boundary rather than OOMing the JVM. Operators needing
-   * larger windows raise maxRows via env var (v0.2.3 follow-up).
-   */
+  /** Same as the 6-arg overload with a row cap that defaults to
+    * `effectiveMaxRows` (the `SEMANTICDF_MAX_ROWS` env-var if set,
+    * falling back to `CacheKey.DefaultMaxRows` = 100,000).
+    *
+    * This is a hard guard: very large results narrow at the
+    * driver boundary rather than OOMing the JVM. Operators
+    * override the cap via the env var (see [[MaxRowsEnvVar]]).
+    * The per-model `withMaxRows(n)` setter remains the fine-grained
+    * way for callers that build a specific `SemanticTable`.
+    */
   def executeQuery(
       model: SemanticTable,
       spark: SparkSession,
       measures: java.util.List[String],
       dims: java.util.List[String],
       where: String,
-  ): CachedResult = executeQuery(model, spark, measures, dims, where, DefaultMaxRows)
+  ): CachedResult = executeQuery(model, spark, measures, dims, where, effectiveMaxRows)
 
   /** Convert a {@link CachedResult} to the platform's
     * {@code List<List<Object>>} positional wire shape, with each
