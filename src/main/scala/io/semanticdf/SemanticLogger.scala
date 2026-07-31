@@ -104,8 +104,16 @@ private[semanticdf] object SemanticLogger extends Logging {
   }
 
   /** Emitted when an opt-in broadcast hint fires (right side smaller
-    * than the user's threshold). */
-  def logBroadcastHint(threshold: Long, actualSize: Long, cardinality: String): Unit = debug {
+    * than the user's threshold).
+    *
+    * Logged at `info` (not `debug`) because the user explicitly opted
+    * into this hint via `withBroadcastJoinThreshold(n)` — when the
+    * hint fires (or doesn't), that's the entire point of the opt-in
+    * and they want to see it. Originally `debug` per PR #299; the
+    * PR #299 review (convergent LOW finding) flagged this as too
+    * quiet for a user-driven tuning event. Promoted to `info` in
+    * the post-v0.2.2 audit follow-up. */
+  def logBroadcastHint(threshold: Long, actualSize: Long, cardinality: String): Unit = info {
     s"join($cardinality): broadcast hint applied (right=${actualSize}B < threshold=${threshold}B)"
   }
 
