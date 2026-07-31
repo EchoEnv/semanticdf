@@ -140,4 +140,35 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
       info("[validator] legacy hand-rolled manifest not built yet (run `mvn package` in joined-manifest-split first)")
     }
   }
+
+  test("schema documents the runtime.materializeLevel property (regression: post-#314 audit MED-1)") {
+    // PR #314 added `materializeLevel` to the writer/reader pair
+    // but missed both schema files. The wire format accepts the
+    // field (the schema has implicit `additionalProperties: true`),
+    // so the existing manifest-validation test passes either way;
+    // a regression that removed the field from the schema would
+    // only be caught by inspecting the schema itself. Downstream
+    // tooling (OKF generators, lineage trackers, MCP introspection)
+    // introspects the schema to discover available fields, so the
+    // schema MUST document the field for the wire format to be
+    // self-describing.
+    //
+    // Falsification: revert the schema's `materializeLevel` block
+    // and this test fails with a clear message naming the missing
+    // property. Restore and it passes.
+    val schemaTree = schema.getSchemaNode
+    val runtime = schemaTree.path("properties").path("runtime")
+    runtime.isObject shouldBe true
+    val matLevel = runtime.path("properties").path("materializeLevel")
+    withClue("schema.properties.runtime.properties.materializeLevel is missing: ") {
+      matLevel.isObject shouldBe true
+    }
+    // The 5-field encoding requires all of these (PR #314 wire format).
+    val required = List("useDisk", "useMemory", "useOffHeap", "deserialized", "replication")
+    required.foreach { f =>
+      withClue(s"schema.properties.runtime.properties.materializeLevel.properties.$f is missing: ") {
+        matLevel.path("properties").path(f).isObject shouldBe true
+      }
+    }
+  }
 }
