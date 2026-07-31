@@ -123,11 +123,14 @@ class QueryServiceStructuralTest {
         "toQueryResult() must not compare rowCount against 1024; the real "
             + "cap is CacheBridge.DefaultMaxRows (100,000). See #263.");
 
-    // The new threshold MUST appear, and it MUST be the library's
-    // constant (not a hand-coded literal).
-    assertTrue(body.contains("CacheBridge.defaultMaxRows()"),
-        "toQueryResult() must call CacheBridge.defaultMaxRows() to compute "
-            + "the truncated flag (see #263).");
+    // The new threshold MUST appear, and it MUST be the env-var-aware
+    // `effectiveMaxRows()` accessor (not a hand-coded literal).
+    // `effectiveMaxRows` falls back to `CacheBridge.DefaultMaxRows`
+    // when no `SEMANTICDF_MAX_ROWS` env-var is set, so the historical
+    // 100,000 cap is preserved by default.
+    assertTrue(body.contains("CacheBridge.effectiveMaxRows()"),
+        "toQueryResult() must call CacheBridge.effectiveMaxRows() to compute "
+            + "the truncated flag (env-var-aware; falls back to DefaultMaxRows).");
   }
 
   // --- helpers ---
