@@ -207,6 +207,78 @@ final class SemanticTable private[semanticdf] (
       * restored on `fromJson` (PR #303). Missing/absent means
       * `None` (the library default). */
     val broadcastJoinThreshold: Option[Long] = None,
+    /** Opt-in skew-handling hint for equi-joins (`join_one`,
+      * `join_many`). When `Some(n)`, `toDataFrameInternal`
+      * configures Spark's Adaptive Query Execution to handle skewed
+      * partitions: sets
+      * `spark.sql.adaptive.skewJoin.enabled = true` (idempotent)
+      * and `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`.
+      * Spark AQE then detects skewed partitions at runtime and
+      * broadcasts them automatically — the production-grade
+      * solution.
+      *
+      * Why not a custom `rand() * n` salt column on both sides?
+      * Because in a shuffled join, the LEFT and RIGHT sides run on
+      * different executors with different RNG sequences, so a
+      * symmetric random salt does NOT match across sides for the
+      * same key. The join condition
+      * `concat(L_key, "|", L_salt) === concat(R_key, "|", R_salt)`
+      * would produce empty right-side results for all rows —
+      * wrong results, not just slow ones. Spark AQE handles skew
+      * correctly at the shuffle stage via dynamic partition
+      * broadcast, without a custom salt column. See SaltSpec for
+      * the end-to-end verification.
+      *
+      * `n` is the `skewedPartitionFactor` threshold: Spark considers
+      * a partition skewed if its size exceeds `n * median_size` and
+      * broadcasts it. Spark's default is `5`. A larger `n` makes
+      * the skew detection more conservative (only very-skewed
+      * partitions are broadcast); a smaller `n` is more aggressive.
+      *
+      * Trade-offs:
+      *  - The AQE config is session-global, not per-query. Setting
+      *    it once enables skew handling for all subsequent joins in
+      *    the same SparkSession. This is a one-way ratchet — the
+      *    library never disables skew handling (matching Spark's
+      *    default of `enabled = true` since 3.2).
+      *  - Cross joins (`join_cross`) and the streaming foreachBatch
+      *    path do NOT emit the hint from this field. Streaming is
+      *    unaffected because the AQE config is already session-
+      *    global by the time any query runs; setting it on a
+      *    streaming batchModel would be redundant. Cross joins
+      *    have no key to skew on.
+      *  - Concurrent `toDataFrame` calls with different `salt`
+      *    values race on the shared `SQLConf`. Whichever
+      *    `saltValue` was last-written wins. This is acceptable for
+      *    skew handling (the factor is a tuning knob, not a
+      *    correctness invariant) but documented for completeness.
+      *
+      * Sentinel: `None` (the default) means "no hint". `n = 0` is
+      * the disable sentinel (mirrors the
+      * `broadcastJoinThreshold = 0` convention): the setter
+      * converts it to `None`. `n >= 1` enables skew handling.
+      *
+      * Set via the fluent `.withSalt(n)` setter. Survives the
+      * fluent chain the same way `broadcastJoinThreshold` does.
+      * Manifest round-trip preserves the salt: a non-default value
+      * is emitted under `runtime.salt` and restored on `fromJson`.
+      * Missing/absent means `None` (the library default).
+      *
+      * Join-construction propagation (PR #306 pattern): when the
+      * salt is set on EITHER side of a `join_one` / `join_many`,
+      * the op's `salt` is populated via
+      * `this.salt.orElse(other.salt)`. Precedence: LEFT wins when
+      * both sides carry a salt; RIGHT is the fallback. The same
+      * `orElse` rule applies to the joined-manifest reader.
+      *
+      * Type-driven note: the salt value is just a config int —
+      * no DataFrame column, no closure over stateful class, no
+      * cross-JVM serialization concerns. The library doesn't add a
+      * salt column to the DataFrame; Spark AQE handles skew at the
+      * shuffle stage.
+      *
+      * */
+    val salt: Option[Int] = None,
     /** Opt-in DataFrame persistence (a.k.a. "materialize" — pre-collect
       * caching). When `Some(level)`, the fast path of `toDataFrame`
       * (the `auditSink.isEmpty && resultCache.isEmpty` branch) calls

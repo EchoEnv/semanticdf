@@ -637,7 +637,7 @@ object SemanticManifest {
     // call below. The outer block here carries the runtime set on
     // the joined model specifically (post-join query() path). Missing
     // block → library defaults, mirroring the single-table reader.
-    val (maxRowsValue, broadcastValue, materializeValue) = readRuntime(obj)
+    val (maxRowsValue, broadcastValue, materializeValue, saltValue) = readRuntime(obj)
 
     // Embedded per-side single-table manifests.
     val leftManifest  = modelObj.path("left")
@@ -841,6 +841,7 @@ object SemanticManifest {
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
       materializeLevel = materializeValue,
+      salt = saltValue,
     )
   }
 
@@ -1055,7 +1056,7 @@ object SemanticManifest {
     // getOrElse is needed. A legacy manifest without the block
     // parses cleanly because both fields default to the library
     // behavior.
-    val (maxRowsValue, broadcastValue, materializeValue) = readRuntime(obj)
+    val (maxRowsValue, broadcastValue, materializeValue, saltValue) = readRuntime(obj)
 
     val base: SemanticOp = if (isStreaming) {
       SemanticStreamingTableOp.of(
@@ -1096,6 +1097,7 @@ object SemanticManifest {
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
       materializeLevel = materializeValue,
+      salt = saltValue,
     )
   }
 
@@ -1380,12 +1382,13 @@ object SemanticManifest {
     */
   private def readRuntime(
       obj: com.fasterxml.jackson.databind.JsonNode,
-  ): (Option[Int], Option[Long], Option[org.apache.spark.storage.StorageLevel]) = {
+  ): (Option[Int], Option[Long], Option[org.apache.spark.storage.StorageLevel], Option[Int]) = {
     val runtimeObj = obj.path("runtime")
     (
       optIntField(runtimeObj, "maxRows"),
       optLongField(runtimeObj, "broadcastJoinThreshold"),
       readStorageLevel(runtimeObj),
+      optIntField(runtimeObj, "salt"),
     )
   }
 
@@ -1404,7 +1407,8 @@ object SemanticManifest {
   ): Unit = {
     if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows ||
         model.broadcastJoinThreshold.isDefined ||
-        model.materializeLevel.isDefined) {
+        model.materializeLevel.isDefined ||
+        model.salt.isDefined) {
       val runtimeObj = root.putObject("runtime")
       if (model.maxRows != io.semanticdf.cache.CacheKey.DefaultMaxRows)
         runtimeObj.put("maxRows", model.maxRows)
@@ -1413,6 +1417,9 @@ object SemanticManifest {
       }
       model.materializeLevel.foreach { level =>
         writeStorageLevel(runtimeObj.putObject("materializeLevel"), level)
+      }
+      model.salt.foreach { n =>
+        runtimeObj.put("salt", n)
       }
     }
   }
