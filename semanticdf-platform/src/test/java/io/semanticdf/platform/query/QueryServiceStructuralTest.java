@@ -111,26 +111,55 @@ class QueryServiceStructuralTest {
    */
   @Test
   void queryService_toQueryResult_truncatedFlagUsesCacheBridgeDefaultMaxRows() throws IOException {
+    // PR #312 + audit re-review: BOTH `toQueryResult` and
+    // `toQueryResultFromJournaled` read the truncated flag.
+    // The earlier structural test only checked `toQueryResult`; a
+    // regression in `toQueryResultFromJournaled` would have slipped
+    // through. Now both are checked. Note: the methods appear in
+    // the file in this order — toQueryResultFromJournaled is
+    // defined FIRST (line 243), toQueryResult SECOND (line 536).
     String src = readQueryService();
-    int toQueryResultOpen = src.indexOf("static QueryResult toQueryResult(");
-    int braceOpen = src.indexOf("{", toQueryResultOpen);
-    int braceClose = findMatchingBrace(src, braceOpen);
-    String body = src.substring(braceOpen, braceClose);
 
-    // The old (wrong) threshold must NOT appear anywhere in the
-    // toQueryResult body. If it does, someone reintroduced the bug.
-    assertTrue(!body.contains("> 1024"),
-        "toQueryResult() must not compare rowCount against 1024; the real "
-            + "cap is CacheBridge.DefaultMaxRows (100,000). See #263.");
+    // --- toQueryResultFromJournaled (cache-hit / Restate-journaled path) ---
+    {
+      // Find the method DEFINITION, not the call site. The method
+      // definition starts with `static QueryResult toQueryResultFromJournaled(`
+      // (note: definition form has the `static` keyword + return type).
+      // A bare `indexOf("toQueryResultFromJournaled")` would match the
+      // first call site (line 199), not the method (line 243).
+      int fromJournaledOpen = src.indexOf("static QueryResult toQueryResultFromJournaled(");
+      assertTrue(fromJournaledOpen >= 0,
+          "QueryService.toQueryResultFromJournaled must exist (regression-protected).");
+      int braceOpen = src.indexOf("{", fromJournaledOpen);
+      int braceClose = findMatchingBrace(src, braceOpen);
+      String body = src.substring(braceOpen, braceClose);
 
-    // The new threshold MUST appear, and it MUST be the env-var-aware
-    // `effectiveMaxRows()` accessor (not a hand-coded literal).
-    // `effectiveMaxRows` falls back to `CacheBridge.DefaultMaxRows`
-    // when no `SEMANTICDF_MAX_ROWS` env-var is set, so the historical
-    // 100,000 cap is preserved by default.
-    assertTrue(body.contains("CacheBridge.effectiveMaxRows()"),
-        "toQueryResult() must call CacheBridge.effectiveMaxRows() to compute "
-            + "the truncated flag (env-var-aware; falls back to DefaultMaxRows).");
+      assertTrue(!body.contains("> 1024"),
+          "toQueryResultFromJournaled() must not compare rowCount against 1024; "
+              + "the real cap is CacheBridge.DefaultMaxRows (100,000). See #263.");
+
+      assertTrue(body.contains("CacheBridge.effectiveMaxRows()"),
+          "toQueryResultFromJournaled() must call CacheBridge.effectiveMaxRows() "
+              + "to compute the truncated flag (env-var-aware; falls back to DefaultMaxRows).");
+    }
+
+    // --- toQueryResult (fresh query path) ---
+    {
+      int toQueryResultOpen = src.indexOf("static QueryResult toQueryResult(");
+      assertTrue(toQueryResultOpen >= 0,
+          "QueryService.toQueryResult must exist (regression-protected).");
+      int braceOpen = src.indexOf("{", toQueryResultOpen);
+      int braceClose = findMatchingBrace(src, braceOpen);
+      String body = src.substring(braceOpen, braceClose);
+
+      assertTrue(!body.contains("> 1024"),
+          "toQueryResult() must not compare rowCount against 1024; the real "
+              + "cap is CacheBridge.DefaultMaxRows (100,000). See #263.");
+
+      assertTrue(body.contains("CacheBridge.effectiveMaxRows()"),
+          "toQueryResult() must call CacheBridge.effectiveMaxRows() to compute "
+              + "the truncated flag (env-var-aware; falls back to DefaultMaxRows).");
+    }
   }
 
   // --- helpers ---

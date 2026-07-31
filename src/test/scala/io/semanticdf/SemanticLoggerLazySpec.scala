@@ -1,5 +1,7 @@
 package io.semanticdf
 
+import org.apache.logging.log4j.{Level, LogManager}
+import org.apache.logging.log4j.core.{Logger => CoreLogger}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
@@ -9,8 +11,16 @@ import org.scalatest.matchers.should.Matchers
   * evaluated the string interpolation even when the log level was INFO (where
   * the message would be discarded). This test proves the bug by constructing
   * a sentinel-throwing message and verifying it's NOT evaluated at INFO level.
+  *
+  * Uses Log4j 2 Core (not the Log4j 1.x bridge) to match
+  * [[LogBroadcastHintLevelSpec]]'s pattern. The previous version of this
+  * test used `org.apache.log4j.Logger` (1.x bridge), which is being phased
+  * out for consistency with the new spec.
   */
 class SemanticLoggerLazySpec extends AnyFunSuite with Matchers {
+
+  private def coreLogger: CoreLogger =
+    LogManager.getLogger("io.semanticdf.SemanticLogger").asInstanceOf[CoreLogger]
 
   test("REGRESSION: log messages are NOT evaluated when the level is disabled") {
     // The bug: `SemanticLogger.logX(msg: => String)` is by-name, but
@@ -23,7 +33,7 @@ class SemanticLoggerLazySpec extends AnyFunSuite with Matchers {
     // To prove the bug, we wrap the message in a zero-arg thunk that
     // toggles a side-effect flag. By-name semantics require the thunk
     // to be invoked EXACTLY ONCE per call, so the flag flip is observable.
-    val logger = org.apache.log4j.Logger.getLogger("io.semanticdf.SemanticLogger")
+    val logger = coreLogger
 
     @volatile var evaluated = false
     def expensiveMessage(): String = {
@@ -33,7 +43,7 @@ class SemanticLoggerLazySpec extends AnyFunSuite with Matchers {
 
     // Ensure DEBUG is disabled (Spark default is INFO — DEBUG is off).
     val originalLevel = logger.getLevel
-    logger.setLevel(org.apache.log4j.Level.INFO)
+    logger.setLevel(Level.INFO)
     try {
       evaluated = false
       // Pass the ZERO-ARG THUNK as the argument. Scala wraps `expensiveMessage()`
@@ -54,9 +64,9 @@ class SemanticLoggerLazySpec extends AnyFunSuite with Matchers {
       evaluated = true
       "this message was constructed"
     }
-    val logger = org.apache.log4j.Logger.getLogger("io.semanticdf.SemanticLogger")
+    val logger = coreLogger
     val originalLevel = logger.getLevel
-    logger.setLevel(org.apache.log4j.Level.TRACE)
+    logger.setLevel(Level.TRACE)
     try {
       evaluated = false
       SemanticLogger.debug(expensiveMessage())

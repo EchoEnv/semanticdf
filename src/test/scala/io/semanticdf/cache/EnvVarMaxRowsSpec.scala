@@ -55,16 +55,22 @@ class EnvVarMaxRowsSpec extends AnyFunSuite with Matchers {
   test("effectiveMaxRows precedence: test-override > env-var > library default") {
     // Save and restore the test-only override. Production never
     // sets this; we mutate it via the spec's try/finally to keep
-    // tests isolated.
+    // tests isolated. The env-var layer can't be mutated in-process
+    // (sys.env is immutable per JVM), so we exercise the
+    // override-vs-default tier here and the env-var-vs-default
+    // tier in EnvVarMaxRowsIntegrationSpec (which calls executeQuery).
     val originalOverride = CacheBridge.envMaxRowsOverride
     try {
       // Default fallback: no env, no override.
       CacheBridge.envMaxRowsOverride = None
-      assert(CacheBridge.effectiveMaxRows == CacheBridge.DefaultMaxRows)
+      assert(CacheBridge.effectiveMaxRows == CacheBridge.DefaultMaxRows,
+        s"no override + no env should fall back to DefaultMaxRows=${CacheBridge.DefaultMaxRows}, " +
+        s"got ${CacheBridge.effectiveMaxRows}")
       // Test-override wins over the env-var path: the override
       // is the highest-precedence source.
       CacheBridge.envMaxRowsOverride = Some(7)
-      assert(CacheBridge.effectiveMaxRows == 7)
+      assert(CacheBridge.effectiveMaxRows == 7,
+        s"override=Some(7) should win regardless of env, got ${CacheBridge.effectiveMaxRows}")
     } finally {
       CacheBridge.envMaxRowsOverride = originalOverride
     }
