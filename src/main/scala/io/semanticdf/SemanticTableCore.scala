@@ -124,22 +124,31 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       // Audit + cache path.
       val t0 = System.nanoTime()
       val model = this.name.getOrElse(sourceTable.getOrElse("unknown"))
-      // If auditRequest is None, this SemanticTable was built by a
-      // result-shaping chain AFTER query() (e.g. orderBy().limit()
-      // post-query). The cache key would be a meaningless model-only
-      // hash and the cached value would be wrong. Skip the cache
-      // entirely in this case. The cache only makes sense for
-      // repeated IDENTICAL queries.
-      val req   = auditRequest.getOrElse(AuditQueryRequest(model = model, version = this.version))
+      // auditRequest is set by query(); both audit dedupHash and cache
+      // key derive from it. Without it, the audit dedup is meaningless
+      // and the cache is a silent no-op — throw so the user notices.
+      // Post-query shape-changers clear it (with resultCache) via
+      // invalidateAuditRequest, so reaching here with None is a user error.
+      if (auditRequest.isEmpty) {
+        val offenders = List(
+          Option.when(auditSink.isDefined)("auditSink"),
+          Option.when(resultCache.isDefined)("resultCache"),
+        ).flatten
+        val verb = if (offenders.length > 1) "are" else "is"
+        throw new IllegalStateException(
+          s"SemanticTable.toDataFrameInternal: ${offenders.mkString(" and ")} " +
+          s"$verb set but query() was never called to capture the request shape. " +
+          s"Audit and caching require query(measures = ...). Try " +
+          s"yourModel.query(measures = Seq(\"<your_measure>\")).toDataFrame(spark) instead.")
+      }
+      val req   = auditRequest.get
       val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
       val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))
 
-      // Compute the cache key (no Spark work). Only attempt cache if
-      // auditRequest is set AND the cache is configured AND the
-      // request is well-formed (has a model).
+      // Cache key: only computed when a cache is configured. The
+      // auditRequest is non-empty here (enforced above).
       val cacheKeyOpt: Option[String] =
-        if (auditRequest.isEmpty) None
-        else resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req, maxRows))
+        resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req, maxRows))
 
       // Cache check: on hit, rebuild a DataFrame from the cached rows
       // and skip Spark's planner entirely. This is the "best performance"
@@ -554,15 +563,13 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           materializeLevel = materializeLevel,
           salt = salt)
 
-  /** Drop the captured audit request. The cache key is derived from
-    * the audit request, so dropping it also disables the result
-    * cache for this table. Used by result-shaping chainable
-    * methods (orderBy, limit, where, having, atTimeGrain) when
-    * they're called AFTER `query()`. Without this, the cached key
-    * wouldn't reflect the new shape, and a hit could return the
-    * wrong rows. */
+  /** Drop the captured audit request AND clear `resultCache`. Either
+    * field alone is unsound: a stale cache key without a request, or
+    * a cache key computed against a new shape. Used by result-shaping
+    * chainable methods (orderBy, limit, where, having, atTimeGrain)
+    * when they're called AFTER `query()`. */
   private[semanticdf] def invalidateAuditRequest(): SemanticTable =
-    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, None, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+    new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, None, None, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
           salt = salt)
 
