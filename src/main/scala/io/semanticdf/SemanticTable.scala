@@ -211,11 +211,18 @@ final class SemanticTable private[semanticdf] (
       * `join_many`). When `Some(n)`, `toDataFrameInternal`
       * configures Spark's Adaptive Query Execution to handle skewed
       * partitions: sets
-      * `spark.sql.adaptive.skewJoin.enabled = true` (idempotent)
-      * and `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`.
-      * Spark AQE then detects skewed partitions at runtime and
-      * broadcasts them automatically — the production-grade
-      * solution.
+      * `spark.sql.adaptive.enabled = true` (the parent AQE config
+      * — required for the skew child to take effect),
+      * `spark.sql.adaptive.skewJoin.enabled = true`, and
+      * `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`.
+      *
+      * Spark's actual behavior (per `OptimizeSkewedJoin.scala`):
+      * AQE **divides each skewed shuffle partition into smaller
+      * sub-partitions and replicates the matching partition on the
+      * other side of the join** — they run as parallel tasks. It
+      * is NOT auto-broadcast semantics (a common misconception;
+      * corrected in the post-#318 audit). The previous Scaladoc
+      * claimed AQE "broadcasts" skewed partitions, which was wrong.
       *
       * Why not a custom `rand() * n` salt column on both sides?
       * Because in a shuffled join, the LEFT and RIGHT sides run on
@@ -225,33 +232,52 @@ final class SemanticTable private[semanticdf] (
       * `concat(L_key, "|", L_salt) === concat(R_key, "|", R_salt)`
       * would produce empty right-side results for all rows —
       * wrong results, not just slow ones. Spark AQE handles skew
-      * correctly at the shuffle stage via dynamic partition
-      * broadcast, without a custom salt column. See SaltSpec for
-      * the end-to-end verification.
+      * correctly at the shuffle stage without a custom salt column.
       *
       * `n` is the `skewedPartitionFactor` threshold: Spark considers
-      * a partition skewed if its size exceeds `n * median_size` and
-      * broadcasts it. Spark's default is `5`. A larger `n` makes
-      * the skew detection more conservative (only very-skewed
-      * partitions are broadcast); a smaller `n` is more aggressive.
+      * a partition skewed if its size exceeds
+      * `max(n * median_size, thresholdBytes)`. Spark's default is
+      * `5`. A larger `n` makes skew detection more conservative
+      * (only very-skewed partitions are split); a smaller `n` is
+      * more aggressive.
       *
       * Trade-offs:
       *  - The AQE config is session-global, not per-query. Setting
       *    it once enables skew handling for all subsequent joins in
       *    the same SparkSession. This is a one-way ratchet — the
-      *    library never disables skew handling (matching Spark's
-      *    default of `enabled = true` since 3.2).
-      *  - Cross joins (`join_cross`) and the streaming foreachBatch
-      *    path do NOT emit the hint from this field. Streaming is
-      *    unaffected because the AQE config is already session-
-      *    global by the time any query runs; setting it on a
-      *    streaming batchModel would be redundant. Cross joins
-      *    have no key to skew on.
+      *    library never disables skew handling.
+      *  - `spark.sql.adaptive.enabled = true` is a session-global
+      *    override. If the operator has explicitly disabled AQE for
+      *    compliance/audit reasons, calling `withSalt` would
+      *    silently re-enable it. The library's position: `withSalt`
+      *    is an explicit opt-in; the override is necessary for the
+      *    hint to activate. Operators who need AQE disabled can
+      *    call `conf.set("spark.sql.adaptive.enabled", "false")`
+      *    AFTER the query that uses salt.
+      *  - The streaming `batchModel` constructor in
+      *    `SemanticTableStreaming` now carries `salt = this.salt`
+      *    and `broadcastJoinThreshold = this.broadcastJoinThreshold`
+      *    (post-#318 fix). Without this, a streaming source with
+      *    `withSalt(n)` would lose skew handling on its first
+      *    micro-batch (cold session) and race against any
+      *    concurrent reader.
+      *  - **Streaming limitation**: Spark's `ResolveWriteToStream`
+      *    rule disables AQE for streaming DataFrames automatically
+      *    (warning: `spark.sql.adaptive.enabled is not supported
+      *    in streaming DataFrames/Datasets and will be disabled`).
+      *    So `withSalt` on a streaming model CANNOT enable skew
+      *    handling at the streaming query level — the AQE config
+      *    is applied by the library, but Spark's rule overrides
+      *    `adaptive.enabled = false` during streaming plan
+      *    construction. The skew-handling hint is therefore only
+      *    effective for batch joins (`join_one` / `join_many`).
+      *    For streaming queries, use batch-mode joins or accept
+      *    the Spark AQE limitation.
+      *  - Cross joins (`join_cross`) do NOT emit the hint from
+      *    this field — cross joins have no key to skew on.
       *  - Concurrent `toDataFrame` calls with different `salt`
-      *    values race on the shared `SQLConf`. Whichever
-      *    `saltValue` was last-written wins. This is acceptable for
-      *    skew handling (the factor is a tuning knob, not a
-      *    correctness invariant) but documented for completeness.
+      *    values race on the shared `SQLConf`. Whichever value
+      *    was last-written wins. Acceptable for a tuning knob.
       *
       * Sentinel: `None` (the default) means "no hint". `n = 0` is
       * the disable sentinel (mirrors the
@@ -263,13 +289,20 @@ final class SemanticTable private[semanticdf] (
       * Manifest round-trip preserves the salt: a non-default value
       * is emitted under `runtime.salt` and restored on `fromJson`.
       * Missing/absent means `None` (the library default).
+      * Hand-rolled manifests with `salt = 0` or `salt < 1` are
+      * rejected by the reader (`require(salt.forall(_ >= 1))`).
       *
       * Join-construction propagation (PR #306 pattern): when the
       * salt is set on EITHER side of a `join_one` / `join_many`,
       * the op's `salt` is populated via
       * `this.salt.orElse(other.salt)`. Precedence: LEFT wins when
-      * both sides carry a salt; RIGHT is the fallback. The same
-      * `orElse` rule applies to the joined-manifest reader.
+      * both sides carry a salt; RIGHT is the fallback. The op's
+      * salt is preserved across in-memory `withDimensions` /
+      * `withMeasures` rewrites; the joined-manifest reader does
+      * NOT restore the op-level salt (it only restores the OUTER
+      * table's salt) — this is intentional, since `compileEquiJoin`
+      * does not read the op-level salt (skew handling is driven
+      * by the OUTER `SemanticTable.salt`).
       *
       * Type-driven note: the salt value is just a config int —
       * no DataFrame column, no closure over stateful class, no

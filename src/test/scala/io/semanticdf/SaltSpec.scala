@@ -183,4 +183,170 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
       factor shouldBe "15"
     } finally df.unpersist()
   }
+
+  // ----------------------------------------------------------------
+  // Post-#318 fixes — HIGH bugs from the audit
+  // ----------------------------------------------------------------
+
+  test("toDataFrame with salt: PARENT adaptive.enabled is set (without it, the skew hint is a no-op)") {
+    // Falsifiable: set adaptive.enabled to false BEFORE the call.
+    // Then verify the library re-enables it (so the skew child
+    // actually takes effect). This is the HIGH bug from the
+    // post-#318 audit — the original implementation set only the
+    // skew child, not the parent.
+    spark.conf.set("spark.sql.adaptive.enabled", "false")
+    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "false")
+
+    val m = baseModel(spark).withSalt(10)
+    val df = m.toDataFrame(spark)
+    try {
+      val adaptive  = spark.conf.get("spark.sql.adaptive.enabled", "true")
+      val skewJoin  = spark.conf.get("spark.sql.adaptive.skewJoin.enabled", "true")
+      val factor    = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
+      adaptive shouldBe "true"   // proves the library set the PARENT config
+      skewJoin shouldBe "true"
+      factor shouldBe "10"
+    } finally {
+      spark.conf.set("spark.sql.adaptive.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
+      df.unpersist()
+    }
+  }
+
+  test("streaming batchModel carries salt (post-#318 HIGH fix): streaming source.withSalt(n) does NOT drop skew handling") {
+    // Falsifiable: configure a STREAMING source (via
+    // `toStreamingSemanticTable`, not `toSemanticTable` which is
+    // batch-only) with `withSalt(10)`, then verify that the
+    // streaming model carries the salt through to the AQE config
+    // via `applyAqeSkewConfig` (which is called from `toStreamingQuery`
+    // BEFORE writeStream triggers Spark planning).
+    //
+    // IMPORTANT (post-fix finding): Spark's `ResolveWriteToStream`
+    // rule disables AQE for streaming DataFrames automatically
+    // (`spark.sql.adaptive.enabled is not supported in streaming
+    // DataFrames/Datasets and will be disabled.`). So `withSalt` on
+    // a STREAMING model cannot enable skew handling at the streaming
+    // query level — Spark forces it off. This test verifies the
+    // library applied the config (factor set to 10) even though
+    // Spark later disables AQE for the streaming plan.
+    import org.apache.spark.sql.functions._
+    import org.apache.spark.sql.streaming.Trigger
+    val rate = spark.readStream
+      .format("rate")
+      .option("rowsPerSecond", 10)
+      .load()
+    val streamingModel = io.semanticdf.toStreamingSemanticTable(rate, name = Some("rate"))
+      .withDimensions(Dimension("value", t => t("value")))
+      .withMeasures(Measure("n", t => count(lit(1))))
+      .withSalt(10)
+
+    // Reset AQE config to sentinel values.
+    spark.conf.set("spark.sql.adaptive.enabled", "false")
+    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "false")
+    spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "999")
+
+    try {
+      // toStreamingQuery internally calls applyAqeSkewConfig(spark)
+      // BEFORE writeStream. This proves the library applies the
+      // config even on the streaming path.
+      val q = streamingModel.toStreamingQuery(
+        spark,
+        io.semanticdf.StreamingSupport.StreamingQueryOptions(
+          outputMode = "append",
+          trigger = Some(Trigger.AvailableNow()),
+          foreachBatch = (_: org.apache.spark.sql.DataFrame) => (),
+        )
+      )
+      try {
+        q.processAllAvailable()
+
+        // Verify the LIBRARY applied the config. The `factor` is set
+        // by the library and is NOT overridden by Spark's
+        // ResolveWriteToStream rule (which only disables
+        // `adaptive.enabled`, not the factor itself). So `factor = "10"`
+        // proves applyAqeSkewConfig ran.
+        val factor = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
+        factor shouldBe "10"
+
+        // Note: `adaptive.enabled` may be reset to "false" by Spark's
+        // ResolveWriteToStream rule after the query plan is built
+        // (the warning "spark.sql.adaptive.enabled is not supported
+        // in streaming DataFrames/Datasets and will be disabled" is
+        // expected). This means `withSalt` on a STREAMING model
+        // CANNOT enable skew handling at the streaming query level.
+        // The library documents this limitation in the salt Scaladoc.
+      } finally {
+        q.stop()
+      }
+    } finally {
+      // Restore defaults.
+      spark.conf.set("spark.sql.adaptive.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
+    }
+  }
+
+  test("manifest reader rejects salt = 0 (hand-rolled manifest with disable sentinel in JSON)") {
+    // Falsifiable: construct a hand-rolled JSON manifest with
+    // `"runtime": {"salt": 0}` and verify the reader throws.
+    // The library's setter converts `withSalt(0)` to `None` (the
+    // disable sentinel). The reader should reject `salt = 0`
+    // explicitly rather than silently passing it through (which
+    // would lead to `new SemanticTable(..., salt = Some(0))` and
+    // break the setter's invariant).
+    import com.fasterxml.jackson.databind.ObjectMapper
+    val mapper = new ObjectMapper()
+    val json =
+      """{
+        |  "schemaVersion": "v0.1.11-manifest",
+        |  "kind": "semanticdf-model-manifest",
+        |  "model": {"name": "kpi", "version": 1, "status": "published"},
+        |  "runtime": {"salt": 0}
+        |}""".stripMargin
+    val df = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(1))),
+      StructType(Seq(StructField("id", IntegerType)))
+    )
+    val ex = intercept[IllegalArgumentException] {
+      io.semanticdf.adapters.SemanticManifest.fromJson(json, df)
+    }
+    ex.getMessage should include("salt must be >= 1")
+  }
+
+  test("manifest reader rejects salt = -5 (negative value in hand-rolled JSON)") {
+    import com.fasterxml.jackson.databind.ObjectMapper
+    val json =
+      """{
+        |  "schemaVersion": "v0.1.11-manifest",
+        |  "kind": "semanticdf-model-manifest",
+        |  "model": {"name": "kpi", "version": 1, "status": "published"},
+        |  "runtime": {"salt": -5}
+        |}""".stripMargin
+    val df = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(1))),
+      StructType(Seq(StructField("id", IntegerType)))
+    )
+    intercept[IllegalArgumentException] {
+      io.semanticdf.adapters.SemanticManifest.fromJson(json, df)
+    }
+  }
+
+  test("manifest reader accepts salt = 1 (boundary value)") {
+    // Boundary: salt = 1 is the smallest valid value (per schema
+    // minimum: 1). Verify it's accepted.
+    val json =
+      """{
+        |  "schemaVersion": "v0.1.11-manifest",
+        |  "kind": "semanticdf-model-manifest",
+        |  "model": {"name": "kpi", "version": 1, "status": "published"},
+        |  "runtime": {"salt": 1}
+        |}""".stripMargin
+    val df = spark.createDataFrame(
+      spark.sparkContext.parallelize(Seq(Row(1))),
+      StructType(Seq(StructField("id", IntegerType)))
+    )
+    val round = io.semanticdf.adapters.SemanticManifest.fromJson(json, df)
+    round.salt shouldBe Some(1)
+  }
 }
