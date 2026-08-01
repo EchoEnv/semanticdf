@@ -71,4 +71,22 @@ object TimeGrain {
 
   /** Truncate a column to `grain`. `grain` should already be [[normalize normalized]]. */
   def truncate(grain: Grain, col: Column): Column = date_trunc(grain, col)
+
+  /** True if `g1` is at-least-as-fine as `g2` (i.e., g1's index in
+    * [[Order]] is <= g2's). Both must be normalized first. Throws on
+    * unknown grain (parse don't validate). */
+  def finerOrEqual(g1: Grain, g2: Grain): Boolean =
+    orderIndex(g1) <= orderIndex(g2)
+
+  /** True if `g1` is strictly finer than `g2`. */
+  def finer(g1: Grain, g2: Grain): Boolean =
+    orderIndex(g1) < orderIndex(g2)
+
+  /** Index of `g` in [[Order]]; throws on unknown. */
+  private def orderIndex(g: Grain): Int =
+    Order.indexOf(g) match {
+      case -1 => throw new IllegalArgumentException(
+        s"Unknown time grain '$g'. Valid: ${Order.map(_.toLowerCase).mkString(", ")}")
+      case idx => idx
+    }
 }
