@@ -1021,6 +1021,19 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   /** Look up a measure by name. */
   def findMeasure(name: String): Option[Measure] = measures.get(name)
 
+  /** Return the declared `smallestTimeGrain` of a time dimension,
+    * if `dimName` is a time dimension with one declared. Returns None
+    * for non-time dimensions or unnamed dimensions.
+    *
+    * The grain is normalized to the canonical Spark `date_trunc` unit
+    * (e.g. "month" -> "MONTH").
+    */
+  def findDimensionTimeGrain(dimName: String): Option[String] =
+    findDimension(dimName).flatMap { d =>
+      if (d.isTimeDimension) d.smallestTimeGrain.map(TimeGrain.normalize)
+      else None
+    }
+
   /** All joins declared on this semantic model, in declaration order
     * (outermost first; for chained joins the order matches applyJoins).
     *
