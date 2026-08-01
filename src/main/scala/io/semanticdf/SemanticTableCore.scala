@@ -103,6 +103,21 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     // Config is session-global. Setting it once enables skew
     // handling for all subsequent joins in the SparkSession. The
     // `conf.set` calls are inexpensive (no plan invalidation).
+    // Validate the audit/cache invariant BEFORE mutating session config,
+    // so a misuse fails fast without leaving the session polluted.
+    if (auditRequest.isEmpty && (auditSink.isDefined || resultCache.isDefined)) {
+      val offenders = List(
+        Option.when(auditSink.isDefined)("auditSink"),
+        Option.when(resultCache.isDefined)("resultCache"),
+      ).flatten
+      val verb = if (offenders.length > 1) "are" else "is"
+      throw new IllegalStateException(
+        s"withAuditSink and/or withResultCache require a query request. " +
+        s"${offenders.mkString(" and ")} $verb set but query() was never called " +
+        s"to capture the request shape. Try " +
+        s"model.query(measures = Seq(\"your_measure\"), dimensions = Seq(\"your_dim\"))." +
+        s"toDataFrame(spark) instead.")
+    }
     applyAqeSkewConfig(spark)
 
     if (auditSink.isEmpty && resultCache.isEmpty) {
@@ -121,26 +136,12 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
         case None       => compiled
       }
     } else {
-      // Audit + cache path.
+      // Audit + cache path. auditRequest is guaranteed non-empty by
+      // the pre-check above (cleared along with resultCache by
+      // invalidateAuditRequest, which any post-query shape-changer
+      // calls).
       val t0 = System.nanoTime()
       val model = this.name.getOrElse(sourceTable.getOrElse("unknown"))
-      // auditRequest is set by query(); both audit dedupHash and cache
-      // key derive from it. Without it, the audit dedup is meaningless
-      // and the cache is a silent no-op — throw so the user notices.
-      // Post-query shape-changers clear it (with resultCache) via
-      // invalidateAuditRequest, so reaching here with None is a user error.
-      if (auditRequest.isEmpty) {
-        val offenders = List(
-          Option.when(auditSink.isDefined)("auditSink"),
-          Option.when(resultCache.isDefined)("resultCache"),
-        ).flatten
-        val verb = if (offenders.length > 1) "are" else "is"
-        throw new IllegalStateException(
-          s"SemanticTable.toDataFrameInternal: ${offenders.mkString(" and ")} " +
-          s"$verb set but query() was never called to capture the request shape. " +
-          s"Audit and caching require query(measures = ...). Try " +
-          s"yourModel.query(measures = Seq(\"<your_measure>\")).toDataFrame(spark) instead.")
-      }
       val req   = auditRequest.get
       val whereHash  = req.where.map(where => io.semanticdf.audit.PredicateHasher.hash(where))
       val havingHash = req.having.map(having => io.semanticdf.audit.PredicateHasher.hash(having))

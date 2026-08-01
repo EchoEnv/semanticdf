@@ -84,6 +84,11 @@ final class SemanticTable private[semanticdf] (
       * Default `None`. When `auditSink` is also `None`, this field
       * is dormant — no hashing cost.
       *
+      * Set by `query(measures, dimensions, ...)`. Calling
+      * `.toDataFrame()` on a model with `auditSink` or `resultCache`
+      * set but `auditRequest` empty throws `IllegalStateException`
+      * (both systems derive their keys from this field).
+      *
       * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /
       * `join_cross`, the outer's `auditRequest` is
@@ -92,8 +97,8 @@ final class SemanticTable private[semanticdf] (
       * captured request is needed to compute the cache key
       * (see [[io.semanticdf.cache.CacheKey.forRequest]]), so the
       * propagation rule matches `resultCache` (they're set/cleared
-      * together). Implementation: `joinAuditRequest` helper in
-      * `SemanticTableMutation`. */
+      * together via `invalidateAuditRequest`). Implementation:
+      * `joinAuditRequest` helper in `SemanticTableMutation`. */
     val auditRequest: Option[AuditQueryRequest] = None,
     /** Result cache — when set, every `toDataFrame` / `execute` call
       * that traces back to a `query()` invocation checks the cache
@@ -104,8 +109,12 @@ final class SemanticTable private[semanticdf] (
       *
       * The cache key is derived from `auditRequest`, so the
       * fluent chain must capture the request via `query(...)` for
-      * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
-      * bypass the cache.
+      * caching to work — calling `.toDataFrame(spark)` or
+      * `.execute(spark)` on a model with `withResultCache` set
+      * but no preceding `query(...)` throws `IllegalStateException`.
+      * The audit-only path (just `withAuditSink`, no cache) has the
+      * same requirement: the audit `dedupHash` is derived from
+      * the request shape captured by `query()`.
       *
       * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /

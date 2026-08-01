@@ -116,7 +116,10 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       throw new IllegalArgumentException(
         s"dimension names collide across declared + derived dims: ${collisions.mkString(", ")}")
     val extra = materialized.map(d => d.name -> d).toMap
-    root match {
+    // Adding/replacing dimensions changes the result shape, so any
+    // captured auditRequest (and its derived cache key) is stale.
+    // invalidateAuditRequest clears both fields together.
+    val next = root match {
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
@@ -212,11 +215,23 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           materializeLevel = materializeLevel,
           salt = salt)
 
+      case a: SemanticAggregateOp =>
+        // Aggregate has no dimensions field of its own — the dimensions
+        // belong to the source SemanticTableOp. Recurse.
+        val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt).withDimensions(dims: _*)
+        new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt)
+
       case _ =>
         throw new IllegalStateException(
           s"withDimensions: unexpected root type ${root.getClass.getSimpleName}"
         )
     }
+    // Invalidate any captured audit/cache state — the shape changed.
+    if (next.auditRequest.isDefined || next.resultCache.isDefined) next.invalidateAuditRequest() else next
   }
 
   /** Extend the model with measures. Handles single-table and joined roots.
