@@ -1,5 +1,89 @@
 # Release notes
 
+## v0.2.3 — runtime tuning + audit-cache co-invariance
+
+33 PRs. 915 library tests green on Spark 3.5.8 + 4.1.1 (was 848). Two new
+runtime knobs, one enforced invariant, one walk-through doc, two runnable
+examples.
+
+### Headline
+
+- **`withMaterialize(level)` — opt-in DataFrame persistence** (`withMaterialize(StorageLevel.MEMORY_AND_DISK)`).
+  On the fast path of `toDataFrame` (no audit, no cache), `df.persist(level)`
+  is applied so subsequent actions reuse the persisted storage instead of
+  re-executing the Spark plan. User manages cleanup via `df.unpersist()`
+  on the returned DataFrame. Default `None` (no persist).
+- **`withSalt(n)` — opt-in skew-handling via Spark AQE**. Sets
+  `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n` (and re-enables
+  the parent `adaptive.enabled` flag). AQE splits each skewed shuffle
+  partition into smaller sub-partitions and replicates the matching
+  partition on the other side. Default `None`. Streaming: no-op
+  (Spark's `ResolveWriteToStream` disables AQE for streaming DataFrames).
+- **`auditRequest` / `auditSink` / `resultCache` co-invariance is now
+  enforced**. Calling `.toDataFrame(spark)` (or `.execute(spark)`) with
+  `auditSink` or `resultCache` set but `auditRequest` empty throws
+  `IllegalStateException`. Post-query shape-changers (`where`, `having`,
+  `orderBy`, `limit`, `atTimeGrain`, `withDimensions`, `withMeasures`,
+  `withRowFilter`, `withTransforms`) clear both fields together via
+  `invalidateAuditRequest`. Previously the cache was silently bypassed
+  and `dedupHash` collapsed to `model+version` only — two distinct
+  queries could share a dedup hash, defeating the platform's
+  `AuditService.append` dedup contract.
+- **`docs/tutorial-runtime-tuning.md`** — walk-through of the six
+  runtime knobs. Decision tree, when-to-use matrix, real-world
+  customer-analytics-dashboard scenario, anti-patterns.
+- **`examples/runtime-tuning/`** and **`examples/skewed-join/`** —
+  runnable examples demonstrating all six knobs and focused
+  skew-handling, respectively. Run via `mvn exec:java`.
+
+### Breaking change to flag
+
+`withAuditSink` and `withResultCache` now REQUIRE a preceding
+`query(measures, dimensions, ...)`. Without it, `.toDataFrame(spark)`
+throws. Direct chains like
+`model.withResultCache(c).groupBy().aggregate().toDataFrame(spark)`
+no longer work — they were silently no-ops before v0.2.3, so this
+makes the misuse loud. The throw message includes a working
+example call pattern.
+
+### Detailed change list
+
+- **Cache miss cap**: `maxRows` is applied to `.collect()` on the cache
+  miss path (and on the audit-only path). The fast path (no audit, no
+  cache) skips the cap because the user already has a tight DataFrame.
+- **`maxRows` round-trips through manifests and survives fluent chains**
+  including the outer envelope of a joined manifest.
+- **`broadcastJoinThreshold` propagation**: set BEFORE the join, not
+  after. LEFT-wins / RIGHT-fallback precedence at join construction.
+- **`auditRequest` joins the round-trip**: outer envelope of a joined
+  manifest preserves per-side and outer `auditRequest`.
+- **`executedPlan` capture**: `AuditEvent.executedPlan` is populated on
+  the success path so operators can inspect the actual Spark plan
+  that ran.
+- **Schema parity enforcement**: `schemas/manifest.schema.json` (repo)
+  and `src/test/resources/manifest.schema.json` (classpath) are
+  byte-identical by test.
+- **Streaming batchModel** threads `salt` + `broadcastJoinThreshold`
+  through `toStreamingQuery` (previously dropped both silently).
+
+### Test counts
+
+- Library: 915 (was 848 at v0.2.2). +67 across the post-v0.2.2 chain.
+- Platform: 212 (unchanged).
+
+### Known follow-ups
+
+- Streaming `emitStreamingAudit` `getOrElse` fallback: deferred. When
+  a streaming model has `withAuditSink` set without a preceding
+  `query()`, the streaming audit emits with empty `measures`/
+  `dimensions`. Separate concern (streaming has its own audit
+  contract). Future PR.
+- A handful of pre-existing example projects still reference
+  `semanticdf.version` 0.2.0 (overrides on the parent property).
+  Stale, out of scope for this release.
+- v0.2.3 did NOT bump the platform module's `0.1.0-SNAPSHOT` —
+  platform versioning is independent of the library.
+
 ## v0.2.2 — services-completion: durable registries, cache-first query path
 
 This release completes the platform's services-completion charter: every Restate service that previously existed as a P1 skeleton now executes against a durable, replay-safe substrate. The streaming foundation from v0.2.1 is untouched.
