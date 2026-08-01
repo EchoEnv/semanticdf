@@ -157,7 +157,7 @@ object Main {
       println(s"  elapsed: ${(widget1T1 - widget1T0) / 1e6}ms")
 
       println()
-      println("=== Widget 2: orders per region ===")
+      println("=== Widget 2: orders per category ===")
       val widget2T0 = System.nanoTime()
       orders
         .query(measures = Seq("amount", "count"), dimensions = Seq("category"))

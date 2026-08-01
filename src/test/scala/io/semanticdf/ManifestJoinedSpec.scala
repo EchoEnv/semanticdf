@@ -190,7 +190,7 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
 
   test("parseMeta now accepts both kinds (kind gate relaxed)") {
     // Existing parseMeta handles single-table (already tested elsewhere).
-    // The parser also also handles joined, returning its best-effort
+    // The parser also handles joined, returning its best-effort
     // common-field view (kind = semanticdf-joined-manifest, modelName,
     // version, status \u2014 no left/right detail).
     val (spark, leftDf, rightDf) = setupSpark()
