@@ -1374,21 +1374,38 @@ object SemanticManifest {
   }
 
   /** Read the `runtime` block from a manifest object (single-table or
-    * joined envelope). Returns `(maxRows: Option[Int], broadcastJoinThreshold: Option[Long])`.
-    * Both options are `None` when the block is absent — a legacy
+    * joined envelope). Returns
+    * `(maxRows: Option[Int], broadcastJoinThreshold: Option[Long],
+    *   materializeLevel: Option[StorageLevel], salt: Option[Int])`.
+    * All four options are `None` when the block is absent — a legacy
     * manifest without `runtime` parses cleanly. Used by both the
     * single-table reader (`readManifest`) and the joined-envelope
     * reader (`fromJoinedJson`) to avoid duplicating the extraction.
+    *
+    * Validates `salt >= 1` if present — the setter's `withSalt(0)`
+    * converts to `None` (disable sentinel), so `0` in JSON is
+    * malformed and rejected. Negative values are also rejected.
     */
   private def readRuntime(
       obj: com.fasterxml.jackson.databind.JsonNode,
   ): (Option[Int], Option[Long], Option[org.apache.spark.storage.StorageLevel], Option[Int]) = {
     val runtimeObj = obj.path("runtime")
+    val saltOpt = optIntField(runtimeObj, "salt")
+    // Validate salt range — schema's `minimum: 1` covers library-emitted
+    // manifests, but a hand-rolled manifest could pass `salt = 0` or
+    // negative. The setter's `withSalt(0)` converts to `None`; the
+    // reader is stricter and rejects (the value should not appear in
+    // JSON at all if it's the disable sentinel).
+    saltOpt.foreach { n =>
+      require(n >= 1,
+        s"manifest runtime.salt must be >= 1 if present, got: $n. " +
+        s"Use 'null'/absent for the disable sentinel (no skew handling).")
+    }
     (
       optIntField(runtimeObj, "maxRows"),
       optLongField(runtimeObj, "broadcastJoinThreshold"),
       readStorageLevel(runtimeObj),
-      optIntField(runtimeObj, "salt"),
+      saltOpt,
     )
   }
 

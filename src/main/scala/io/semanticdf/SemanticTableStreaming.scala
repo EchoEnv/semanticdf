@@ -63,6 +63,15 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
     import StreamingSupport._
     import org.apache.spark.sql.functions._
 
+    // Apply AQE skew-handling config BEFORE writeStream triggers
+    // Spark planning. The static-stream join plan is built during
+    // `writeStream.start()`; if AQE isn't set here, the plan is
+    // created without skew handling (the foreachBatch path's
+    // batchModel.toDataFrame is too late — it only affects the
+    // per-microbatch DataFrame, not the streaming query plan).
+    // See [[applyAqeSkewConfig]] for the full contract.
+    applyAqeSkewConfig(spark)
+
     // 1. Find the streaming source. A non-streaming model is a hard error
     //    (not a soft one) — the user built a batch model and is calling
     //    the streaming terminal by mistake. The root may be a
@@ -244,7 +253,17 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
               // every subsequent batch. Disabling the cache here
               // means each batch is computed fresh.
               resultCache = None,
-              maxRows = maxRows)
+              maxRows = maxRows,
+              // Carry runtime hints through to the per-microbatch
+              // model. Without this, a streaming source with
+              // `withSalt(n)` would silently lose skew handling on
+              // its first micro-batch (cold session) because no
+              // prior call had set the AQE config. `materializeLevel`
+              // is intentionally NOT threaded — per-microbatch persist
+              // is wasteful (each batch's DataFrame is consumed once
+              // via `foreachBatch` and discarded).
+              broadcastJoinThreshold = this.broadcastJoinThreshold,
+              salt = this.salt)
             val t0 = System.nanoTime()
             val result = batchModel.toDataFrame(spark)
             emitStreamingAudit(result, t0)(spark)

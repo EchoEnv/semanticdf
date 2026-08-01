@@ -75,18 +75,35 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   def toDataFrame(implicit spark: SparkSession): DataFrame = toDataFrameInternal(spark, io.semanticdf.audit.Clock.systemDefault)
   def toDataFrame()(implicit spark: SparkSession, clock: () => java.time.Instant = io.semanticdf.audit.Clock.systemDefault): DataFrame = toDataFrameInternal(spark, clock)
   private def toDataFrameInternal(spark: SparkSession, clock: () => java.time.Instant): DataFrame = {
-    // Translate `salt = Some(n)` into Spark AQE skew handling. AQE
-    // detects skewed partitions at runtime and broadcasts them
-    // automatically — the production-grade solution. Config is
-    // session-global; setting it once enables skew handling for all
-    // subsequent joins. We never disable it (matches Spark 3.2+
-    // default). Setting the same value twice is a no-op on the
-    // SparkSession side. The `conf.set` calls are inexpensive
-    // (they don't trigger a recompile).
-    salt.foreach { n =>
-      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
-      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
-    }
+    // Translate `salt = Some(n)` into Spark AQE skew handling. The
+    // hint requires THREE conf settings to take effect:
+    //   1. `spark.sql.adaptive.enabled = true` — the parent AQE
+    //      config. Without it, `skewJoin.enabled` is a no-op.
+    //      This is a deliberate override: the user opted into
+    //      skew handling via `withSalt`, which implies AQE must
+    //      run for the hint to be effective. If the operator has
+    //      explicitly disabled AQE for compliance/audit reasons,
+    //      they should not call `withSalt` (or call `conf.set(
+    //      spark.sql.adaptive.enabled, false)` AFTER the query
+    //      that uses salt).
+    //   2. `spark.sql.adaptive.skewJoin.enabled = true` — the
+    //      skew-join child of AQE.
+    //   3. `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`
+    //      — the threshold multiplier.
+    //
+    // Spark's actual behavior (per OptimizeSkewedJoin.scala):
+    // AQE divides each skewed shuffle partition into smaller
+    // sub-partitions AND replicates the matching partition on the
+    // other side of the join, so they can run in parallel tasks.
+    // It is NOT auto-broadcast semantics — that's a common
+    // misconception. The library's previous Scaladoc said
+    // "broadcasts them automatically", which was wrong; this
+    // comment is the corrected version.
+    //
+    // Config is session-global. Setting it once enables skew
+    // handling for all subsequent joins in the SparkSession. The
+    // `conf.set` calls are inexpensive (no plan invalidation).
+    applyAqeSkewConfig(spark)
 
     if (auditSink.isEmpty && resultCache.isEmpty) {
       // Fast path: no audit, no cache. Apply `materializeLevel` here
@@ -426,27 +443,41 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
   /** Opt-in skew-handling hint for equi-joins. When set, the
     * next `toDataFrame` call configures Spark AQE to handle
     * skewed partitions: sets
-    * `spark.sql.adaptive.skewJoin.enabled = true` and
-    * `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`. Spark
-    * AQE then detects skewed partitions at runtime and broadcasts
-    * them automatically — the production-grade solution.
+    * `spark.sql.adaptive.enabled = true` (the parent AQE config
+    * — required for the skew child to take effect),
+    * `spark.sql.adaptive.skewJoin.enabled = true`, and
+    * `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`.
+    *
+    * Spark's actual behavior (per `OptimizeSkewedJoin.scala`):
+    * AQE **divides each skewed shuffle partition into smaller
+    * sub-partitions and replicates the matching partition on the
+    * other side of the join** — they run as parallel tasks. It
+    * is NOT auto-broadcast semantics (the previous Scaladoc said
+    * "broadcasts them automatically", which was wrong; this is
+    * the corrected version).
     *
     * The `n` parameter is the skew-handling factor (Spark's
     * `skewedPartitionFactor`): a partition is considered skewed if
-    * its size exceeds `n * median_size`. Spark's default is `5`. A
-    * larger `n` makes skew detection more conservative (only
-    * very-skewed partitions are broadcast); a smaller `n` is more
-    * aggressive. `n = 0` disables the hint (mirrors the
-    * `broadcastJoinThreshold = 0` convention — the field becomes
-    * `None`); `n >= 1` enables skew handling.
+    * its size exceeds `max(n * median_size, thresholdBytes)`.
+    * Spark's default is `5`. A larger `n` makes skew detection
+    * more conservative (only very-skewed partitions are split);
+    * a smaller `n` is more aggressive. `n = 0` disables the hint
+    * (mirrors the `broadcastJoinThreshold = 0` convention — the
+    * field becomes `None`); `n >= 1` enables skew handling.
     *
-    * The hint is a session-global config, not per-query. Setting it
-    * once enables skew handling for all subsequent joins in the
-    * same SparkSession. The library never disables it. See
-    * [[SemanticTable.salt]] for the full contract: skew
-    * motivation, trade-offs, sentinel conventions, propagation
-    * rules, and why a custom `rand() * n` salt column would be
-    * wrong (it doesn't match across sides for shuffled joins). */
+    * Trade-off: `adaptive.enabled = true` is a session-global
+    * override. If the operator has explicitly disabled AQE for
+    * compliance/audit reasons, calling `withSalt` would silently
+    * re-enable it. The library's position: `withSalt` is an
+    * explicit opt-in by the user; the override is necessary for
+    * the hint to activate. Operators who need AQE disabled can
+    * call `conf.set("spark.sql.adaptive.enabled", "false")` AFTER
+    * the query that uses salt.
+    *
+    * See [[SemanticTable.salt]] for the full contract: skew
+    * motivation, sentinel conventions, propagation rules, and
+    * why a custom `rand() * n` salt column would be wrong (it
+    * doesn't match across sides for shuffled joins). */
   def withSalt(n: Int): SemanticTable = {
     require(n >= 0,
       s"SemanticTable.withSalt: n must be non-negative, got: $n")
@@ -489,6 +520,31 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       materializeLevel = Some(level),
       salt = salt)
   }
+
+  /** Apply the `salt` field as Spark AQE skew-handling config.
+    * Called from BOTH the batch terminal (`toDataFrameInternal`)
+    * and the streaming terminal (`SemanticTableStreaming.toStreamingQuery`).
+    *
+    * Why both: the static-stream join plan is built when the user
+    * calls `writeStream.start()` — Spark planning reads SQLConf at
+    * that moment. If AQE isn't set before `start()`, the join plan
+    * is created WITHOUT skew handling (the foreachBatch path's
+    * `batchModel.toDataFrame` is too late — it only affects the
+    * per-microbatch DataFrame, not the streaming query plan itself).
+    *
+    * Per the [[SemanticTable.salt]] Scaladoc:
+    *   1. `spark.sql.adaptive.enabled = true` (parent AQE config)
+    *   2. `spark.sql.adaptive.skewJoin.enabled = true` (skew child)
+    *   3. `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n`
+    *
+    * No-op when `salt = None`. Idempotent — Spark optimizes repeated
+    * `conf.set` calls on the same key. */
+  private[semanticdf] def applyAqeSkewConfig(spark: SparkSession): Unit =
+    salt.foreach { n =>
+      spark.conf.set("spark.sql.adaptive.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
+    }
 
   /** Internal: stamp the captured request shape for audit emission.
     * Called by [[query]] once the chain is built. Not part of the public
