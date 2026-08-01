@@ -107,7 +107,7 @@ object Main {
         .execute(spark)
       q3.show(false)
 
-      // -- 6. Lifecycle surfacing (PR #136) --------------------------------
+      // -- 6. Lifecycle surfacing (PR-surfacing lifecycle pattern) --------------------------------
       // Every successful envelope carries `warnings`. The library surfaces
       // them via `ManifestMeta.status` so the operator can route on it.
       if (meta.status == "deprecated") {

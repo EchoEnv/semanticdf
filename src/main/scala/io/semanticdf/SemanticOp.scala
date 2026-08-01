@@ -447,11 +447,11 @@ final case class SemanticJoinOp(
       * Populated by the join construction sites
       * (`join_oneWithKeys`, `join_manyWithKeys`) via
       * `this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold)`
-      * (PR #306) — LEFT wins when both sides carry a threshold; RIGHT
+      * — LEFT wins when both sides carry a threshold; RIGHT
       * is the fallback so a user who set the threshold on the right
       * side (intuitively: "I know this dimension table is small")
       * gets the broadcast hint. The same `orElse` rule applies to
-      * the joined-manifest reader (PR #307) so round-trip preserves
+      * the joined-manifest reader so round-trip preserves
       * the threshold regardless of which side carried it.
       *
       * Default `None` for back-compat with hand-constructed

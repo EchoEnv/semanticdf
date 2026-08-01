@@ -105,7 +105,7 @@ object SemanticManifest {
       // Joined-specific shape from recipe §3.
       cardinality:      String,         // "one" | "many" | "cross"
       leftKeys:         Seq[String],    // key fields; empty for cross joins
-      rightKeys:        Seq[String],    // or when the wire shape came from a pre-#153 producer
+      rightKeys:        Seq[String],    // or when the wire shape came from a a legacy (pre-1.0.0) producer
       multiColumn:      Boolean,        // true if either key array has length > 1
       onExprString:     Option[String], // SQL-form capture; non-equi fallback
       // v0.1.13: structured predicate AST. Closed the last caveat of
@@ -565,7 +565,7 @@ object SemanticManifest {
     dig.put("joins",            1)
     dig.put("isStreaming",      findStreamOp(model.root).isDefined)
 
-    // Outer envelope runtime tuning (PR #303 follow-up). Each side's
+    // Outer envelope runtime tuning. Each side's
     // own runtime is already carried by the per-side single-table
     // `runtime` block emitted above. The outer block here preserves
     // the `withMaxRows` / `withBroadcastJoinThreshold` values that
@@ -632,7 +632,7 @@ object SemanticManifest {
     val joinedName  = optStringField(modelObj, "name")
     val joinedStatus= optStringField(modelObj, "status").getOrElse("published")
 
-    // Outer envelope runtime tuning (PR #303 follow-up). Each side
+    // Outer envelope runtime tuning. Each side
     // already preserves its own runtime via the per-side readManifest
     // call below. The outer block here carries the runtime set on
     // the joined model specifically (post-join query() path). Missing
@@ -766,7 +766,7 @@ object SemanticManifest {
       rightSide   = Some(rightT),
       // Wire-shape carry-over: the keys + onExprString from the writer
       // (foundation work) preserve the through-trip integrity. If
-      // the manifest was hand-rolled or emitted by a pre-#153 writer,
+      // the manifest was hand-rolled or emitted by a a legacy (pre-1.0.0) writer,
       // these default to empty / None and the join degrades gracefully
       // (the `on` rebuild above still works for the legacy empty case
       // via the throw-based fallback).
@@ -790,7 +790,7 @@ object SemanticManifest {
       // the same `orElse` rule. Without this, a user who set the
       // threshold on the right side silently loses the override
       // on the op after restoring from a joined manifest (the
-      // same class of bug that PR #306 fixed for the in-memory
+      // the same class of bug was fixed for the in-memory
       // join path).
       broadcastJoinThreshold = leftT.broadcastJoinThreshold.orElse(rightT.broadcastJoinThreshold),
       // Path C: also carry the extra dims/measures so the runtime
@@ -1047,7 +1047,7 @@ object SemanticManifest {
     val filters  = readArr(obj, "filters").flatMap(readFilter)
     val transforms = readArr(obj, "transforms").flatMap(readTransform)
 
-    // Runtime tuning options (PR #295 + #299). Missing `runtime` block
+    // Runtime tuning options. Missing `runtime` block
     // → use the library defaults. Asymmetric handling reflects the
     // SemanticTable field types: `maxRows: Int` lives as a plain int
     // (default = `CacheKey.DefaultMaxRows`), so the reader backfills

@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>semanticdf-runtime-tuning_2.13</artifactId>
+    <version>0.1.17</version>
+    <packaging>jar</packaging>
+
+    <name>semanticdf-runtime-tuning</name>
+    <description>Demonstrates the 6 runtime knobs in a single cohesive scenario (customer analytics dashboard).</description>
+
+    <properties>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <scala.version>2.13.14</scala.version>
+        <scala.binary.version>2.13</scala.binary.version>
+        <spark.version>3.5.8</spark.version>
+        <semanticdf.version>0.2.1</semanticdf.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf_2.13</artifactId>
+            <version>${semanticdf.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.spark</groupId>
+            <artifactId>spark-sql_2.13</artifactId>
+            <version>${spark.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.scala-lang</groupId>
+            <artifactId>scala-library</artifactId>
+            <version>${scala.version}</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>net.alchim31.maven</groupId>
+                <artifactId>scala-maven-plugin</artifactId>
+                <version>4.9.2</version>
+                <executions>
+                    <execution>
+                        <goals><goal>compile</goal></goals>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <mainClass>com.example.runtime.Main</mainClass>
+                    <classpathScope>compile</classpathScope>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
