@@ -436,8 +436,12 @@ A few non-obvious interactions:
 - **Setting `withMaterialize(MEMORY_ONLY)` on a 10M-row table**.
   Pick `MEMORY_AND_DISK` or `MEMORY_AND_DISK_SER` if the cluster
   is tight on RAM.
-- **Setting `withResultCache` but never querying the same shape
-  twice**. Wastes memory.
+- **Calling `.toDataFrame()` (or `.execute()`) after
+  `.withAuditSink(...)` or `.withResultCache(...)` without going
+  through `.query(measures, dimensions, ...)` first**. Both setters
+  derive their keys from the request shape captured by `query()`;
+  skipping it throws `IllegalStateException` so the misuse is loud
+  rather than a silent no-op. Always: `model.query(...).toDataFrame(spark)`.
 - **Setting `withMaxRows(0)` (disable) in production**. The cap
   exists for a reason; disabling it in production is an OOM waiting
   to happen. Keep the cap.

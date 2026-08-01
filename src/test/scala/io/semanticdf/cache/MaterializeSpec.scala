@@ -128,6 +128,7 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
     val m = baseModel(spark)
       .withMaterialize(StorageLevel.MEMORY_ONLY)
       .withAuditSink(sink)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
     val df = m.toDataFrame(spark)
     try {
       // The audit/cache path returns a parallelize-based DataFrame,
@@ -143,6 +144,7 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
     val m = baseModel(spark)
       .withMaterialize(StorageLevel.MEMORY_ONLY)
       .withResultCache(cache)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
     val df = m.toDataFrame(spark)
     try {
       df.storageLevel shouldBe StorageLevel.NONE

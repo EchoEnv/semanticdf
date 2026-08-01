@@ -177,6 +177,7 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
   test("toDataFrame with auditSink + salt: AQE config still applied (salt is hint-only, not affected by audit/cache path)") {
     val sink = AuditSink.inMemory(8)
     val m = baseModel(spark).withSalt(15).withAuditSink(sink)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
     val df = m.toDataFrame(spark)
     try {
       val factor = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")

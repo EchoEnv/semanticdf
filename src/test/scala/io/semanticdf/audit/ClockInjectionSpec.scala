@@ -42,6 +42,7 @@ class ClockInjectionSpec extends AnyFunSuite with Matchers with SparkSessionFixt
           t => org.apache.spark.sql.functions.count(t("carrier")))
       )
       .withAuditSink(io.semanticdf.audit.AuditSink.inMemory(maxEvents = 10))
+      .query(measures = Seq("flight_count"), dimensions = Seq("carrier"))
     f(model)
   }
 
