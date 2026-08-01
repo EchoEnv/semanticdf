@@ -7,7 +7,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 /** Tests for `toJoinedJson` / `fromJoinedJson` with the joined-key wire
-  * shape (PR #154). Validates the round-trip end-to-end. */
+  * shape. Validates the round-trip end-to-end. */
 class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
 
   private def makeSpark(): SparkSession = {
@@ -108,16 +108,16 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
     } finally spark.stop()
   }
 
-  // -- joined-manifest runtime preservation (PR #303 follow-up) -----------
+  // -- joined-manifest runtime preservation -----------
   //
   // The outer `new SemanticTable(...)` constructed by `fromJoinedJson`
   // previously did not pass `maxRows` or `broadcastJoinThreshold`,
   // silently dropping any runtime tuning the caller set on the joined
   // model. Each side preserves its own runtime via the single-table
-  // round-trip (PR #303), but the OUTER envelope was lossy. These tests
+  // round-trip, but the OUTER envelope was lossy. These tests
   // pin the outer-envelope preservation.
 
-  test("joined envelope preserves outer maxRows (regression: post-#303 DE H2)") {
+  test("joined envelope preserves outer maxRows (regression: DE H2)") {
     val spark = makeSpark()
     try {
       val lSrc = leftDf(spark)
@@ -171,10 +171,10 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
     } finally spark.stop()
   }
 
-  test("joined envelope: RIGHT-side withBroadcastJoinThreshold survives the round-trip (regression: post-#306 audit)") {
-    // PR #304 added the LEFT-side round-trip for the op's
+  test("joined envelope: RIGHT-side withBroadcastJoinThreshold survives the round-trip (regression: recent audit)") {
+    // The implementation added the LEFT-side round-trip for the op's
     // broadcastJoinThreshold but used `leftT.broadcastJoinThreshold`
-    // (LEFT-only). PR #306 widened the in-memory join path to
+    // (LEFT-only). The in-memory join path was widened to
     // `orElse(this, other)`, but the joined-manifest reader was
     // not updated. This test pins the right-side survival.
     val spark = makeSpark()
@@ -198,7 +198,7 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
   test("SemanticJoinOp's broadcastJoinThreshold survives the round-trip (regression: op construction)") {
     // The op's `broadcastJoinThreshold` is set at join construction
     // time from the LEFT side's `withBroadcastJoinThreshold(n)` call.
-    // Before PR #304, `fromJoinedJson` reconstructed the
+    // Previously, `fromJoinedJson` reconstructed the
     // `SemanticJoinOp` with `broadcastJoinThreshold = None` (default),
     // silently dropping the override even though the LEFT side's
     // runtime was preserved. This test pins the op-level propagation.
@@ -223,8 +223,8 @@ class ManifestJoinKeysRoundtripSpec extends AnyFunSuite with Matchers {
 
   test("joined envelope: per-side and outer runtime preserved independently") {
     // The LEFT side's runtime is preserved by the per-side single-table
-    // round-trip (PR #303). The OUTER envelope's runtime is preserved
-    // by PR #304. Both must survive the round-trip independently.
+    // round-trip. The OUTER envelope's runtime is preserved
+    // by the outer-envelope path. Both must survive the round-trip independently.
     val spark = makeSpark()
     try {
       val lSrc = leftDf(spark)

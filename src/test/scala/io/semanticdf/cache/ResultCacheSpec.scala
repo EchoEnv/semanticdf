@@ -142,7 +142,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   test("forRequest: time field encoding has no collisions (regression for #186)") {
-    // PR #186 introduced length-prefixed-free encoding that admitted
+    // introduced length-prefixed-free encoding that admitted
     // collisions: `None` and `Some("none")` both hashed to the same
     // value; `Map("a"->"b,c:d")` collided with `Map("a"->"b", "c"->"d")`;
     // `Some(("a..b","c"))` collided with `Some(("a","b..c"))`. PR
@@ -167,13 +167,13 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   test("forRequest: model/measure/dimension/orderBy encoding has no collisions (regression for #188)") {
-    // PR #187 only length-prefixed the time fields. The rest of the
+    // The initial fix only length-prefixed the time fields. The rest of the
     // request still used delimiter encoding — which admits collisions
     // whenever a string value contains the delimiter:
     //   - Seq("a,b") and Seq("a","b") both encoded as "a,b"
     //   - Seq("a:b") and Seq("a","b") both encoded as "a:b" (orderBy)
     //   - model containing `|` or `me=` could cross field boundaries
-    // PR #188 extended the length-prefixed encoding to every field.
+    // The follow-up extended the length-prefixed encoding to every field.
     // These tests reproduce the collisions and prove they're gone.
 
     // Measures: single element with a comma vs two elements
@@ -483,7 +483,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   // ----------------------------------------------------------------
-  // Cache auto-invalidation: model version (v0.2.0, PR #199)
+  // Cache auto-invalidation: model version (v0.2.0)
   // ----------------------------------------------------------------
 
   test("forRequest: model version 0 (default) produces key without an mv segment") {
@@ -506,7 +506,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
   }
 
   test("forRequest: version 10 vs version 100 are not prefix-collisions under length-prefix encoding") {
-    // PR #188 fixed prefix collisions by length-prefixing every segment.
+    // The fix addressed prefix collisions by length-prefixing every segment.
     // Verify the version segment doesn't reintroduce them when version
     // numbers cross a digit boundary.
     val v10  = CacheKey.forRequest(makeReq(model = "m", version = 10))
@@ -551,7 +551,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(c.keys().isEmpty)
   }
 
-  // PR-fix #6: post-#278 review. invalidateByModelAndVersion must
+  // PR-fix #6: recent audit cycle. invalidateByModelAndVersion must
   // walk BOTH the row-form sidecar AND the journaled-form sidecar.
   // Pre-fix, journaled entries leaked.
   test("inMemory: invalidateByModelAndVersion clears journaled entries too") {
@@ -576,7 +576,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       "journaled entry tagged with a different model must survive")
   }
 
-  // PR-fix #9: post-#278 review. Default getOrComputeJournaled
+  // PR-fix #9: recent audit cycle. Default getOrComputeJournaled
   // silently wrote uninvalidateable entries (model=""). Loud failure
   // is correct — only InMemoryResultCache should provide this.
   test("getOrComputeJournaled: default impl throws UnsupportedOperationException") {

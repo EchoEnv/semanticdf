@@ -142,8 +142,8 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
     }
   }
 
-  test("schema documents the runtime.materializeLevel property (regression: post-#314 audit MED-1)") {
-    // PR #314 added `materializeLevel` to the writer/reader pair
+  test("schema documents the runtime.materializeLevel property (regression: recent audit)") {
+    // The implementation added `materializeLevel` to the writer/reader pair
     // but missed both schema files. The wire format accepts the
     // field (the schema has implicit `additionalProperties: true`),
     // so the existing manifest-validation test passes either way;
@@ -164,8 +164,8 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
     withClue("schema.properties.runtime.properties.materializeLevel is missing: ") {
       matLevel.isObject shouldBe true
     }
-    // The 5-field encoding requires all of these (PR #314 wire format).
-    // The post-#315 audit flagged that the test only checked presence,
+    // The 5-field encoding requires all of these (wire format).
+    // The recent audit flagged that the test only checked presence,
     // not types or constraints. A regression that flipped `type: boolean`
     // to `type: string` on any field would silently slip through, then
     // bite downstream tools that introspect the schema. Tighten the
@@ -196,7 +196,7 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
       matLevel.path("properties").path("replication").path("minimum").asInt(0) shouldBe 1
     }
     // `required` array forces all 5 fields on the writer. The writer
-    // always emits all 5 (PR #314 wire format); a hand-rolled manifest
+    // always emits all 5 (wire format); a hand-rolled manifest
     // missing any field is rejected — matches Spark's StorageLevel
     // semantics (no optional fields).
     val requiredList = matLevel.path("required").asScala.map(_.asText).toSet
@@ -218,7 +218,7 @@ class ManifestSchemaValidationSpec extends AnyFunSuite with Matchers {
     // silent regression for downstream tooling that introspects the
     // public schema to discover fields.
     //
-    // Falsification (post-#315 audit MED-1, Architect): the comment on
+    // Falsification (recent audit, Architect): the comment on
     // line 35 previously claimed this test existed. It didn't. Inject
     // drift into the repo-root copy only (leave classpath untouched) —
     // the manifest-validation spec still passes (it loads the classpath

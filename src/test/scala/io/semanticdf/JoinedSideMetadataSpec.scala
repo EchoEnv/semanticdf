@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers
 /** Tests for the `SemanticJoinOp.leftSide` / `rightSide` foundation.
   *
   * These two optional `SemanticTable` fields were added so the BLOCKed
-  * `joined-models-manifest` recipe (PR #151) can emit per-side
+  * `joined-models-manifest` recipe can emit per-side
   * metadata without re-deriving it. This spec pins the foundation:
   *
   *   1. `join_one` / `join_many` / `join_cross` populate both fields
@@ -184,7 +184,7 @@ class JoinedSideMetadataSpec extends AnyFunSuite with Matchers {
       assert(leftRoot.name.contains("customers"))
       // status is the discriminator — status arrived in v0.1.10 and never
       // made it into SemanticTableOp. The new fields motivate the
-      // joined-manifest recipe (PR #151) being able to round-trip status.
+      // joined-manifest recipe being able to round-trip status.
     } finally spark.stop()
   }
 }

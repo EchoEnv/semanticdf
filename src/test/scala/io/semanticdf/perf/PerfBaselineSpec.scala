@@ -154,7 +154,7 @@ class PerfBaselineSpec extends AnyFunSuite with SparkSessionFixture with Flights
   }
 
   // ----------------------------------------------------------------
-  // 1M-row scale baseline (post-PR #294 follow-up)
+  // 1M-row scale baseline (recent follow-up)
   //
   // The 30-row baseline above is the floor for every path, but it
   // tells us nothing about how the library behaves under realistic

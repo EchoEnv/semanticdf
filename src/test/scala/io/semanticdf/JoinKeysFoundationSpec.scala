@@ -7,7 +7,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 /** Tests for the foundation of the BLOCKed `joined-models-manifest`
-  * keys fix (PR #153). Pins:
+  * keys fix. Pins:
   *   1. `SemanticJoinOp` carries `leftKeys` / `rightKeys` / `onExprString`.
   *   2. The typed entry points `join_on` / `join_many_on` populate keys
   *      directly without needing probe decomposition.

@@ -690,6 +690,9 @@ for the worked example with sample output.
 | `.withAuditSink(sink: AuditSink)` | Install an `io.semanticdf.audit.AuditSink` — every `query()` / `execute()` / `toDataFrame()` emits an `AuditEvent` (model, request shape, elapsed, status). Default `NoOp` (no overhead). |
 | `.withResultCache(cache: ResultCache)` | Install an `io.semanticdf.cache.ResultCache` — identical `query()` calls return from cache without re-executing the Spark plan. Default `NoOp`. Cache keys are stable SHA-256s of the request shape. |
 | `.withMaterialize(level: StorageLevel)` | Opt-in DataFrame persistence on the fast path of `toDataFrame` (no audit, no cache) — `df.persist(level)` is applied so multiple actions on the returned `DataFrame` reuse the persisted storage instead of re-executing the Spark plan. Call `df.unpersist()` on the returned DataFrame to release. Default `None` (no persist). Storage level choice is the operator's responsibility — `MEMORY_ONLY` on a large query can OOM the cluster. Audit/cache paths return a `parallelize`-based DataFrame that's effectively `MEMORY_ONLY` for the call's duration; `withMaterialize` does not apply there (the user never sees the compiled DF). See `docs/design/with-materialize.md`. |
+| `.withMaxRows(n: Int)` | Cap on rows returned per query. `n = 0` disables (escape hatch); `n < 0` throws. Cap fires on cache-miss and audit-only paths of `toDataFrameInternal` — the fast path (no audit, no cache) skips the cap. Default 100,000. See [the runtime-tuning walk-through](docs/tutorial-runtime-tuning.md). |
+| `.withBroadcastJoinThreshold(bytes: Long)` | Opt-in `broadcast(right)` on equi-joins when `right.stats.sizeInBytes < bytes`. `bytes = 0` disables (no override); `bytes < 0` throws. LEFT-wins / RIGHT-fallback precedence at join construction. Streaming queries: no-op (AQE is disabled by Spark for streaming DataFrames via `ResolveWriteToStream`). |
+| `.withSalt(n: Int)` | Opt-in skew-handling hint — translates to `spark.sql.adaptive.skewJoin.skewedPartitionFactor = n` (and re-enables the parent AQE flag). `n = 0` disables; `n < 1` throws. Spark AQE handles skew by splitting each skewed partition and replicating the matching partition on the other side — a custom `(rand() * n)` salt column would produce WRONG results in shuffled joins because LEFT/RIGHT executors have different RNG sequences. Streaming: no-op (same Spark limitation). |
 | `.validate()` | Compile-free structural check; returns `ValidationResult(errors, warnings, isValid)` for CI pre-flight. |
 | `.joins: Seq[JoinInfo]` | All join edges in the model (left/right keys, cardinality: one/one_to_many/many_to_many/cross). Captures join keys at construction time (no compile required). |
 | `.measureKind(name): MeasureKind` | Classify a measure as `Base` / `Calc` / `Window` — useful for tooling that needs to know which measures have a known-name calc dependency chain. |
@@ -748,6 +751,8 @@ parent first).
 | [`examples/hospital`](examples/hospital/README.md) | Hospital: data cleansing workflow (dedup, normalize, fill), ALOS, 30-day readmission rate |
 | [`examples/dbt-reader`](examples/dbt-reader/README.md) | Load a dbt `manifest.json` as a semantic model — the adapter pattern for a third-party interchange format |
 | [`examples/joined-manifest-e2e`](examples/joined-manifest-e2e/README.md) | Cross-process joined-manifest workflow: write → JSON artifact → read via `SDFAdapter` |
+| [`examples/runtime-tuning`](examples/runtime-tuning/README.md) | All six runtime knobs in a customer analytics dashboard — caps, caching, audit, broadcast, materialize, skew handling. Companion to [the walk-through](docs/tutorial-runtime-tuning.md). |
+| [`examples/skewed-join`](examples/skewed-join/README.md) | `withSalt(5)` against a 1M-event star-schema join with a 90/10 hot-key distribution; verifies AQE config + correctness. |
 
 Run any of them:
 
@@ -774,6 +779,7 @@ No code shims are needed — the codebase uses only Spark APIs stable across 3.5
 - **[`docs/runtime-quickstart.md`](docs/runtime-quickstart.md)** — JDK/Scala/Spark/Maven
   matrix, build & test commands, CLI tools, the four runtime traps (Java-17
   module flags, `scala:run` arg leak, deprecated import, version files).
+- **[`docs/tutorial-runtime-tuning.md`](docs/tutorial-runtime-tuning.md)** — the six runtime knobs (`withMaxRows`, `withResultCache`, `withAuditSink`, `withBroadcastJoinThreshold`, `withMaterialize`, `withSalt`) in one walk-through. Decision tree, when-to-use matrix, real-world scenario, anti-patterns.
 - **[`docs/known-limitations.md`](docs/known-limitations.md)** — current scope & guardrails (batch-only, per-session security, symmetric join keys, etc.) with workarounds and roadmap hints. Read before first consumer.
 - **[`docs/calc-author-guide.md`](docs/calc-author-guide.md)** — how to write correct calc measures: ratio, pct-of-total, calc-of-calc, `safeDivide`.
 - **[`docs/backlog-type-safety.md`](docs/backlog-type-safety.md)** — the open list of deferred features and their priority ordering.

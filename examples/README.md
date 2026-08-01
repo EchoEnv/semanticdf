@@ -46,6 +46,11 @@ self-contained once you've done `starter/`.
 1. `starter/`
 2. [`telco-analytics/`](telco-analytics/) — carriers, plans, promotions
 
+### "I want to tune runtime behavior for production"
+1. `starter/`
+2. [`runtime-tuning/`](runtime-tuning/) — all six runtime knobs (`withMaxRows`, `withResultCache`, `withAuditSink`, `withBroadcastJoinThreshold`, `withMaterialize`, `withSalt`) in a customer analytics dashboard. Companion to the [runtime-tuning walk-through](../docs/tutorial-runtime-tuning.md).
+3. [`skewed-join/`](skewed-join/) — focused skew-handling scenario (1M events, 90/10 hot-key distribution) demonstrating `withSalt(5)` correctness.
+
 ### "I want to load a pre-built model artifact (CI / version-pinning)"
 1. `starter/`
 2. [`manifest-load/`](manifest-load/) — `SemanticManifest.fromJson` end-to-end. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md); shows the runtime half of the build/load workflow.
@@ -75,6 +80,8 @@ self-contained once you've done `starter/`.
 | [`joined-manifest-e2e/`](joined-manifest-e2e/) | End-to-end artifact workflow on real data. Phase 1 (`Build`) emits a joined manifest to `target/*.json`; phase 2 (`Query`) loads from disk and runs analytics. Demonstrates the asymmetric-key (v0.1.14) path with clinical data. |
 | [`joined-manifest-split/`](joined-manifest-split/) | Legacy / pre-v0.1.11 reference: the hand-rolled per-side emit + manually-composed joined envelope pattern. Kept for consumers on pre-v0.1.11 versions; use [`joined-manifest/`](joined-manifest/) for new code. |
 | [`dbt-reader/`](dbt-reader/) | Parse a dbt `manifest.json` (v12+, the format `dbt parse` produces) and turn it into `SemanticTable`s. A column becomes a **measure** when its dbt `meta: { kind: measure, expr: <sql> }` block is set; everything else is a dimension. Closes the gap for dbt users who don't want to hand-author a second YAML. |
+| [`runtime-tuning/`](runtime-tuning/) | All six runtime knobs in one customer analytics dashboard — caps, caching, audit, broadcast, materialize, skew handling. |
+| [`skewed-join/`](skewed-join/) | `withSalt(5)` against a 1M-event star-schema join with a 90/10 hot-key distribution; verifies AQE config + correctness. |
 
 ## Prerequisites
 

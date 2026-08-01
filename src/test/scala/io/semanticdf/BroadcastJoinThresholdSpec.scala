@@ -18,7 +18,7 @@ import org.scalatest.matchers.should.Matchers
   * `autoBroadcastJoinThreshold` applies).
   *
   * IMPORTANT: the threshold must be set BEFORE the join (same pattern
-  * as `maxRows` from PR #294). Setting it after `join_one(...)` has no
+  * as `maxRows`). Setting it after `join_one(...)` has no
   * effect on the already-constructed SemanticJoinOp. Example:
   *   `factModel.withBroadcastJoinThreshold(n).join_one(dimModel, ...)`  ✓
   *   `factModel.join_one(dimModel, ...).withBroadcastJoinThreshold(n)`  ✗
@@ -80,8 +80,8 @@ class BroadcastJoinThresholdSpec extends AnyFunSuite with Matchers with SparkSes
     op.broadcastJoinThreshold shouldBe Some(1024L * 1024L)
   }
 
-  test("withBroadcastJoinThreshold set BEFORE join_many propagates to SemanticJoinOp (regression guard for post-#299 bug)") {
-    // PR #300: pre-fix, join_manyWithKeys silently dropped the threshold
+  test("withBroadcastJoinThreshold set BEFORE join_many propagates to SemanticJoinOp (regression guard)") {
+    // Before the fix, join_manyWithKeys silently dropped the threshold
     // even when set BEFORE the call. This test pins the propagation.
     val fact = toSemanticTable(largeFact(spark), name = Some("fact"))
       .withDimensions(Dimension("k", t => t("k")))
@@ -218,7 +218,7 @@ class BroadcastJoinThresholdSpec extends AnyFunSuite with Matchers with SparkSes
   }
 
   test("right-side withBroadcastJoinThreshold propagates through join_many (regression: pre-fix M4 audit finding)") {
-    // join_many had the same bug as join_one (PR #300 added the
+    // join_many had the same bug as join_one: the propagation
     // propagation for join_many but only from the LEFT). The fix is
     // shared across both paths.
     val fact = toSemanticTable(largeFact(spark), name = Some("fact"))

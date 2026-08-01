@@ -12,7 +12,7 @@ import java.lang.management.ManagementFactory
 
 /** File-descriptor leak test for [[OssieReader.parse]].
   *
-  * The data-engineering review of v0.2.0 (PR #201 follow-up) flagged
+  * The data-engineering review of v0.2.0 flagged
   * a real leak: `OssieReader.parse` opens a `BufferedReader` via
   * `Files.newBufferedReader(source)` and passes it to SnakeYAML's
   * `Yaml.load(Reader)`, but **never closes the reader**. SnakeYAML's

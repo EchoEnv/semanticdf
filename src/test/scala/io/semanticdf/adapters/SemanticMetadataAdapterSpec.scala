@@ -317,7 +317,7 @@ class SemanticMetadataAdapterSpec extends AnyFunSuite with SparkSessionFixture w
   }
 
   test("loadSemanticTables: works for dbt (unified entry point) — same call signature") {
-    // The dbt fixture is the existing minimal-manifest.json from PR #171.
+    // The dbt fixture is the existing minimal-manifest.json fixture.
     val tables = DbtAdapter.toSemanticTables(DbtAdapter.parse(Paths.get(
       "src/test/resources/dbt-fixtures/minimal-manifest.json")), _ => emptyFlightsDf)
     // The dbt fixture has one model: "orders"

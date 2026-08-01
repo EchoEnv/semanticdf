@@ -16,7 +16,7 @@ import org.scalatest.matchers.should.Matchers
   * `model.left` / `model.right`, a `model.join` block, and per-side
   * digest counts.
   *
-  * BLOCK findings still in effect (PR #151 acknowledges them):
+  * BLOCK findings still in effect :
   *   - `on` join key cannot be reconstructed \u2014 emitted empty; restored
   *     model can't execute the join until re-loaded from YAML.
   *   - The `leftKeys` / `rightKeys` arrays in the wire shape are
@@ -167,7 +167,7 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       assert(meta.rightMeasures == 0)
       assert(meta.mergedMeasures == 0)
       assert(meta.isStreaming == false)
-      // PR #154: keys are now populated end-to-end. Verify both arrays.
+      // keys are now populated end-to-end. Verify both arrays.
       assert(meta.leftKeys  == Seq("id"))
       assert(meta.rightKeys == Seq("id"))
       assert(meta.multiColumn == false)
@@ -190,7 +190,7 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
 
   test("parseMeta now accepts both kinds (kind gate relaxed)") {
     // Existing parseMeta handles single-table (already tested elsewhere).
-    // After PR #151: also handles joined, returning its best-effort
+    // The parser also also handles joined, returning its best-effort
     // common-field view (kind = semanticdf-joined-manifest, modelName,
     // version, status \u2014 no left/right detail).
     val (spark, leftDf, rightDf) = setupSpark()
@@ -218,7 +218,7 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       assert(restored.root.isInstanceOf[SemanticJoinOp])
       val j = restored.root.asInstanceOf[SemanticJoinOp]
       assert(j.cardinality == JoinCardinality.One)
-      // Side metadata (the foundation from PR #150) is preserved.
+      // Side metadata (the foundation from the existing implementation) is preserved.
       assert(j.leftSide.isDefined,  "round-trip preserves leftSide")
       assert(j.rightSide.isDefined, "round-trip preserves rightSide")
       assert(j.leftSide.get.name.contains("L"))
@@ -239,7 +239,7 @@ class ManifestJoinedSpec extends AnyFunSuite with Matchers {
       val json = SemanticManifest.toJoinedJson(joined, prettyPrint = true)
       val restored = SemanticManifest.fromJoinedJson(json, leftDf, rightDf)
 
-      // PR #154: the join now round-trips end-to-end. The reconstructed
+      // the join now round-trips end-to-end. The reconstructed
       // `on` lambda (built from `leftKeys`/`rightKeys`) is FUNCTIONAL.
       // Verify by feeding real JoinSides through `j.on(l, r)` and
       // checking the resulting column evaluates to expected values.

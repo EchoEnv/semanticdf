@@ -4,12 +4,9 @@ import io.semanticdf._
 import io.semanticdf.audit.AuditSink
 import io.semanticdf.cache.ResultCache
 
-import org.apache.spark.sql.{Row, SparkSession}
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.apache.spark.storage.StorageLevel
-
-import java.nio.file.{Files, Path, Paths}
 
 /** Runnable example for the runtime-tuning walk-through.
   *
@@ -32,11 +29,16 @@ import java.nio.file.{Files, Path, Paths}
 object Main {
 
   /** Customer row used to build the customers DataFrame. Case class
-    * so Spark's encoder can derive a schema automatically. */
-  private case class CustomerRow(id: Int, name: String, region: String, lifetime_value: Double)
+    * so Spark's encoder can derive a schema automatically. Public
+    * (not `private`) so Spark's codegen can synthesize the bean-style
+    * getters used in joins — `private case class` triggers a
+    * `[ERROR] CodeGenerator: failed to compile` fallback to
+    * interpreted mode. */
+  case class CustomerRow(id: Int, name: String, region: String, lifetime_value: Double)
 
-  /** Order row used to build the orders DataFrame. */
-  private case class OrderRow(id: Int, customer_id: Int, amount: Double, category: String, ordered_at: String)
+  /** Order row used to build the orders DataFrame. Public for the
+    * same codegen reason as `CustomerRow`. */
+  case class OrderRow(id: Int, customer_id: Int, amount: Double, category: String, ordered_at: String)
 
   /** Build a small customers dataset. Realistic distribution:
     * 1K customers across 3 regions. ~167 per region on average. */
@@ -93,8 +95,11 @@ object Main {
       val cache = ResultCache.inMemory(maxEntries = 256)
       val sink  = AuditSink.inMemory(maxEvents = 1024)
 
-      // The customers dimension is small (1K rows). Set a 10 MB
-      // broadcast threshold — orders > 10 MB would skip broadcast.
+      // The customers dimension is small (1K rows ≈ 100 KB). Set a 10 MB
+      // broadcast threshold. At join time, LEFT-wins picks the
+      // customers threshold (this model is the LEFT side of the
+      // upcoming join), so the effective threshold becomes 10 MB
+      // — orders' 1 MB threshold is overridden.
       val customers = toSemanticTable(customersDf, name = Some("customers"))
         .withDimensions(
           Dimension("id",     _ => customersDf("id")),
@@ -109,10 +114,18 @@ object Main {
         .withAuditSink(sink)
         .withMaterialize(StorageLevel.MEMORY_AND_DISK)
         .withSalt(5)
+        .withBroadcastJoinThreshold(10L * 1024 * 1024)   // 10 MB
 
-      // The orders fact table is large (50K rows). Set the broadcast
-      // threshold to 1 MB — orders is way over this, so broadcast
-      // doesn't fire. The salt hint triggers AQE skew handling.
+      // The orders fact table is large (50K rows ≈ 4 MB). Set the
+      // broadcast threshold to 1 MB — orders > 1 MB so the
+      // threshold DOES NOT fire on its own. However, LEFT-wins at
+      // join time picks the customers threshold (10 MB) over this
+      // 1 MB; orders (the join's RIGHT side from `customers.join_one`
+      // perspective) is ~4 MB, which is < 10 MB, so broadcast fires
+      // anyway. This demonstrates the LEFT-wins precedence rule:
+      // a small threshold on the RIGHT side is overridden by a
+      // larger threshold on the LEFT. The salt hint triggers AQE
+      // skew handling on top.
       val orders = toSemanticTable(ordersDf, name = Some("orders"))
         .withDimensions(
           Dimension("customer_id", _ => ordersDf("customer_id")),
@@ -127,7 +140,7 @@ object Main {
         .withAuditSink(sink)
         .withMaterialize(StorageLevel.MEMORY_AND_DISK)
         .withSalt(5)
-        .withBroadcastJoinThreshold(1L * 1024 * 1024)   // 1 MB
+        .withBroadcastJoinThreshold(1L * 1024 * 1024)   // 1 MB — overrides customers' 10 MB via LEFT-wins precedence
 
       println("  customers model: 2 dimensions, 2 measures")
       println("  orders model: 2 dimensions, 2 measures")
