@@ -67,7 +67,7 @@ final class SemanticTable private[semanticdf] (
       * the sink) so a single setter call at the model level covers
       * every downstream query.
       *
-      * Join-construction propagation (post-#307 audit M3): when the
+      * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /
       * `join_cross`, the outer's `auditSink` is
       * `orElse(this.auditSink, other.auditSink)` — LEFT wins when both
@@ -84,7 +84,7 @@ final class SemanticTable private[semanticdf] (
       * Default `None`. When `auditSink` is also `None`, this field
       * is dormant — no hashing cost.
       *
-      * Join-construction propagation (post-#307 audit M3): when the
+      * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /
       * `join_cross`, the outer's `auditRequest` is
       * `orElse(this.auditRequest, other.auditRequest)` — LEFT wins
@@ -107,7 +107,7 @@ final class SemanticTable private[semanticdf] (
       * caching to work — directly-built chains (`groupBy(...).aggregate(...)`)
       * bypass the cache.
       *
-      * Join-construction propagation (post-#307 audit M3): when the
+      * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /
       * `join_cross`, the outer's `resultCache` is
       * `orElse(this.resultCache, other.resultCache)` — LEFT wins
@@ -145,10 +145,10 @@ final class SemanticTable private[semanticdf] (
       * Set via the fluent `.withMaxRows(n)` setter. Survives the fluent
       * chain the same way `resultCache` does. Manifest round-trip:
       * non-default values are emitted under `runtime.maxRows` and
-      * restored on `fromJson` (PR #303). The `maxRows = 0` escape
+      * restored on `fromJson`. The `maxRows = 0` escape
       * hatch is preserved (not silently coerced to default).
       *
-      * Join-construction propagation (post-#307 audit M3): when the
+      * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /
       * `join_cross`, the outer's `maxRows` is
       * `min(this.maxRows, other.maxRows)` — the tighter cap wins.
@@ -189,7 +189,7 @@ final class SemanticTable private[semanticdf] (
       * path don't honour this threshold — the broadcast hint is only
       * emitted in `compileEquiJoin` (used by `join_one` / `join_many`).
       *
-      * Join-construction propagation rule (PR #306): when the
+      * Join-construction propagation rule: when the
       * threshold is set on EITHER side of a `join_one` / `join_many`,
       * the op's `broadcastJoinThreshold` is populated via
       * `this.broadcastJoinThreshold.orElse(other.broadcastJoinThreshold)`.
@@ -197,14 +197,14 @@ final class SemanticTable private[semanticdf] (
       * is the fallback so a user who set the threshold on the right
       * side (intuitively: "I know this dimension table is small")
       * gets the broadcast hint. The same `orElse` rule applies to
-      * the joined-manifest reader (PR #307) so round-trip preserves
+      * the joined-manifest reader so round-trip preserves
       * the threshold regardless of which side carried it.
       *
       * Set via the fluent `.withBroadcastJoinThreshold(bytes)` setter.
       * Survives the fluent chain the same way `resultCache` does.
       * Manifest round-trip preserves the threshold: a non-default
       * value is emitted under `runtime.broadcastJoinThreshold` and
-      * restored on `fromJson` (PR #303). Missing/absent means
+      * restored on `fromJson`. Missing/absent means
       * `None` (the library default). */
     val broadcastJoinThreshold: Option[Long] = None,
     /** Opt-in skew-handling hint for equi-joins (`join_one`,
@@ -221,7 +221,7 @@ final class SemanticTable private[semanticdf] (
       * sub-partitions and replicates the matching partition on the
       * other side of the join** — they run as parallel tasks. It
       * is NOT auto-broadcast semantics (a common misconception;
-      * corrected in the post-#318 audit). The previous Scaladoc
+      * corrected after a recent audit cycle). The previous Scaladoc
       * claimed AQE "broadcasts" skewed partitions, which was wrong.
       *
       * Why not a custom `rand() * n` salt column on both sides?
@@ -257,7 +257,7 @@ final class SemanticTable private[semanticdf] (
       *  - The streaming `batchModel` constructor in
       *    `SemanticTableStreaming` now carries `salt = this.salt`
       *    and `broadcastJoinThreshold = this.broadcastJoinThreshold`
-      *    (post-#318 fix). Without this, a streaming source with
+      *    (streaming fix). Without this, a streaming source with
       *    `withSalt(n)` would lose skew handling on its first
       *    micro-batch (cold session) and race against any
       *    concurrent reader.
@@ -292,7 +292,7 @@ final class SemanticTable private[semanticdf] (
       * Hand-rolled manifests with `salt = 0` or `salt < 1` are
       * rejected by the reader (`require(salt.forall(_ >= 1))`).
       *
-      * Join-construction propagation (PR #306 pattern): when the
+      * Join-construction propagation: when the
       * salt is set on EITHER side of a `join_one` / `join_many`,
       * the op's `salt` is populated via
       * `this.salt.orElse(other.salt)`. Precedence: LEFT wins when
@@ -356,7 +356,7 @@ final class SemanticTable private[semanticdf] (
       * responsibility: `MEMORY_ONLY` on a 10M-row query can OOM the
       * cluster; the library can't paper over that.
       *
-      * Join-construction propagation (post-#309 audit pattern):
+      * Join-construction propagation:
       * when the outer table is constructed by `join_one` /
       * `join_many` / `join_cross`, the outer's `materializeLevel` is
       * `orElse(this.materializeLevel, other.materializeLevel)` —

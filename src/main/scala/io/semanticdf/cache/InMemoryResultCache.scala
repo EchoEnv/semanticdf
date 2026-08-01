@@ -242,7 +242,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     if (prior != null) {
       // Lost the race; wait for the winner. Re-set the thread
       // interrupt flag if Future.get() cleared it (PR-fix: B-1 from
-      // post-#278 review).
+      // recent audit cycle).
       try { return prior.get(); }
       catch {
         case e: java.util.concurrent.ExecutionException =>
@@ -348,7 +348,7 @@ private[cache] final class InMemoryResultCache(maxEntries: Int) extends ResultCa
     if (prior != null) {
       // Lost the race; wait for the winner. Re-set the thread
       // interrupt flag if Future.get() cleared it (PR-fix: B-1
-      // from post-#278 review). Without this, a stale interrupt
+      // from recent audit cycle). Without this, a stale interrupt
       // can poison the next Restate handler call on this thread.
       try prior.get()
       catch {

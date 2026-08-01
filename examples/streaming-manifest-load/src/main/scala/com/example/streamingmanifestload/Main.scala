@@ -13,7 +13,7 @@ import org.apache.spark.sql.types.TimestampType
   * model and run a streaming query against it.
   *
   * This is the streaming analog of the existing `manifest-load` example
-  * (PR #139). The checked-in artifact at `manifests/events.json` was
+  * (streaming manifest pattern). The checked-in artifact at `manifests/events.json` was
   * built from `examples/streaming-events/models/events.yml`. It carries:
   *   - 2 dimensions: `event_type`, `timestamp_bucket` (time)
   *   - 2 base measures: `event_count`, `total_value`
@@ -38,7 +38,7 @@ import org.apache.spark.sql.types.TimestampType
   *     flag tells the operator which terminal to use)
   *   - Building a `StreamingConfig` and calling `toStreamingQuery` —
   *     the operator-side `StreamingConfig` is NOT in the manifest
-  *     (PR #124 boundary; the manifest carries the model, the operator
+  *     (the manifest-load boundary; the manifest carries the model, the operator
   *     carries the runtime config)
   *   - Windowed aggregation with watermark + update mode
   *   - Lifecycle surfacing via `ManifestMeta.status` */
@@ -72,7 +72,7 @@ object Main {
       // -- 3. Open the streaming source ----------------------------------
       // The manifest is source-agnostic — it only carries the model's
       // static definition. The source is operator-side, by design
-      // (PR #124 boundary). For this self-contained example we use the
+      // (the manifest-load boundary). For this self-contained example we use the
       // `rate` source enriched with a `type` column so it matches the
       // events.yml schema (timestamp, type, value).
       val source = openStreamingSource(spark)

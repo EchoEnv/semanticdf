@@ -114,7 +114,7 @@ object Main {
   def main(args: Array[String]): Unit = {
     // `implicit` so call sites can write `.execute` / `.toDataFrame` without
     // passing spark positionally. Backward-compatible: explicit `.execute(spark)`
-    // still works (PR #81).
+    // still works (legacy back-compat pattern).
     implicit val spark = SparkSession
       .builder()
       .master("local[*]")

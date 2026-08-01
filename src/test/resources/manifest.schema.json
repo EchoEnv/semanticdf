@@ -151,7 +151,7 @@
   "$defs": {
     "single-table-manifest": {
       "type": "object",
-      "description": "Per-side embedded single-table manifest inside a joined envelope (PR #151)."
+      "description": "Per-side embedded single-table manifest inside a joined envelope (the joined-manifest recipe)."
     }
   }
 }

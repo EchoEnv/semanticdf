@@ -580,7 +580,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
     * `extractJoinKeys` helper when the caller used the lambda
     * form; the typed entry points pre-populate the keys directly. */
 
-  // --- Join-construction propagation helpers (post-#307 audit M3) ---
+  // --- Join-construction propagation helpers ---
   //
   // The post-join wrapper (join_one / join_many / join_cross) used to
   // take the LEFT side's runtime fields verbatim. A user who set

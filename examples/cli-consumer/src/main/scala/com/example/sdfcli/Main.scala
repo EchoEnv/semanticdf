@@ -121,7 +121,7 @@ object Main {
   // ---------------------------------------------------------------------------
 
   /** Print lifecycle warnings to stderr. Wire-stable strings from the MCP
-    * server (PR #136 contract). Format: one `WARN: <message>` line per
+    * server (lifecycle surfacing contract). Format: one `WARN: <message>` line per
     * warning. Printed before the command's main output so the human
     * reader sees them in context. */
   private def printWarnings(warnings: List[String]): Unit = warnings.foreach { w =>
@@ -402,7 +402,7 @@ object Main {
     }
 
     /** Lifecycle warnings carried on the envelope. The MCP server emits
-      * these when a tool touched a Deprecated or Draft model (PR #136);
+      * these when a tool touched a Deprecated or Draft model;
       * the field is additive for tolerant JSON clients and absent on older
       * server versions, in which case this returns Nil. */
     def warningsPath: List[String] = {
