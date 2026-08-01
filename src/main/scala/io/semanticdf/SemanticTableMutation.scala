@@ -277,7 +277,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
   /** Internal helper that all `withMeasures` paths funnel through. */
   private def withMeasures0(measures: Seq[Measure]): SemanticTable = {
     val extra = measures.map(m => m.name -> m).toMap
-    root match {
+    val next = root match {
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
@@ -369,11 +369,24 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           materializeLevel = materializeLevel,
           salt = salt)
 
+      case a: SemanticAggregateOp =>
+        // Aggregate has no measures field — measures live on the source
+        // SemanticTableOp. Recurse.
+        val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt).withMeasures(measures: _*)
+        new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt)
+
       case _ =>
         throw new IllegalStateException(
           s"withMeasures: unexpected root type ${root.getClass.getSimpleName}"
         )
     }
+    // Adding measures changes the result shape — invalidate the cached
+    // request/cache key (see withDimensions for the same pattern).
+    if (next.auditRequest.isDefined || next.resultCache.isDefined) next.invalidateAuditRequest() else next
   }
 
   /** Extend the model with per-row transforms applied to the source data at load
@@ -445,7 +458,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
     */
   def withTransforms(transforms: Transform*): SemanticTable = {
     if (transforms.isEmpty) return this
-    root match {
+    val next = root match {
       case t: SemanticTableOp =>
         // Single-table models: wrap in a SemanticTransformsOp. The transforms
         // are applied at toDataFrame() time, not now. This matches the lazy
@@ -519,11 +532,22 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           materializeLevel = materializeLevel,
           salt = salt)
 
+      case a: SemanticAggregateOp =>
+        // Aggregate has no transforms — transforms attach to the source.
+        val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt).withTransforms(transforms: _*)
+        new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
+          materializeLevel = materializeLevel,
+          salt = salt)
+
       case _ =>
         throw new IllegalStateException(
           s"withTransforms: unexpected root type ${root.getClass.getSimpleName}"
         )
     }
+    // Transforms change the result shape — invalidate.
+    if (next.auditRequest.isDefined || next.resultCache.isDefined) next.invalidateAuditRequest() else next
   }
 
   // -------------------------------------------------------------------------

@@ -84,10 +84,12 @@ final class SemanticTable private[semanticdf] (
       * Default `None`. When `auditSink` is also `None`, this field
       * is dormant — no hashing cost.
       *
-      * Set by `query(measures, dimensions, ...)`. Calling
-      * `.toDataFrame()` on a model with `auditSink` or `resultCache`
-      * set but `auditRequest` empty throws `IllegalStateException`
-      * (both systems derive their keys from this field).
+      * Set by `query(measures, dimensions, ...)` (and propagated by
+      * `queryAs`, `withAuditRequest`, and the streaming query
+      * variants). Calling `.toDataFrame()` on a model with
+      * `auditSink` or `resultCache` set but `auditRequest` empty
+      * throws `IllegalStateException` (both systems derive their
+      * keys from this field).
       *
       * Join-construction propagation: when the
       * outer table is constructed by `join_one` / `join_many` /

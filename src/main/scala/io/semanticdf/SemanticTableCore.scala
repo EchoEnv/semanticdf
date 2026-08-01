@@ -321,8 +321,8 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       expr: String,
       description: Option[String],
       metadata: Map[String, String],
-  ): SemanticTable =
-    new SemanticTable(
+  ): SemanticTable = {
+    val next = new SemanticTable(
       SemanticRowFilterOp(root, name, description, expr, metadata),
       postAggPredicates,
       version,
@@ -332,6 +332,9 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
       materializeLevel = materializeLevel,
       salt = salt,
     )
+    // Adding a row filter changes the rows returned — invalidate.
+    if (next.auditRequest.isDefined || next.resultCache.isDefined) next.invalidateAuditRequest() else next
+  }
 
   /** Set the per-model schema version. Returns a NEW SemanticTable (immutability preserved).
     *

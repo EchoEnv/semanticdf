@@ -105,6 +105,36 @@ class AuditRequestInvarianceSpec extends AnyFunSuite with Matchers with SparkSes
     reshaped.auditRequest shouldBe None
   }
 
+  test("query().withMeasures(...) clears resultCache (shape-changer invalidation)") {
+    val cache = ResultCache.inMemory()
+    val m = baseModel(spark)
+      .withResultCache(cache)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
+    val reshaped = m.withMeasures(Measure("n2", t => count(t("k"))))
+    reshaped.resultCache shouldBe None
+    reshaped.auditRequest shouldBe None
+  }
+
+  test("query().withRowFilter(...) clears resultCache") {
+    val cache = ResultCache.inMemory()
+    val m = baseModel(spark)
+      .withResultCache(cache)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
+    val reshaped = m.withRowFilter("k_pos", "k > 0", description = None, metadata = Map.empty)
+    reshaped.resultCache shouldBe None
+    reshaped.auditRequest shouldBe None
+  }
+
+  test("query().withTransforms(...) clears resultCache") {
+    val cache = ResultCache.inMemory()
+    val m = baseModel(spark)
+      .withResultCache(cache)
+      .query(measures = Seq("n"), dimensions = Seq("k"))
+    val reshaped = m.withTransforms(io.semanticdf.Transform("doubled", t => t("k") * 2))
+    reshaped.resultCache shouldBe None
+    reshaped.auditRequest shouldBe None
+  }
+
   test("query().toDataFrame(): resultCache survives (happy path)") {
     val cache = ResultCache.inMemory()
     val m = baseModel(spark).withResultCache(cache)
