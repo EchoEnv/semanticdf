@@ -12,6 +12,9 @@ trying to do.
 | Run the example models and see real output | [`examples/README.md`](../examples/README.md) — central index with a recommended order for each reader type |
 | Use SemanticDF from Scala code in your own project | [`docs/getting-started.md`](getting-started.md) — paste-and-run consumer setup, then [`README.md`](../README.md) → `## Capabilities` |
 | Define a model in YAML instead of Scala | [`examples/starter/`](../examples/starter/) (simplest YAML model) and [`docs/runtime-quickstart.md`](runtime-quickstart.md) |
+| Tune runtime behavior — caps, caching, audit, broadcast, materialize, skew handling | [`docs/tutorial-runtime-tuning.md`](tutorial-runtime-tuning.md) — the six runtime knobs in one walk-through |
+| See all six runtime knobs applied together | [`examples/runtime-tuning/`](../examples/runtime-tuning/) — customer analytics dashboard |
+| See skew handling applied to a hot-key join | [`examples/skewed-join/`](../examples/skewed-join/) — 1M events, 90/10 split |
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
 | Drive the framework as a CLI client over REST | [`examples/cli-consumer/README.md`](../examples/cli-consumer/README.md) |
 | Understand how a query compiles to a Spark plan | [`docs/guide.md`](../docs/guide.md) — narrative walkthrough, or [`DESIGN.md`](../DESIGN.md) §4 (architecture) for the formal version |
@@ -37,6 +40,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `docs/getting-started.md` | The canonical consumer setup: prerequisites, Maven dep, SparkSession, sample DataFrame, first model, first query. One paste-and-run path from `mvn install` to printed output. | New users — start here |
 | `docs/DOCS_MAP.md` | This document. Wayfinding. | Everyone |
 | `docs/runtime-quickstart.md` | Toolchain reference: what runs on what, how to handle Java 17 + Spark, etc. | Contributors |
+| `docs/tutorial-runtime-tuning.md` | Walk-through of the six runtime knobs (`withMaxRows`, `withResultCache`, `withAuditSink`, `withBroadcastJoinThreshold`, `withMaterialize`, `withSalt`). Decision tree, when-to-use matrix, real-world scenario, anti-patterns. | New users tuning a model for production |
 | `docs/calc-author-guide.md` | How to define calc measures in Scala and YAML. | Calc authors |
 | `docs/known-limitations.md` | Current scope, guardrails, and roadmap hints. | Readers evaluating fit |
 | `docs/scaladoc-style.md` | The bar for Scaladoc in `io.semanticdf.*`. Seven rules + a pre-commit checklist + a do/don't section. The canonical example is `src/main/scala/io/semanticdf/Model.scala`. | Contributors writing or reviewing docs |

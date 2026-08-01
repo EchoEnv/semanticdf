@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers
 import io.semanticdf.{Dimension, Measure, SparkSessionFixture, toSemanticTable}
 
 /** Integration test for the `SEMANTICDF_MAX_ROWS` env-var override
-  * on `CacheBridge.executeQuery` (post-#312).
+  * on `CacheBridge.executeQuery`.
   *
   * Drives a real `executeQuery` call with `envMaxRowsOverride`
   * set to verify the cap is actually applied end-to-end.

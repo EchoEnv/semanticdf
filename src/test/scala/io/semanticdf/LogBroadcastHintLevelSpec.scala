@@ -12,8 +12,8 @@ import scala.collection.mutable
 
 /** Pin the log level of `SemanticLogger.logBroadcastHint` at INFO.
   *
-  * PR #299 originally placed the broadcast-hint log at DEBUG. The
-  * PR #299 review (convergent LOW finding) flagged this as too quiet
+  * The implementation originally placed the broadcast-hint log at DEBUG. The
+  * A review (convergent LOW finding) flagged this as too quiet
   * for a user-driven tuning event — the user explicitly opted
   * into the threshold via `withBroadcastJoinThreshold(n)`, so when
   * the hint fires they want to see it. Promoted to INFO.
@@ -32,7 +32,7 @@ import scala.collection.mutable
   *     broadcast hint to DEBUG for the wrong reason).
   */
 class LogBroadcastHintLevelSpec extends AnyFunSuite with Matchers {
-  test("logBroadcastHint emits at INFO level (post-#299 review promotion)") {
+  test("logBroadcastHint emits at INFO level (recent audit cycle promotion)") {
     val coreLogger = LogManager.getLogger("io.semanticdf.SemanticLogger")
       .asInstanceOf[CoreLogger]
 
@@ -53,7 +53,7 @@ class LogBroadcastHintLevelSpec extends AnyFunSuite with Matchers {
       if (captured.isEmpty) {
         fail(s"logBroadcastHint emitted no event at INFO threshold. " +
           s"logger level=${coreLogger.getLevel}. " +
-          s"The post-#299 review promotion to INFO did not take effect.")
+          s"The recent audit cycle promotion to INFO did not take effect.")
       }
       captured.head.getLevel shouldBe Level.INFO
     } finally {
@@ -83,7 +83,7 @@ class LogBroadcastHintLevelSpec extends AnyFunSuite with Matchers {
       )
       assert(captured.isEmpty,
         s"logBroadcastHint emitted ${captured.size} event(s) at WARN threshold — " +
-        s"the post-#299 promotion to INFO is over-emitting. " +
+        s"the promotion to INFO is over-emitting. " +
         s"Expected: no event at WARN. Got: ${captured.map(_.getLevel).mkString(", ")}")
     } finally {
       coreLogger.setLevel(originalLevel)

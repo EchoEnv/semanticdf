@@ -32,7 +32,7 @@ import org.scalatest.matchers.should.Matchers._
   *      by whatever the producer cached).
   *   6. Two queries with different maxRows produce different cache keys,
   *      so a tighter cap on the second call gets a fresh miss path
-  *      (regression guard for the cache-key bug fixed post-#294).
+  * (regression guard for the cache-key bug fixed).
   *   7. `withMaxRows(-1)` throws `IllegalArgumentException`.
   */
 class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
@@ -117,7 +117,7 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
   }
 
   test("tighter maxRows produces a cache miss with the cap applied (not a stale hit)") {
-    // After the post-#294 cache-key fix, two queries with different
+    // After the cache-key fix, two queries with different
     // maxRows produce different cache keys. A subsequent call with a
     // tighter cap must run the miss path (with the cap applied), NOT
     // return the producer's uncapped result. This is the regression
@@ -132,7 +132,7 @@ class MaxRowsSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixtu
     rows.length shouldBe 1  // cache miss with cap=1, not stale cache hit
   }
 
-  test("different maxRows produces a different cache key (regression guard for post-#294 bug)") {
+  test("different maxRows produces a different cache key (regression guard)") {
     // A user who calls query() twice with different maxRows must get two
     // separate cache entries, not a hit on the higher-cap row. Pre-fix, the
     // cache key omitted maxRows, so the second call (with a tighter cap)

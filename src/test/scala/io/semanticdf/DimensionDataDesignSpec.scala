@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 /**
  * Regression tests for the data-design audit fix to [[Dimension]]:
- * the `derived` field is only legal on time dimensions. PR #290 added
+ * the `derived` field is only legal on time dimensions. A primary-constructor
  * a `require(derived.isEmpty || isTimeDimension, ...)` in the primary
  * constructor body. This file pins the invariant.
  *

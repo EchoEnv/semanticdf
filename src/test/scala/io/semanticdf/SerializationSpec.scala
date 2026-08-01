@@ -202,8 +202,8 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
     assert(round.status == model.status)
   }
 
-  test("SemanticTable: maxRows round-trips through Java serialization (regression guard for post-#294)") {
-    // The post-#294 audit (architect review) flagged that the new maxRows
+  test("SemanticTable: maxRows round-trips through Java serialization (regression guard)") {
+    // The recent audit (architect review) flagged that the new maxRows
     // field on SemanticTable is a primitive Int and round-trips via the
     // default Java serialization path, but no existing test pinned it.
     // Without this assertion, a future regression that changes maxRows
@@ -256,10 +256,10 @@ class SerializationSpec extends AnyFunSuite with SparkSessionFixture with Flight
 
   // ----------------------------------------------------------------
   // Predicate family — the moved predicate types and the cache
-  // auto-invalidation contract. PR #203 moved the predicate files to
+  // auto-invalidation contract. moved the predicate files to
   // the `predicate/` sub-package; this section guards the
   // Serializable contract on each shape and the `@volatile @transient`
-  // annotation on `PredicateAst.Predicate.cache` (PR #202's cluster-
+  // annotation on `PredicateAst.Predicate.cache` (cluster-
   // safety fix). The `cache` field is a driver-side memoization local
   // to one `toColumn` invocation; rebuilding it on the next call
   // costs one extra `Column` build, but on the round-trip it must

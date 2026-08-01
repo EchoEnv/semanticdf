@@ -539,7 +539,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
   }
 
   test("toStreamingQuery: foreachBatch applies the streaming model's where filter (regression for #189)") {
-    // PR #189 fix: the filter-only streaming path used to construct
+    // fix: the filter-only streaming path used to construct
     // a bare `SemanticTableOp(batchDf)` and discard the rest of the
     // op tree, so `.where(...)` and `.withTransforms(...)` on a
     // streaming model were silently dropped. The fix walks the op
@@ -591,7 +591,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
   // Regression for #190: streaming audit emit
   // -------------------------------------------------------------------------
   //
-  // PR #190: the streaming terminal was emitting NO audit events for
+  // the streaming terminal was emitting NO audit events for
   // windowed queries and emitting audit events with rowCount=0 for
   // filter-only queries. Both broke the v0.1.17 observability surface.
 
@@ -634,7 +634,7 @@ class StreamingSpec extends AnyFunSuite with SparkSessionFixture {
   }
 
   test("toStreamingQuery: windowed path (SemanticAggregateOp root) emits audit events (regression for #190)") {
-    // PR #190 fixed two audit bugs. BUG 1 was the
+    // The fix addressed two audit bugs. BUG 1 was the
     // `case _: SemanticAggregateOp if opts.window.isDefined` branch
     // short-circuiting to `foreachBatchFn(batchDf)` with no audit
     // emit. To exercise that branch the model root MUST be a

@@ -64,8 +64,8 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
     m.materializeLevel shouldBe Some(StorageLevel.MEMORY_ONLY)
   }
 
-  test("withTransforms preserves materializeLevel (regression: post-#309 audit pattern)") {
-    // Same regression pattern as withRowFilter from PR #305 / broadcastJoinThreshold:
+  test("withTransforms preserves materializeLevel (regression: recent audit pattern)") {
+    // Same regression pattern as withRowFilter from the withRowFilter and broadcastJoinThreshold setters:
     // each setter must thread materializeLevel through new SemanticTable(...). The
     // mutation's withTransforms creates a fresh SemanticTable; if materializeLevel
     // were dropped, the user's persist setting would silently vanish.
@@ -217,7 +217,7 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
   // ----------------------------------------------------------------
 
   test("query().toDataFrame(): materializeLevel survives copyAuditRequest and the fast path applies persist") {
-    // Regression test for the post-#314 audit M3 finding. The
+    // Regression test for the recent audit finding. The
     // `query()` chain internally calls `copyAuditRequest` (an internal
     // setter on SemanticTable) to stamp the captured request. The
     // resulting SemanticTable has `auditRequest = Some(...)` but
@@ -225,7 +225,7 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
     // We need to verify two things:
     //   1. The field survives copyAuditRequest (regression: forgetting
     //      to thread `materializeLevel = materializeLevel` would silently
-    //      drop it, mirroring the pre-#305 withRowFilter bug).
+    // drop it, mirroring the withRowFilter bug).
     //   2. The fast path applies persist on the resulting table (the
     //      auditSink.isEmpty && resultCache.isEmpty gate still passes).
     val m = baseModel(spark).withMaterialize(StorageLevel.MEMORY_AND_DISK_SER)
@@ -266,7 +266,7 @@ class MaterializeSpec extends AnyFunSuite with Matchers with SparkSessionFixture
     // `materializeLevel = this.materializeLevel` thinking that's
     // "preserving") wouldn't be caught here. The structural assertion
     // is the best we can do without spinning up a streaming query in
-    // a unit test. The M4 finding from the post-#314 audit (architect
+    // a unit test. The M4 finding from the recent audit (architect
     // review) flagged this trade-off; deferring the refactor that
     // extracts `batchModel` into a testable method.
     val model = baseModel(spark).withMaterialize(StorageLevel.MEMORY_ONLY)

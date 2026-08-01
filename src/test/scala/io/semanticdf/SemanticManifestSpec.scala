@@ -87,8 +87,8 @@ class SemanticManifestSpec
 
     // -- 1a. runtime fields (maxRows / broadcastJoinThreshold) round-trip ----
 
-    it("round-trips maxRows (regression: maxRows was dropped on round-trip; see PR #295 + #302)") {
-      // PR #295 added maxRows to SemanticTable as a runtime safety cap; PR #302
+    it("round-trips maxRows (regression: maxRows was dropped on round-trip; see the runtime-field history)") {
+      // The implementation added maxRows to SemanticTable as a runtime safety cap;
       // standardised the default to CacheKey.DefaultMaxRows. Before this PR,
       // SemanticManifest.toJson did not emit maxRows and fromJson did not
       // restore it, so a YAML→manifest→SemanticTable round-trip silently
@@ -124,8 +124,8 @@ class SemanticManifestSpec
       round.maxRows shouldBe 0
     }
 
-    it("round-trips broadcastJoinThreshold (regression: threshold was dropped on round-trip; see PR #299)") {
-      // PR #299 added the opt-in broadcast threshold. The manifest
+    it("round-trips broadcastJoinThreshold (regression: threshold was dropped on round-trip; see runtime-field history)") {
+      // The implementation added the opt-in broadcast threshold. The manifest
       // round-trip should preserve it so a YAML-deployed model can
       // opt into broadcast hints via the YAML plumbing.
       val df = spark.createDataFrame(

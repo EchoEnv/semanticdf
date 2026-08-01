@@ -8,7 +8,7 @@ import org.scalatest.matchers.should.Matchers
 
 import io.semanticdf.{Dimension, Measure, SparkSessionFixture, toSemanticTable}
 
-/** Regression tests for `AuditEvent.executedPlan` (post-#310 follow-up).
+/** Regression tests for `AuditEvent.executedPlan`.
   *
   * The Spark execution plan that produced a result is captured in
   * the audit event so operators can inspect filter pushdown,

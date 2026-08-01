@@ -192,7 +192,7 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
     // Falsifiable: set adaptive.enabled to false BEFORE the call.
     // Then verify the library re-enables it (so the skew child
     // actually takes effect). This is the HIGH bug from the
-    // post-#318 audit — the original implementation set only the
+    // recent audit — the original implementation set only the
     // skew child, not the parent.
     spark.conf.set("spark.sql.adaptive.enabled", "false")
     spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "false")
@@ -214,7 +214,7 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
     }
   }
 
-  test("streaming batchModel carries salt (post-#318 HIGH fix): streaming source.withSalt(n) does NOT drop skew handling") {
+  test("streaming batchModel carries salt (HIGH fix): streaming source.withSalt(n) does NOT drop skew handling") {
     // Falsifiable: configure a STREAMING source (via
     // `toStreamingSemanticTable`, not `toSemanticTable` which is
     // batch-only) with `withSalt(10)`, then verify that the

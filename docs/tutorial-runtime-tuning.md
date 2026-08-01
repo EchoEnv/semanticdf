@@ -83,16 +83,32 @@ val m = toSemanticTable(ordersDf, name = Some("orders"))
   .withDimensions(Dimension("region", _ => ordersDf("region")))
   .withMeasures(Measure("total", _ => sum(ordersDf("amount"))))
   .withMaxRows(10_000)   // never return more than 10K rows per query
+  .withResultCache(ResultCache.inMemory())  // cap fires on cache miss
 
 m.query(measures = Seq("total")).execute(spark).count()
-// res16: Long = 10000   (or fewer if the underlying data has fewer rows)
+// Long = 10000 (or fewer if the underlying data has fewer rows)
 ```
 
 **Sentinel**: `n = 0` disables the cap entirely (escape hatch for
-audits / dumps that must see every row). The setter converts `0` to
-`None` internally.
+audits / dumps that must see every row). The setter stores `0`
+literally; the compile path checks `if (maxRows > 0)` and skips
+`df.limit(maxRows)` when `0` (so the cap doesn't fire). This is
+asymmetric to `withBroadcastJoinThreshold(0)` and `withSalt(0)`,
+which DO convert `0` to `None` at the setter — the cap uses
+compile-path branching because the no-cap semantic is meaningful
+even after the model is constructed (a model built with
+`maxRows = 0` is "no cap, ever" by intent).
 
 **Default**: 100,000 (see `CacheKey.DefaultMaxRows`).
+
+**Where the cap fires**: the cache-miss and audit-only branches of
+`toDataFrameInternal`. The fast path (no audit, no cache) skips
+the cap because the user already has a tight `DataFrame` to work
+with — the cap is a safety net for the cache/audit paths where
+the library builds a `parallelize`-based DataFrame from cached rows
+or audit-driven compilation. To make the cap demonstrably fire on
+a query, include `withResultCache` (so the path is cache-miss on
+first call) or `withAuditSink`.
 
 **Use case**: production models exposed to an LLM agent or BI tool,
 where an accidentally-unbounded query would OOM the driver.
@@ -150,7 +166,7 @@ val m = toSemanticTable(ordersDf)
 
 m.query(measures = Seq("total")).execute(spark).show()
 
-sink.events().foreach(println)
+sink.snapshot().foreach(println)
 // AuditEvent(model=orders, version=1, measures=List(total),
 //            dimensions=List(region), rowCount=4, elapsedMs=87,
 //            status=ok, executedPlan=..., dedupHash=...)
@@ -164,10 +180,13 @@ of the *query shape*, not the result). Repeated identical queries
 produce events with the same `dedupHash` — useful for grouping in
 log search.
 
-**Streaming caveat**: when the audit/cache branch fires (i.e. a
-`parallelize` rebuild from cached rows), no Spark plan runs — the
-audit event still fires, but `rowCount` comes from the cached row
-count and `executedPlan` is `None`.
+**Audit/cache branch behavior**: when the audit/cache branch fires
+(i.e. a `parallelize` rebuild from cached rows on cache hit), no
+Spark plan runs — the audit event still fires, but `rowCount`
+comes from the cached row count and `executedPlan` is `None`. The
+`maxRows` cap also does not apply on a cache hit (the cached rows
+are returned as-is); it does apply on a cache miss or audit-only
+path.
 
 ### 4. `withBroadcastJoinThreshold(b)` — auto-broadcast small dimensions
 
@@ -271,15 +290,19 @@ orders.join_one(customers, (l, r) => l("customer_id") === r("id"))
 into smaller sub-partitions AND replicates the matching partition on
 the other side of the join — they run as parallel tasks. It is NOT
 auto-broadcast semantics (a common misconception). For a full
-explanation, see [`DESIGN.md`](../DESIGN.md) § on join strategies.
+explanation, see [`DESIGN.md`](../DESIGN.md) § 5.3 "Joins" and the
+`withSalt` Scaladoc on `SemanticTable`.
 
 **Why not a custom salt column**: the obvious "add `(rand() * n)` to
 both sides, join on `concat(key, "|", salt)`" approach produces
 **wrong results** in shuffled joins because the LEFT and RIGHT sides
 run on different executors with different RNG sequences, so the
 salt values do not match across sides for the same key. Spark AQE
-handles skew correctly at the shuffle stage via dynamic partition
-broadcast, without a custom salt column.
+handles skew correctly at the shuffle stage by splitting each
+skewed partition into smaller sub-partitions and replicating the
+matching partition on the other side (see
+`OptimizeSkewedJoin.scala` in Spark) — without a custom salt
+column.
 
 **Sentinel**: `n = 0` disables the hint (escape hatch).
 
@@ -369,7 +392,7 @@ What's happening:
 - Every query is **cached by shape** (widget 1 cached separately
   from widget 2). Refreshing the dashboard re-runs Spark only on
   cache miss.
-- Every query is **audited** — `audit.events()` tells you which widgets
+- Every query is **audited** — `audit.snapshot()` tells you which widgets
   are slow, which users are heavy queriers, what the actual Spark
   plans look like.
 - The compiled `DataFrame` is **persisted in memory + disk serialized**
@@ -429,9 +452,13 @@ A few non-obvious interactions:
   semantics, the sentinel conventions, and the propagation rules.
   Hover over the setter in IntelliJ, or read `SemanticTable.scala`
   in the source.
-- **Examples**: [`examples/pipeline/`](../examples/pipeline/) shows
-  a multi-knob scenario similar to the dashboard above. Run it,
-  read the README, modify the knobs, see what changes.
+- **Examples**:
+  - [`examples/runtime-tuning/`](../examples/runtime-tuning/) —
+    a multi-knob scenario similar to the dashboard above. Run it,
+    read the README, modify the knobs, see what changes.
+  - [`examples/skewed-join/`](../examples/skewed-join/) — focused
+    skew-handling walkthrough (1M events, 90/10 split, same total
+    with and without `withSalt`).
 - **Tests**: `MaterializeSpec`, `BroadcastJoinThresholdSpec`,
   `SaltSpec` each cover one knob end-to-end. Read the spec to see
   the exact behavior the library guarantees.
