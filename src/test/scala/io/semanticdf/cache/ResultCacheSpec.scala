@@ -551,7 +551,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
     assert(c.keys().isEmpty)
   }
 
-  // PR-fix #6: recent audit cycle. invalidateByModelAndVersion must
+  // fix #6 (invalidateByModelAndVersion): recent audit cycle. invalidateByModelAndVersion must
   // walk BOTH the row-form sidecar AND the journaled-form sidecar.
   // Pre-fix, journaled entries leaked.
   test("inMemory: invalidateByModelAndVersion clears journaled entries too") {
@@ -576,7 +576,7 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       "journaled entry tagged with a different model must survive")
   }
 
-  // PR-fix #9: recent audit cycle. Default getOrComputeJournaled
+  // fix #9 (getOrComputeJournaled): recent audit cycle. Default getOrComputeJournaled
   // silently wrote uninvalidateable entries (model=""). Loud failure
   // is correct — only InMemoryResultCache should provide this.
   test("getOrComputeJournaled: default impl throws UnsupportedOperationException") {

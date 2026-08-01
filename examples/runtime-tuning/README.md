@@ -50,7 +50,7 @@ Wrote 50000 orders
 
   elapsed: ~1000ms
 
-=== Widget 2: orders per region ===
+=== Widget 2: orders per category ===
 +-----------+------------------+-----+
 |   category|            amount|count|
 +-----------+------------------+-----+

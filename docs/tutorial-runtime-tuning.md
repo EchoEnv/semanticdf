@@ -184,9 +184,11 @@ log search.
 (i.e. a `parallelize` rebuild from cached rows on cache hit), no
 Spark plan runs — the audit event still fires, but `rowCount`
 comes from the cached row count and `executedPlan` is `None`. The
-`maxRows` cap also does not apply on a cache hit (the cached rows
-are returned as-is); it does apply on a cache miss or audit-only
-path.
+`maxRows` cap does not apply on a cache hit: the cap was already
+applied when the producer cached those rows, and cache hits
+replay those rows verbatim without re-capping. The cap does
+apply on a cache miss (first time the query runs) and on the
+audit-only path (cache disabled but audit enabled).
 
 ### 4. `withBroadcastJoinThreshold(b)` — auto-broadcast small dimensions
 
