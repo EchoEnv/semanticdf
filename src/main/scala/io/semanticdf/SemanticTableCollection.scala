@@ -346,7 +346,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
     * }}}
     */
   def groupBy(keys: String*): SemanticGroupBy =
-    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold, materializeLevel, salt)
+    new SemanticGroupBy(root, keys, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold, materializeLevel, salt, rollups)
 
   // -------------------------------------------------------------------------
   // Typed field references (SemanticField typeclass)
@@ -489,6 +489,12 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
         * `None` (no skew handling). Threaded through `groupBy` so
         * `groupBy().aggregate(...)` retains the user's skew hint. */
       salt: Option[Int] = None,
+      /** Rollups registered on the originating [[SemanticTable]]. Carried
+        * through `groupBy().aggregate(...)` so the resulting query table
+        * still exposes `listRollups()`. Manifest round-trip drops them
+        * (manifest doesn't carry `sourceProvider`), but in-memory fluent
+        * chains preserve them. */
+      rollups: List[io.semanticdf.rollup.Rollup] = Nil,
   ) {
     /** Aggregate with one typed measure ref. Same runtime as `aggregate(ref.name)`. */
     def aggregateMeasures[M1](m1: FieldRef[M1])(implicit ev: SemanticMeasure[M1]): SemanticTable =
@@ -528,7 +534,7 @@ private[semanticdf] trait SemanticTableCollection { self: SemanticTable =>
       var op: SemanticOp = SemanticAggregateOp(source, keys, measures)
       // Wrap with post-agg filters (HAVING). Each is a SemanticFilterOp on the aggregate.
       postAggPredicates.foreach { p => op = SemanticFilterOp(op, p) }
-      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows, broadcastJoinThreshold = this.broadcastJoinThreshold, materializeLevel = this.materializeLevel, salt = this.salt)
+      new SemanticTable(op, version = version, sourceTable = sourceTable, status = status, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = this.maxRows, broadcastJoinThreshold = this.broadcastJoinThreshold, materializeLevel = this.materializeLevel, salt = this.salt, rollups = this.rollups)
     }
   }
 }

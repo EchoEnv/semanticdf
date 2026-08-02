@@ -21,7 +21,7 @@ class Post329RedesignSpec extends AnyFunSuite with SparkSessionFixture {
   private def buildRollupModel(spark: org.apache.spark.sql.SparkSession) = {
     val rollupDf = spark.range(10).toDF("k").groupBy("k").agg(sum("k").as("sum_k"))
     val rollup = Rollup("r1", "orders", Seq("k"),
-      Seq(RollupMeasure("total", RollupAggregator.Sum, "sum_k")), () => rollupDf)
+      Seq(RollupMeasure("total", "sum", "sum_k")), () => rollupDf)
     val raw = spark.range(10).toDF("k")
       .withColumn("v", (fcol("k") * 3 % 7).cast("string"))
     val model = toSemanticTable(raw, name = Some("orders"))

@@ -96,30 +96,36 @@ final class RollupQuery private[rollup] (
         s"Use `RollupRegistry.register(name, provider)` to add it before executing."
       ))
 
-    // 1. Project: dimensions + storage columns (renamed to measure names)
+    // 1. Apply WHERE if set (against source schema, BEFORE projection)
+    val filtered = where.fold(source) { pred =>
+      // Validate predicate columns exist in the SOURCE schema
+      // (rollup source may have columns not in the dim+measure projection,
+      // e.g., a date column the user wants to filter on).
+      val predCols = pred.fields
+      val sourceCols = source.schema.fieldNames.toSet
+      val missing = predCols -- sourceCols
+      if (missing.nonEmpty) {
+        throw new IllegalStateException(
+          s"Rollup '${rollup.name}' WHERE clause references columns " +
+          s"$missing that aren't in the rollup source. " +
+          s"Available: ${source.schema.fieldNames.toList.sorted}"
+        )
+      }
+      // Convert predicate to a Column via the source schema
+      val col = predicateToColumn(pred, source.schema)
+      source.where(col)
+    }
+
+    // 2. Project: dimensions + storage columns (renamed to measure names)
     val dimCols     = rollup.rollupDimensions.map(col)
     val measureCols = rollup.rollupMeasures.map { m =>
       col(m.storageCol).as(m.name)
     }
     val projection = (dimCols ++ measureCols).distinct
-    val projected  = source.select(projection: _*)
+    val projected  = filtered.select(projection: _*)
 
-    // 2. Apply WHERE if set
-    val withWhere = where.fold(projected) { pred =>
-      // Validate predicate columns exist in the projected schema
-      val predCols   = pred.fields
-      val schemaCols = projected.schema.fieldNames.toSet
-      val missing    = predCols -- schemaCols
-      if (missing.nonEmpty) {
-        throw new IllegalStateException(
-          s"Rollup '${rollup.name}' WHERE clause references columns " +
-          s"$missing that aren't in the rollup. Available: ${rollup.precomputedColumns.toList.sorted}"
-        )
-      }
-      // Convert predicate to a Column via the projected schema
-      val col = predicateToColumn(pred, projected.schema)
-      projected.where(col)
-    }
+    // 3. Reassign for downstream ORDER BY / LIMIT (no longer mutating)
+    val withWhere = projected
 
     // 3. Apply ORDER BY if set
     val withOrder = if (orderBy.isEmpty) withWhere else withWhere.orderBy(orderBy.map(_.toColumn): _*)
@@ -143,6 +149,18 @@ final class RollupQuery private[rollup] (
       case io.semanticdf.predicate.Predicate.Compare.Le(field, value)  => fieldCol(field) <= value
       case io.semanticdf.predicate.Predicate.Compare.Gt(field, value)  => fieldCol(field) > value
       case io.semanticdf.predicate.Predicate.Compare.Ge(field, value)  => fieldCol(field) >= value
+      case io.semanticdf.predicate.Predicate.Compare.Contains(field, value) =>
+        fieldCol(field).contains(org.apache.spark.sql.functions.lit(value))
+      case io.semanticdf.predicate.Predicate.Compare.StartsWith(field, value) =>
+        fieldCol(field).startsWith(org.apache.spark.sql.functions.lit(value))
+      case io.semanticdf.predicate.Predicate.Compare.EndsWith(field, value) =>
+        fieldCol(field).endsWith(org.apache.spark.sql.functions.lit(value))
+      case io.semanticdf.predicate.Predicate.Compare.ArrayContains(field, value) =>
+        // ArrayContains(field, value) means "field array contains value".
+        // Spark SQL: array_contains(field, value) — but a Column expression
+        // equivalent is `field === value` reduced across the array.
+        // Simplest correct form for v0.2.4: use array_contains function.
+        org.apache.spark.sql.functions.array_contains(fieldCol(field), org.apache.spark.sql.functions.lit(value))
       case io.semanticdf.predicate.Predicate.And(children @ _*) => children.map(predicateToColumn(_, schema)).reduce(_ && _)
       case io.semanticdf.predicate.Predicate.Or(children @ _*)  => children.map(predicateToColumn(_, schema)).reduce(_ || _)
       case io.semanticdf.predicate.Predicate.Not(child)         => !predicateToColumn(child, schema)

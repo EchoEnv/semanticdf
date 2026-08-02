@@ -31,19 +31,24 @@ import io.semanticdf.predicate.Predicate
   * @param precomputedRowCount  row count of the rollup at registration time
   * @param precomputedColumns   column names of the rollup at registration time
   */
-final case class Rollup(
-  name:                 String,
-  baseModel:            String,
-  rollupDimensions:     Seq[String],
-  rollupMeasures:       Seq[RollupMeasure],
-  freshness:            RollupFreshness      = RollupFreshness.Track(
-    watermarkProvider = () => java.time.Instant.now(),
-    maxStaleness       = java.time.Duration.ofHours(1),
-    onStale            = OnStalePolicy.FallBackToBase,
-  ),
-  precomputedRowCount:  Long                  = 0L,
-  precomputedColumns:   Set[String]           = Set.empty,
-)
+final class Rollup private[rollup] (
+  val name:                 String,
+  val baseModel:            String,
+  val rollupDimensions:     Seq[String],
+  val rollupMeasures:       Seq[RollupMeasure],
+  val freshness:            RollupFreshness,
+  val precomputedRowCount:  Long,
+  val precomputedColumns:   Set[String],
+) extends Serializable {
+  // equals/hashCode for List operations (e.g. rollups.filterNot(_.name == ...))
+  // Keyed by `name` since rollup names are unique within a model.
+  override def equals(other: Any): Boolean = other match {
+    case r: Rollup => r.name == this.name
+    case _ => false
+  }
+  override def hashCode(): Int = name.hashCode
+  override def toString: String = s"Rollup(name=$name, baseModel=$baseModel, dims=$rollupDimensions, measures=$rollupMeasures)"
+}
 
 object Rollup {
   /** Smart constructor. Validates fields, precomputes stats from the
@@ -64,11 +69,23 @@ object Rollup {
     rollupMeasures:   Seq[RollupMeasure],
     sourceProvider:   () => DataFrame,
   ): Rollup = {
+    // Structural validations — fail fast BEFORE loading the source.
     require(name.nonEmpty, s"Rollup.name must not be empty")
+    require(baseModel.nonEmpty, s"Rollup '$name': baseModel must not be empty")
     require(rollupDimensions.nonEmpty, s"Rollup '$name': rollupDimensions must not be empty")
     require(rollupMeasures.nonEmpty, s"Rollup '$name': rollupMeasures must not be empty")
+    require(rollupDimensions.distinct.size == rollupDimensions.size,
+      s"Rollup '$name': duplicate dimension names in $rollupDimensions")
+    val measureNames = rollupMeasures.map(_.name)
+    require(measureNames.distinct.size == measureNames.size,
+      s"Rollup '$name': duplicate measure names in $measureNames")
+    val dimSet   = rollupDimensions.toSet
+    val measSet  = measureNames.toSet
+    require(measSet.intersect(dimSet).isEmpty,
+      s"Rollup '$name': name collision between dimensions and measures: ${measSet.intersect(dimSet)}")
 
     val source    = sourceProvider()
+    require(source != null, s"Rollup '$name': sourceProvider returned null; cannot compute precomputed columns")
     val cols      = source.columns.toSet
     val rowCount  = source.count()
     val dims      = rollupDimensions.toSet
@@ -78,12 +95,75 @@ object Rollup {
       s"Rollup '$name': dimensions $dims not in source columns ${cols.toList.sorted}")
     require(storageCols.subsetOf(cols),
       s"Rollup '$name': storage columns $storageCols not in source columns ${cols.toList.sorted}")
+    require(source != null, s"Rollup '$name': sourceProvider returned null; cannot compute precomputed columns")
     new Rollup(name, baseModel, rollupDimensions, rollupMeasures, RollupFreshness.Track(
       watermarkProvider = () => java.time.Instant.now(),
       maxStaleness       = java.time.Duration.ofHours(1),
       onStale            = OnStalePolicy.FallBackToBase,
     ), rowCount, cols)
   }
+
+  /** 6-arg overload that accepts an explicit `freshness` policy.
+    *
+    * For v0.2.4 the freshness field is preserved on the [[Rollup]] but
+    * [[RollupQuery.execute]] does NOT yet consult it (freshness is
+    * tracked-but-not-enforced; that lands in v0.3.0 once auto-routing
+    * is in scope). Use this overload when you want to record the
+    * intended policy on the rollup metadata (e.g., for manifest
+    * round-trip) before the runtime enforcement is wired up.
+    *
+    * Precomputes `precomputedRowCount` and `precomputedColumns` from the
+    * source, same as the 5-arg overload. The `sourceProvider` may return
+    * null only if `freshness = NoTracking` and the caller accepts that
+    * the rollup won't have precomputed columns (v0.2.4 doesn't gate
+    * anything on those fields, but be aware downstream callers may).
+    */
+  def apply(
+    name:             String,
+    baseModel:        String,
+    rollupDimensions: Seq[String],
+    rollupMeasures:   Seq[RollupMeasure],
+    sourceProvider:   () => DataFrame,
+    freshness:        RollupFreshness,
+  ): Rollup = {
+    require(name.nonEmpty, s"Rollup.name must not be empty")
+    require(baseModel.nonEmpty, s"Rollup '$name': baseModel must not be empty")
+    require(rollupDimensions.nonEmpty, s"Rollup '$name': rollupDimensions must not be empty")
+    require(rollupMeasures.nonEmpty, s"Rollup '$name': rollupMeasures must not be empty")
+    require(rollupDimensions.distinct.size == rollupDimensions.size,
+      s"Rollup '$name': duplicate dimension names in $rollupDimensions")
+    val measureNames = rollupMeasures.map(_.name)
+    require(measureNames.distinct.size == measureNames.size,
+      s"Rollup '$name': duplicate measure names in $measureNames")
+    val dimSet   = rollupDimensions.toSet
+    val measSet  = measureNames.toSet
+    require(measSet.intersect(dimSet).isEmpty,
+      s"Rollup '$name': name collision between dimensions and measures: ${measSet.intersect(dimSet)}")
+
+    val (cols, rowCount) = freshness match {
+      case RollupFreshness.NoTracking =>
+        // NoTracking rollups don't enforce freshness at execute time
+        // (v0.2.4 doesn't enforce it anyway), so precompute is optional.
+        // If the source loads successfully, use it for accurate precompute;
+        // if it returns null (e.g., lazy source not yet available), skip.
+        val s = sourceProvider()
+        if (s == null) (Set.empty[String], 0L)
+        else (s.columns.toSet, s.count())
+      case _: RollupFreshness.Track =>
+        val s = sourceProvider()
+        require(s != null, s"Rollup '$name': sourceProvider returned null; cannot compute precomputed columns")
+        (s.columns.toSet, s.count())
+    }
+    val dims      = rollupDimensions.toSet
+    val storageCols = rollupMeasures.map(_.storageCol).toSet
+    require(dims.subsetOf(cols) || cols.isEmpty,
+      s"Rollup '$name': dimensions $dims not in source columns ${cols.toList.sorted}")
+    require(storageCols.subsetOf(cols) || cols.isEmpty,
+      s"Rollup '$name': storage columns $storageCols not in source columns ${cols.toList.sorted}")
+    new Rollup(name, baseModel, rollupDimensions, rollupMeasures, freshness, rowCount, cols)
+  }
+
+
 
   /** Internal constructor for `fromJson` -- skips precompute. */
   private[rollup] def fromMetadata(
@@ -105,11 +185,18 @@ object Rollup {
   * by `df.groupBy("region", "category").agg(sum("amount").as("region_total"))`
   * has `storageCol = "region_total"`.
   */
-final case class RollupMeasure(
-  name:       String,
-  aggregator: RollupAggregator,
-  storageCol: String,
-)
+final class RollupMeasure private[rollup] (
+  val name:       String,
+  val aggregator: RollupAggregator,
+  val storageCol: String,
+) extends Serializable {
+  override def equals(other: Any): Boolean = other match {
+    case m: RollupMeasure => m.name == this.name
+    case _ => false
+  }
+  override def hashCode(): Int = name.hashCode
+  override def toString: String = s"RollupMeasure(name=$name, agg=${aggregator.name}, storageCol=$storageCol)"
+}
 
 object RollupMeasure {
   /** Smart constructor: validate `aggregator` parses, validate
