@@ -658,7 +658,10 @@ salt = salt, rollups = this.rollups)
     * joined model has no rollups, and `useRollup` on it throws with
     * a clear message.
     */
-  private[semanticdf] def joinRollups(other: SemanticTable): List[io.semanticdf.rollup.Rollup] = Nil
+  /** Path-2 contract: rollups do NOT survive joins. The joined model
+    * always has empty rollups regardless of inputs. See `withRollup`
+    * Scaladoc for the rationale (avoiding silent join-drop). */
+  private[semanticdf] def joinRollups: List[io.semanticdf.rollup.Rollup] = Nil
   private[semanticdf] def join_oneWithKeys(
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
@@ -787,7 +790,7 @@ salt = salt, rollups = this.rollups)
           broadcastJoinThreshold = joinBroadcastThreshold(other),
           materializeLevel = joinMaterializeLevel(other),
           salt = joinSalt(other),
-        rollups                = joinRollups(other),
+        rollups                = joinRollups,
         )
       }
     }
@@ -807,7 +810,7 @@ salt = salt, rollups = this.rollups)
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
       salt = joinSalt(other),
-    rollups                = joinRollups(other),
+    rollups                = joinRollups,
     )
   }
 
@@ -938,7 +941,7 @@ salt = salt, rollups = this.rollups)
           broadcastJoinThreshold = joinBroadcastThreshold(other),
           materializeLevel = joinMaterializeLevel(other),
           salt = joinSalt(other),
-        rollups                = joinRollups(other),
+        rollups                = joinRollups,
         )
       }
     }
@@ -956,7 +959,7 @@ salt = salt, rollups = this.rollups)
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
       salt = joinSalt(other),
-    rollups                = joinRollups(other),
+    rollups                = joinRollups,
     )
   }
 
@@ -994,7 +997,7 @@ salt = salt, rollups = this.rollups)
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
       salt = joinSalt(other),
-    rollups                = joinRollups(other),
+    rollups                = joinRollups,
     )
   }
 }
