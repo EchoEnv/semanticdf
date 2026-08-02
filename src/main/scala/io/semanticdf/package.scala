@@ -78,6 +78,7 @@ package object semanticdf {
     new SemanticTable(
       SemanticTableOp(table, name, description),
       sourceTable = sourceTable,
+      rollups = Nil,
     )
 
   /** Construct a [[SemanticTable]] from a streaming source for use with
@@ -110,6 +111,7 @@ package object semanticdf {
     new SemanticTable(
       SemanticStreamingTableOp.of(stream, name, description),
       sourceTable = sourceTable,
+      rollups = Nil,
     )
   }
 }

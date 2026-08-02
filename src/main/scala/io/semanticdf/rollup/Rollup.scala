@@ -98,6 +98,10 @@ object RollupMeasure {
   * rollup table without re-registering; in that case the user should
   * call `withRollup` again with a fresh `Rollup`.
   *
+  * `Rollup` is Serializable (pure data). However, after `useRollup`,
+  * the SemanticTable is NOT safe to ship across executors because
+  * `SemanticRollupOp` holds a `RollupRegistry` (which contains
+  * `() => DataFrame` providers that are not Serializable).
   * @param name                 unique rollup name (within the model)
   * @param baseModel            name of the SemanticTable this rollup is for
   * @param rollupDimensions     dimensions the rollup was built at (the grain)
