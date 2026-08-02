@@ -111,8 +111,10 @@ final class RollupQuery private[rollup] (
           s"Available: ${source.schema.fieldNames.toList.sorted}"
         )
       }
-      // Convert predicate to a Column via the source schema
-      val col = predicateToColumn(pred, source.schema)
+      // Convert predicate to a Column. Schema lookup is implicit via
+      // Spark's `col(name)` which resolves against the DataFrame at
+      // apply-time — no explicit `schema` parameter is needed.
+      val col = predicateToColumn(pred)
       source.where(col)
     }
 
@@ -134,13 +136,20 @@ final class RollupQuery private[rollup] (
     limit.fold(withOrder)(n => withOrder.limit(n))
   }
 
-  /** Convert a [[Predicate]] to a Spark [[Column]] using the given schema.
+  /** Convert a [[Predicate]] to a Spark [[Column]].
     *
-    * For v0.2.4 we only support simple `Compare` predicates on direct
-    * field names. Complex predicates (AND, OR, NOT) are recursively
-    * decomposed.
+    * Recursive on [[io.semanticdf.predicate.Predicate.And]] /
+    * [[io.semanticdf.predicate.Predicate.Or]] /
+    * [[io.semanticdf.predicate.Predicate.Not]]; flat on every other
+    * [[Predicate]] subtype.
+    *
+    * All known [[Predicate]] subtypes are matched (the [[Predicate]] ADT
+    * is sealed). The catch-all is defensive code for the case where a
+    * future subtype is added to `Predicate` without updating this
+    * method — at which point a `scala.MatchError` would surface in
+    * production. The message hints at which file to update.
     */
-  private def predicateToColumn(pred: Predicate, schema: org.apache.spark.sql.types.StructType): Column = {
+  private def predicateToColumn(pred: Predicate): Column = {
     val fieldCol: String => org.apache.spark.sql.Column = org.apache.spark.sql.functions.col
     pred match {
       case io.semanticdf.predicate.Predicate.Compare.Eq(field, value)  => fieldCol(field) === value
@@ -157,20 +166,21 @@ final class RollupQuery private[rollup] (
         fieldCol(field).endsWith(org.apache.spark.sql.functions.lit(value))
       case io.semanticdf.predicate.Predicate.Compare.ArrayContains(field, value) =>
         // ArrayContains(field, value) means "field array contains value".
-        // Spark SQL: array_contains(field, value) — but a Column expression
-        // equivalent is `field === value` reduced across the array.
         // Simplest correct form for v0.2.4: use array_contains function.
         org.apache.spark.sql.functions.array_contains(fieldCol(field), org.apache.spark.sql.functions.lit(value))
-      case io.semanticdf.predicate.Predicate.And(children @ _*) => children.map(predicateToColumn(_, schema)).reduce(_ && _)
-      case io.semanticdf.predicate.Predicate.Or(children @ _*)  => children.map(predicateToColumn(_, schema)).reduce(_ || _)
-      case io.semanticdf.predicate.Predicate.Not(child)         => !predicateToColumn(child, schema)
+      case io.semanticdf.predicate.Predicate.And(children @ _*) => children.map(predicateToColumn(_)).reduce(_ && _)
+      case io.semanticdf.predicate.Predicate.Or(children @ _*)  => children.map(predicateToColumn(_)).reduce(_ || _)
+      case io.semanticdf.predicate.Predicate.Not(child)         => !predicateToColumn(child)
       case io.semanticdf.predicate.Predicate.IsNull(field, false) => fieldCol(field).isNull
       case io.semanticdf.predicate.Predicate.IsNull(field, true)  => fieldCol(field).isNotNull
       case io.semanticdf.predicate.Predicate.In(field, values, false) => fieldCol(field).isin(values.map(org.apache.spark.sql.functions.lit): _*)
       case io.semanticdf.predicate.Predicate.In(field, values, true)  => !fieldCol(field).isin(values.map(org.apache.spark.sql.functions.lit): _*)
+      // Defensive: every Predicate subtype is matched above (Predicate is sealed).
+      // If a future subtype is added without updating this match, the error
+      // here points to the file/method to fix rather than a bare MatchError.
       case _ => throw new IllegalStateException(
-        s"Rollup WHERE clause: unsupported predicate type ${pred.getClass.getSimpleName}. " +
-        s"Only Compare, And, Or, Not, IsNull, In are supported in v0.2.4."
+        s"Rollup WHERE clause: ${pred.getClass.getSimpleName} is not handled by " +
+        s"`RollupQuery.predicateToColumn`. Add a case — see rollup/RollupQuery.scala."
       )
     }
   }
