@@ -222,8 +222,11 @@ object RollupMeasure {
   * algebra (sum/count pair and sum/sum-of-squares/count triple
   * respectively). Those are deferred to v0.3.x+ once auto-routing
   * is in scope; for manual rollups, Sum+Count covers the common case.
+  *
+  * `extends Serializable` so a [[Rollup]] containing this field on its
+  * `RollupMeasure` survives Java serialization in cluster mode. PR #334.
   */
-sealed trait RollupAggregator {
+sealed trait RollupAggregator extends Serializable {
   /** Canonical name (matches the Spark SQL aggregator name). */
   def name: String
 
@@ -261,8 +264,17 @@ object RollupAggregator {
   }
 }
 
-/** Freshness tracking. */
-sealed trait RollupFreshness
+/** Freshness tracking.
+  *
+  * `extends Serializable` so a [[Rollup]] containing this field survives
+  * Java serialization in cluster mode. PR #334. Note that
+  * [[RollupFreshness.Track]] includes a `watermarkProvider: () => Instant`
+  * closure — if the caller passes a custom closure that captures outer
+  * state (SparkSession, loggers, etc.), the round-trip will fail at
+  * serialization time. The default closure provided by the 5-arg
+  * `Rollup.apply` is safe (top-level `() => java.time.Instant.now`).
+  */
+sealed trait RollupFreshness extends Serializable
 
 object RollupFreshness {
   /** Track via a provider thunk. Invoked at every compile (cached with TTL
@@ -277,8 +289,13 @@ object RollupFreshness {
   case object NoTracking extends RollupFreshness
 }
 
-/** What to do when a rollup is too stale to use. */
-sealed trait OnStalePolicy
+/** What to do when a rollup is too stale to use.
+  *
+  * `extends Serializable` so a [[RollupFreshness.Track]] containing this
+  * on its `onStale` field survives Java serialization in cluster mode.
+  * PR #334.
+  */
+sealed trait OnStalePolicy extends Serializable
 
 object OnStalePolicy {
   /** Fall back to the base fact table. Emit a warning in the audit event. */
