@@ -123,13 +123,13 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(dimensions = t.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Streaming source: dims attach to the streaming model.
       case s: SemanticStreamingTableOp =>
         new SemanticTable(s.copy(dimensions = s.dimensions ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case j: SemanticJoinOp =>
         // Pass extra dimensions so mergedModel includes them. Preserve
@@ -163,67 +163,67 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       // Lets a user (or query()) chain withDimensions after where()/orderBy()/limit().
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Transforms are applied at compile time; dims should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case a: SemanticAggregateOp =>
         // Aggregate has no dimensions field of its own — the dimensions
         // belong to the source SemanticTableOp. Recurse.
         val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withDimensions(dims: _*)
+          salt = salt).withDimensions(dims: _*)
         new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case _ =>
         throw new IllegalStateException(
@@ -281,13 +281,13 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       case t: SemanticTableOp =>
         new SemanticTable(t.copy(measures = t.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Streaming source: measures attach to the streaming model.
       case s: SemanticStreamingTableOp =>
         new SemanticTable(s.copy(measures = s.measures ++ extra), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case j: SemanticJoinOp =>
         val updatedJoin = SemanticJoinOp(
@@ -318,66 +318,66 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
         )
         new SemanticTable(updatedJoin, postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Hint is a Spark planner wrapper; recurse and re-wrap with the same hint.
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Transforms are applied at compile time; measures should attach to the underlying
       // model so they're visible to the join/table op. Recurse and re-wrap.
       case SemanticTransformsOp(src, transforms) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(SemanticTransformsOp(inner.root, transforms), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case a: SemanticAggregateOp =>
         // Aggregate has no measures field — measures live on the source
         // SemanticTableOp. Recurse.
         val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withMeasures(measures: _*)
+          salt = salt).withMeasures(measures: _*)
         new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case _ =>
         throw new IllegalStateException(
@@ -467,7 +467,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           SemanticTransformsOp(t, transforms),
           postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case j: SemanticJoinOp =>
         // Joined models: wrap in a SemanticTransformsOp. CRUCIALLY, we do NOT
@@ -479,44 +479,44 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           SemanticTransformsOp(j, transforms),
           postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Passthrough ops: recurse to the underlying table/join, then re-wrap.
       case SemanticFilterOp(src, pred) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(SemanticFilterOp(inner.root, pred), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticRowFilterOp(src, name, desc, expr, meta) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(SemanticRowFilterOp(inner.root, name, desc, expr, meta), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticOrderByOp(src, keys) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(SemanticOrderByOp(inner.root, keys), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticLimitOp(src, n) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(SemanticLimitOp(inner.root, n), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
       case SemanticHintOp(src, strategy, params) =>
         val inner = new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(SemanticHintOp(inner.root, strategy, params), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       // Chained transforms: append the new transforms to the existing layer.
       // Do NOT recurse — recursion would re-enter the case below and create a
@@ -530,16 +530,16 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           SemanticTransformsOp(src, existing ++ transforms),
           postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case a: SemanticAggregateOp =>
         // Aggregate has no transforms — transforms attach to the source.
         val inner = new SemanticTable(a.source, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups).withTransforms(transforms: _*)
+          salt = salt).withTransforms(transforms: _*)
         new SemanticTable(a.copy(source = inner.root), postAggPredicates, version, sourceTable, status, auditSink, auditRequest, resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
-          salt = salt, rollups = this.rollups)
+          salt = salt)
 
       case _ =>
         throw new IllegalStateException(
@@ -644,9 +644,6 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
     this.materializeLevel.orElse(other.materializeLevel)
   private[semanticdf] def joinSalt(other: SemanticTable): Option[Int] =
     this.salt.orElse(other.salt)
-  private[semanticdf] def joinRollups(other: SemanticTable): List[io.semanticdf.rollup.Rollup] =
-    this.rollups ++ other.rollups  // concatenate; both sides' rollups are preserved
-
   private[semanticdf] def join_oneWithKeys(
       other: SemanticTable,
       on: (JoinSide, JoinSide) => Column,
@@ -767,7 +764,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           maxRows                = joinMaxRows(other),
           broadcastJoinThreshold = joinBroadcastThreshold(other),
           materializeLevel = joinMaterializeLevel(other),
-          salt = joinSalt(other), rollups = joinRollups(other),
+          salt = joinSalt(other),
         )
       }
     }
@@ -779,7 +776,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       maxRows                = joinMaxRows(other),
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
-      salt = joinSalt(other), rollups = joinRollups(other),
+      salt = joinSalt(other),
     )
   }
 
@@ -908,7 +905,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
           maxRows                = joinMaxRows(other),
           broadcastJoinThreshold = joinBroadcastThreshold(other),
           materializeLevel = joinMaterializeLevel(other),
-          salt = joinSalt(other), rollups = joinRollups(other),
+          salt = joinSalt(other),
         )
       }
     }
@@ -920,7 +917,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       maxRows                = joinMaxRows(other),
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
-      salt = joinSalt(other), rollups = joinRollups(other),
+      salt = joinSalt(other),
     )
   }
 
@@ -950,7 +947,7 @@ private[semanticdf] trait SemanticTableMutation { self: SemanticTable =>
       maxRows                = joinMaxRows(other),
       broadcastJoinThreshold = joinBroadcastThreshold(other),
       materializeLevel = joinMaterializeLevel(other),
-      salt = joinSalt(other), rollups = joinRollups(other),
+      salt = joinSalt(other),
     )
   }
 }

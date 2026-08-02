@@ -841,7 +841,7 @@ object SemanticManifest {
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
       materializeLevel = materializeValue,
-      salt = saltValue, rollups = Nil
+      salt = saltValue
     )
   }
 
@@ -1097,7 +1097,7 @@ object SemanticManifest {
       maxRows     = maxRowsValue.getOrElse(io.semanticdf.cache.CacheKey.DefaultMaxRows),
       broadcastJoinThreshold = broadcastValue,
       materializeLevel = materializeValue,
-      salt = saltValue, rollups = Nil
+      salt = saltValue
     )
   }
 

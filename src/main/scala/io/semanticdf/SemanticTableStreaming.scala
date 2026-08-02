@@ -263,7 +263,7 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
               // is wasteful (each batch's DataFrame is consumed once
               // via `foreachBatch` and discarded).
               broadcastJoinThreshold = this.broadcastJoinThreshold,
-              salt = this.salt, rollups = this.rollups)
+              salt = this.salt)
             val t0 = System.nanoTime()
             val result = batchModel.toDataFrame(spark)
             emitStreamingAudit(result, t0)(spark)
