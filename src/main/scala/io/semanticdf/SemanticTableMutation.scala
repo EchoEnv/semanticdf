@@ -769,10 +769,17 @@ salt = salt, rollups = this.rollups)
         val ast = join.extractPredicateAst()
         return new SemanticTable(
           join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql, predicateAst = ast),
-          postAggPredicates = Nil,
-          version = 0,
-          sourceTable = None,
-          status = ModelStatus.Published,
+          // H-D1 fix (PR #332): propagate outer metadata. Pre-existing bug:
+          // both the hardcoded values below AND the unnamed-field fall-through
+          // at the bottom of this method lost `version` / `sourceTable` /
+          // `status` / `postAggPredicates` on every join. Metadata follows
+          // `this` (the model calling `.join_one`) because the joined result IS
+          // the outer model with an additional op-tree layer — not a new model
+          // whose metadata should be inferred from `other`.
+          postAggPredicates       = this.postAggPredicates,
+          version                 = this.version,
+          sourceTable             = this.sourceTable,
+          status                  = this.status,
           auditSink              = joinAuditSink(other),
           auditRequest           = joinAuditRequest(other),
           resultCache            = joinResultCache(other),
@@ -786,6 +793,13 @@ salt = salt, rollups = this.rollups)
     }
     new SemanticTable(
       join,
+      // H-D1 fix (PR #332): same metadata propagation as the early-return above.
+      // Without this, the typed-key non-early-return path silently lost these
+      // fields too (unnamed constructor args fall to defaults `Nil/0/None/Published`).
+      postAggPredicates       = this.postAggPredicates,
+      version                 = this.version,
+      sourceTable             = this.sourceTable,
+      status                  = this.status,
       auditSink              = joinAuditSink(other),
       auditRequest           = joinAuditRequest(other),
       resultCache            = joinResultCache(other),
@@ -912,10 +926,11 @@ salt = salt, rollups = this.rollups)
         val ast = join.extractPredicateAst()
         return new SemanticTable(
           join.copy(leftKeys = lk, rightKeys = rk, onExprString = sql, predicateAst = ast),
-          postAggPredicates = Nil,
-          version = 0,
-          sourceTable = None,
-          status = ModelStatus.Published,
+          // H-D1 fix (PR #332): see join_oneWithKeys for rationale.
+          postAggPredicates       = this.postAggPredicates,
+          version                 = this.version,
+          sourceTable             = this.sourceTable,
+          status                  = this.status,
           auditSink              = joinAuditSink(other),
           auditRequest           = joinAuditRequest(other),
           resultCache            = joinResultCache(other),
@@ -929,6 +944,11 @@ salt = salt, rollups = this.rollups)
     }
     new SemanticTable(
       join,
+      // H-D1 fix (PR #332): see join_oneWithKeys for rationale.
+      postAggPredicates       = this.postAggPredicates,
+      version                 = this.version,
+      sourceTable             = this.sourceTable,
+      status                  = this.status,
       auditSink              = joinAuditSink(other),
       auditRequest           = joinAuditRequest(other),
       resultCache            = joinResultCache(other),
@@ -960,6 +980,13 @@ salt = salt, rollups = this.rollups)
     )
     new SemanticTable(
       join,
+      // H-D1 fix (PR #332): join_cross silently dropped `version` /
+      // `sourceTable` / `status` / `postAggPredicates` on every call. Same fix
+      // as join_one / join_many — propagate `this` (outer model metadata).
+      postAggPredicates       = this.postAggPredicates,
+      version                 = this.version,
+      sourceTable             = this.sourceTable,
+      status                  = this.status,
       auditSink              = joinAuditSink(other),
       auditRequest           = joinAuditRequest(other),
       resultCache            = joinResultCache(other),
