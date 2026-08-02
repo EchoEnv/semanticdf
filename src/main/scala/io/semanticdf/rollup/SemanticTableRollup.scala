@@ -1,36 +1,25 @@
 package io.semanticdf.rollup
 
-import io.semanticdf.{SemanticRollupOp, SemanticTable}
+import io.semanticdf.SemanticTable
 
-/** Methods on [[SemanticTable]] for managing pre-aggregated rollups.
+/** Methods on [[SemanticTable]] for the rollups feature (v0.2.4 redesign).
+  *
+  * In the previous design (PR #328 / #329), `useRollup` returned a
+  * `SemanticTable` with `root = SemanticRollupOp(...)`, which intertwined
+  * rollup state with the existing op tree and caused 5 audit cycles
+  * with 19+ HIGH-severity bugs. The new design returns a separate
+  * [[RollupQuery]] type that has NO interaction with the existing fluent
+  * chain.
   *
   * Split into a separate trait (mirroring `SemanticTableCollection`,
   * `SemanticTableStreaming`, etc.) to keep `SemanticTable.scala` itself
-  * lean. v0.2.4 ships manual rollups only -- the user explicitly
-  * names the rollup via [[SemanticTable.useRollup]]. Auto-routing
-  * (`findRollupMatch`) is v0.3.x+.
-  *
-  * Design: `useRollup(name, registry)` returns a NEW SemanticTable with
-  * `root = SemanticRollupOp(rollup, registry)`. The `SemanticRollupOp`
-  * is a terminal op (it IS the root, not a wrapping op), so downstream
-  * shape-changers like `where()` and `orderBy()` either:
-  *   (a) refuse to apply (throw) because there's nothing to transform, OR
-  *   (b) wrap the root and re-apply after rollup projection
-  *
-  * For v0.2.4 simplicity, we go with (b): `query()` and the shape-changers
-  * wrap the existing root. Since the rollup is already pre-aggregated, the
-  * "aggregation" in the wrapped op is a no-op pass-through. This preserves
-  * the fluent chain end-to-end.
-  *
-  * The `registry` travels with the returned SemanticTable. It is NOT
-  * Serializable (DataFrame providers are not Serializable). This is a
-  * documented limitation, same as `AuditSink`.
+  * lean.
   */
 private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
 
   /** Register a pre-aggregated rollup table. Adds to the model's
-    * `rollups` list. The `Rollup` value class is pure data (Serializable);
-    * the actual DataFrame source is registered separately with a
+    * `rollups` list. The [[Rollup]] value class is pure data; the
+    * actual DataFrame source is registered separately with a
     * [[RollupRegistry]] at query time.
     *
     * If a rollup with the same name already exists, this REPLACES it
@@ -40,6 +29,11 @@ private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
     * Throws `IllegalArgumentException` if the rollup's `baseModel`
     * doesn't match this model's name.
     */
+
+
+
+  // ---- Implementation (mixed into SemanticTable) ----
+
   def withRollup(rollup: Rollup): SemanticTable = {
     require(rollup.baseModel == name.getOrElse(rollup.baseModel),
       s"Rollup '${rollup.name}' baseModel '${rollup.baseModel}' " +
@@ -50,40 +44,17 @@ private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
       salt, materializeLevel, rollups = newRollups)
   }
 
-  /** List all rollups registered on this model (declaration order,
-    * newest last). Pure-data -- no DataFrame references. */
-  def listRollups(): List[Rollup] = rollups
-
-  /** Look up a rollup by name. */
   def findRollup(name: String): Option[Rollup] = rollups.find(_.name == name)
 
-  /** Mark this table as "use rollup `name` when executed".
-    *
-    * Returns a new SemanticTable with `root = SemanticRollupOp(rollup, registry)`.
-    * The `SemanticRollupOp` is a terminal op -- it holds the registry
-    * (NOT serializable, documented limitation).
-    *
-    * v0.2.4 Serializability limitation: the returned SemanticTable is NOT
-    * safe to ship across executors (e.g. via `df.map(r => table)`, or
-    * closure serialization to a Spark UDF). The `() => DataFrame`
-    * providers in the registry capture Spark plan references that are
-    * not Serializable. Operations on the same JVM are fine. If you need
-    * to ship the table across executors, build a NEW SemanticTable via
-    * `toSemanticTable(...)` (which discards rollups) or use a serializable
-    * wrapper.
-    *
-    * Throws `IllegalArgumentException` if `name` doesn't match any
-    * registered rollup, or if the registry doesn't contain `name`.
-    */
-  def useRollup(name: String, registry: RollupRegistry): SemanticTable = {
+  def listRollups(): List[Rollup] = rollups
+
+  def useRollup(name: String, registry: RollupRegistry): RollupQuery = {
     val rollup = findRollup(name).getOrElse(throw new IllegalArgumentException(
       s"No rollup named '$name' registered on this model. " +
       s"Available: ${rollups.map(_.name).mkString(", ")}"))
     require(registry.contains(name),
       s"Rollup '$name' not registered in the supplied RollupRegistry. " +
       s"Use `RollupRegistry.register(name, provider)` before `useRollup`.")
-    new SemanticTable(SemanticRollupOp(rollup, registry), postAggPredicates,
-      version, sourceTable, status, auditSink, auditRequest, resultCache,
-      maxRows, broadcastJoinThreshold, salt, materializeLevel, rollups = rollups)
+    new RollupQuery(this, rollup, registry)
   }
 }

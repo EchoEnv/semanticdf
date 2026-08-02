@@ -49,7 +49,6 @@ private[semanticdf] abstract class SemanticOpVisitor {
     op match {
       case _: SemanticTableOp        => () // leaf: no children
       case _: SemanticStreamingTableOp => () // leaf: streaming source, no children
-      case _: SemanticRollupOp       => () // terminal: rollup is a leaf (no children to walk)
       case j: SemanticJoinOp         => visit(j.left); visit(j.right)
       case a: SemanticAggregateOp    => visit(a.source)
       case f: SemanticFilterOp       => visit(f.source)
