@@ -28,6 +28,17 @@ private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
     *
     * Throws `IllegalArgumentException` if the rollup's `baseModel`
     * doesn't match this model's name.
+    *
+    * == Joins drop rollups (Path-2 contract) ==
+    * Rollups do NOT survive joins. After `join_one` / `join_many` /
+    * `join_cross`, the joined model has empty rollups — re-register
+    * via `joined.withRollup(...)` if you need a rollup that targets
+    * the joined model. Rationale (per the v0.2.4 redesign):
+    * `RollupQuery.execute` reads from the rollup source's pre-aggregated
+    * DataFrame, not the joined op tree — so preserving a rollup across
+    * the join would silently drop the join. Making this loud (joined
+    * model has empty rollups; `useRollup` on it throws) preserves the
+    * "fail fast" contract.
     */
 
 
@@ -35,9 +46,10 @@ private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
   // ---- Implementation (mixed into SemanticTable) ----
 
   def withRollup(rollup: Rollup): SemanticTable = {
-    require(rollup.baseModel == name.getOrElse(rollup.baseModel),
+    require(name.contains(rollup.baseModel),
       s"Rollup '${rollup.name}' baseModel '${rollup.baseModel}' " +
-      s"does not match model name '${name.getOrElse("")}'")
+      s"does not match model name '${name.getOrElse("anonymous")}' " +
+      s"(rollups can only be registered on named models)")
     val newRollups = rollups.filterNot(_.name == rollup.name) :+ rollup
     new SemanticTable(root, postAggPredicates, version, sourceTable, status,
       auditSink, auditRequest, resultCache, maxRows, broadcastJoinThreshold,
