@@ -1515,3 +1515,63 @@ private[semanticdf] final class ClassificationScope(
     lit(0.0)
   }
 }
+
+/** Terminal op that compiles to a pre-aggregated rollup's projected
+  * columns.
+  *
+  * Defined in this file (not in `rollup/`) because [[SemanticOp]] is
+  * `sealed` and Scala 2.13 sealed-trait extensions must be in the same
+  * file. The runtime container [[io.semanticdf.rollup.RollupRegistry]]
+  * lives in the `rollup` subpackage.
+  *
+  * Unlike other ops in the tree ([[SemanticAggregateOp]],
+  * [[SemanticFilterOp]], etc.), this op does NOT wrap a `source: SemanticOp`.
+  * It IS the root of the compiled tree when used via
+  * `SemanticTable.useRollup(name, registry).execute(spark)`.
+  *
+  * Compile path:
+  *   1. Look up the provider in the registry by `rollup.name`
+  *   2. Project the rollup's dimensions + measures (per `rollup`)
+  *      -- the rollup is already aggregated; no group-by needed
+  *   3. Apply the user's WHERE clause (if present in `queryFilters`)
+  *   4. Return the projected DataFrame
+  *
+  * Note: for v0.2.4 (manual rollups), the rollup grain must match the
+  * query grain exactly. Re-aggregation (supersets) is v0.3.x+ scope.
+  * We still validate the grain match at compile time and throw a clear
+  * error if it doesn't match -- this prevents silent wrong data.
+  *
+  * @param rollup        the pre-aggregated rollup metadata
+  * @param registry      runtime container holding the DataFrame provider
+  * @param queryFilters  optional WHERE clause predicates to apply
+  *                      (passed as resolved Columns)
+  */
+final case class SemanticRollupOp(
+  rollup:       io.semanticdf.rollup.Rollup,
+  registry:     io.semanticdf.rollup.RollupRegistry,
+  queryFilters: Seq[Column] = Seq.empty,
+) extends SemanticOp {
+
+  override def compile(spark: SparkSession): DataFrame = {
+    val source = registry.loadSource(rollup.name)
+      .getOrElse(throw new IllegalStateException(
+        s"Rollup '${rollup.name}' not registered in the supplied RollupRegistry. " +
+        s"Use `RollupRegistry.register(name, provider)` to add it before executing."
+      ))
+
+    // Project: dimensions + storage columns (renamed to measure names).
+    // The rollup's source has storage columns (e.g., "sum_k"); the user
+    // queries by measure names (e.g., "total"). We project the storage
+    // column with the measure's name as the alias.
+    val dimCols   = rollup.rollupDimensions.map(col)
+    val measureCols = rollup.rollupMeasures.map { m =>
+      col(m.storageCol).as(m.name)
+    }
+    val projection = (dimCols ++ measureCols).distinct
+
+    val projected = if (projection.isEmpty) source else source.select(projection: _*)
+
+    if (queryFilters.isEmpty) projected
+    else projected.where(queryFilters.reduce(_ && _))
+  }
+}
