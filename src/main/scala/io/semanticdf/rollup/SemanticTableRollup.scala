@@ -63,6 +63,15 @@ private[semanticdf] trait SemanticTableRollup { self: SemanticTable =>
     * The `SemanticRollupOp` is a terminal op -- it holds the registry
     * (NOT serializable, documented limitation).
     *
+    * v0.2.4 Serializability limitation: the returned SemanticTable is NOT
+    * safe to ship across executors (e.g. via `df.map(r => table)`, or
+    * closure serialization to a Spark UDF). The `() => DataFrame`
+    * providers in the registry capture Spark plan references that are
+    * not Serializable. Operations on the same JVM are fine. If you need
+    * to ship the table across executors, build a NEW SemanticTable via
+    * `toSemanticTable(...)` (which discards rollups) or use a serializable
+    * wrapper.
+    *
     * Throws `IllegalArgumentException` if `name` doesn't match any
     * registered rollup, or if the registry doesn't contain `name`.
     */
