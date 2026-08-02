@@ -5,7 +5,7 @@ import org.apache.spark.sql.DataFrame
 /** In-memory flights fixture using BSL `test_query.py`'s exact data.
   *
   * Self-contained (BSL's real fixture downloads a parquet from malloy-samples; we avoid
-  * the network dependency). Phase 1's golden tests assert against these rows so that
+  * the network dependency). golden tests assert against these rows so that
   * parity with BSL is checkable: `{AA→550, UA→775, DL→1050}` for total passengers.
   */
 trait FlightsFixture { this: SparkSessionFixture =>
@@ -22,7 +22,7 @@ trait FlightsFixture { this: SparkSessionFixture =>
     }.toDF()
   }
 
-  /** Phase 6 fixture: flights with a `ts` timestamp column spanning 3 months.
+  /** Time-series fixture: flights with a `ts` timestamp column spanning 3 months.
     *
     * 30 flights total: 10 in 2024-01, 10 in 2024-02, 10 in 2024-03. Each month has
     * the same per-carrier passenger split (AA=110, UA=155, DL=210 across the 6-flight
@@ -48,7 +48,7 @@ trait FlightsFixture { this: SparkSessionFixture =>
     rows.toDF()
   }
 
-  // ---- Phase 4: join fixtures (orders / customers / line_items) ---------------
+  // ---- join fixtures (orders / customers / line_items) ---------------
 
   protected def ordersDf: DataFrame = {
     val session = spark

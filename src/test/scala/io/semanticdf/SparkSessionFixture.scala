@@ -3,7 +3,7 @@ package io.semanticdf
 import org.apache.spark.sql.SparkSession
 import org.scalatest.{BeforeAndAfterAll, Suite}
 
-/** In-memory `SparkSession` with correct lifecycle (DESIGN Phase 0, risk C1).
+/** In-memory `SparkSession` with correct lifecycle (DESIGN §0, risk C1).
   *
   * `beforeAll` creates a local session; `afterAll` stops it. A leaked (un-`stop()`-ed)
   * session leaks driver memory and daemon threads across test runs — the classic

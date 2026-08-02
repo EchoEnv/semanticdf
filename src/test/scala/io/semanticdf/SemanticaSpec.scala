@@ -6,7 +6,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import Predicate._  // brings "field" === value, "field" > value, etc. into scope
 
-/** Phase 0 (round-trip regression) + Phase 1a (golden group-by) + Phase 1b (calc proof).
+/** (round-trip regression) + (golden group-by) + (calc proof).
   */
 class SemanticDFSpec
     extends AnyFunSuite
@@ -14,9 +14,9 @@ class SemanticDFSpec
     with SparkSessionFixture
     with FlightsFixture {
 
-  // ---- Phase 0: round-trip regression (leaf node unchanged) -----------------
+  // ---- round-trip regression (leaf node unchanged) -----------------
 
-  test("Phase 0: toSemanticTable(df).toDataFrame(spark) round-trips the source") {
+  test("toSemanticTable(df).toDataFrame(spark) round-trips the source") {
     val source = flightsDf
     val st = toSemanticTable(source, name = Some("flights"))
 
@@ -26,9 +26,9 @@ class SemanticDFSpec
     out.columns.toSet shouldBe source.columns.toSet
   }
 
-  // ---- Phase 1a: golden group-by (test_query.py::TestBasicQuery::test_simple_query) ----
+  // ---- golden group-by (test_query.py::TestBasicQuery::test_simple_query) ----
 
-  test("Phase 1a: groupBy(carrier).aggregate(total_passengers) matches BSL golden rows") {
+  test("groupBy(carrier).aggregate(total_passengers) matches BSL golden rows") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(
         Dimension("carrier", t => t("carrier")),
@@ -46,7 +46,7 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 550L, "UA" -> 775L, "DL" -> 1050L)
   }
 
-  test("Phase 1a: aggregate with no dimensions yields a single grand-total row") {
+  test("aggregate with no dimensions yields a single grand-total row") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
 
@@ -55,9 +55,9 @@ class SemanticDFSpec
     rows.head.getAs[Long]("total_passengers") shouldBe 2375L
   }
 
-  // ---- Phase 1b: calc-measure proof (name-based compilation, DESIGN §6.1) ----
+  // ---- calc-measure proof (name-based compilation, DESIGN §6.1) ----
 
-  test("Phase 1b: calc measure resolves other measures BY NAME against the aggregated df") {
+  test("calc measure resolves other measures BY NAME against the aggregated df") {
     // total_distance / flight_count, where flight_count is itself a base measure.
     // AA: 1250/10=125, UA: 2250/10=225, DL: 3250/10=325  (distance sums ×5 each pair).
     val st = toSemanticTable(flightsDf, name = Some("flights"))
@@ -81,7 +81,7 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 125.0, "UA" -> 225.0, "DL" -> 325.0)
   }
 
-  test("Phase 1b: typo in a calc measure name gives a 'did you mean?' error, not a crash") {
+  test("typo in a calc measure name gives a 'did you mean?' error, not a crash") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withMeasures(
         Measure("flight_count", t => count(lit(1))),
@@ -89,7 +89,7 @@ class SemanticDFSpec
       )
 
     val ex = intercept[IllegalArgumentException] {
-      // Request the base measure too — Phase 1b does not auto-pull calc deps (Phase 2),
+      // Request the base measure too — does not auto-pull calc deps (),
       // so the typo surfaces as a real 'did you mean?' error instead of the
       // empty-base-measure guard.
       st.groupBy().aggregate("flight_count", "bad").execute(spark).collect()
@@ -98,9 +98,9 @@ class SemanticDFSpec
     ex.getMessage should include("Did you mean")
   }
 
-  // ---- Phase 2a: calc-of-calc + dependency auto-pull (invariant A1 revised) ----
+  // ---- calc-of-calc + dependency auto-pull (invariant A1 revised) ----
 
-  test("Phase 2a: calc-of-calc chain resolves by name across topological layers") {
+  test("calc-of-calc chain resolves by name across topological layers") {
     // distance_index = avg_distance_per_flight / 100, where avg_distance_per_flight is
     // itself a calc (total_distance / flight_count). So distance_index is layer 2.
     val st = toSemanticTable(flightsDf, name = Some("flights"))
@@ -122,7 +122,7 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 1.25, "UA" -> 2.25, "DL" -> 3.25)
   }
 
-  test("Phase 2a: requesting a leaf calc auto-pulls its transitive measure deps") {
+  test("requesting a leaf calc auto-pulls its transitive measure deps") {
     // Request ONLY the leaf calc — its deps (avg_distance_per_flight → total_distance,
     // flight_count) must be auto-pulled so the calc resolves to real aggregated columns.
     val st = toSemanticTable(flightsDf, name = Some("flights"))
@@ -143,7 +143,7 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 125.0, "UA" -> 225.0, "DL" -> 325.0)
   }
 
-  test("Phase 2a: a calc dependency cycle raises a clear error, not a hang") {
+  test("a calc dependency cycle raises a clear error, not a hang") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withMeasures(
         Measure("a", t => t("b")),
@@ -156,9 +156,9 @@ class SemanticDFSpec
     ex.getMessage should include("cycle")
   }
 
-  // ---- Phase 4: join_one (fact-to-dim, no fan-out) ----------------------------
+  // ---- join_one (fact-to-dim, no fan-out) ----------------------------
 
-  test("Phase 4 join_one: orders join customers by customer_id — basic structure") {
+  test("join_one: orders join customers by customer_id — basic structure") {
     val orders    = toSemanticTable(ordersDf,    name = Some("orders"))
     val customers = toSemanticTable(customersDf, name = Some("customers"))
 
@@ -178,7 +178,7 @@ class SemanticDFSpec
     rows shouldBe Map("cust_A" -> 2L, "cust_B" -> 1L)
   }
 
-  test("Phase 4 join_one: calc on joined model — orders.total_qty / orders.order_count") {
+  test("join_one: calc on joined model — orders.total_qty / orders.order_count") {
     // Both sides need join-key dimensions for the model to be coherent.
     val orders = toSemanticTable(ordersDf, name = Some("orders"))
       .withDimensions(Dimension("customer_id", t => t("customer_id")))
@@ -208,9 +208,9 @@ class SemanticDFSpec
     rows("cust_B") shouldBe 1.0 +- 0.01
   }
 
-  // ---- Phase 4: join_many (fan-out prevention via pre-aggregation) -----------
+  // ---- join_many (fan-out prevention via pre-aggregation) -----------
 
-  test("Phase 4 join_many: orders join line_items — pre-agg prevents fact inflation") {
+  test("join_many: orders join line_items — pre-agg prevents fact inflation") {
     // order_1 has 2 line_items (300+200=500), order_2 has 1 (300), order_3 has 1 (200).
     // Group by carrier: AA → {order_1} → 500, UA → {order_2} → 300, DL → {order_3} → 200.
     // Without pre-agg: order_1's revenue (500) × 2 items = inflated.
@@ -238,9 +238,9 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 500L, "UA" -> 300L, "DL" -> 200L)
   }
 
-  // ---- Phase 4: join_cross (Cartesian product) --------------------------------
+  // ---- join_cross (Cartesian product) --------------------------------
 
-  test("Phase 4 join_cross: produces a DataFrame with all combinations") {
+  test("join_cross: produces a DataFrame with all combinations") {
     val session = spark
     import session.implicits._
     val smallA = toSemanticTable(Seq((1, "x"), (2, "y")).toDF("id", "label"), name = Some("a"))
@@ -266,9 +266,9 @@ class SemanticDFSpec
     tags  shouldBe Seq("x", "z")
   }
 
-  // ---- Phase 4: calc-of-calc on joined model ---------------------------------
+  // ---- calc-of-calc on joined model ---------------------------------
 
-  test("Phase 4: calc-of-calc chain on joined orders+line_items model") {
+  test("calc-of-calc chain on joined orders+line_items model") {
     // Same fixture as fan-out test; add a calc on top.
     // Join keys must be declared as dimensions on both sides so pre-agg works
     val orders = toSemanticTable(ordersDf, name = Some("orders"))
@@ -297,9 +297,9 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 0.05, "UA" -> 0.03, "DL" -> 0.02)
   }
 
-  // ---- Phase 5: Filtering — WHERE (dimension, pre-agg) ----------------------
+  // ---- Filtering — WHERE (dimension, pre-agg) ----------------------
 
-  test("Phase 5 where: dimension filter routes to WHERE (pre-agg)") {
+  test("where: dimension filter routes to WHERE (pre-agg)") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -314,7 +314,7 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 550L)
   }
 
-  test("Phase 5 where: `in` operator on dimension routes to WHERE") {
+  test("where: `in` operator on dimension routes to WHERE") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -328,9 +328,9 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 550L, "UA" -> 775L)
   }
 
-  // ---- Phase 5: Filtering — HAVING (measure, post-agg) -----------------------
+  // ---- Filtering — HAVING (measure, post-agg) -----------------------
 
-  test("Phase 5 where: measure filter routes to HAVING (post-agg)") {
+  test("where: measure filter routes to HAVING (post-agg)") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -346,9 +346,9 @@ class SemanticDFSpec
     rows shouldBe Map("UA" -> 775L, "DL" -> 1050L)
   }
 
-  // ---- Phase 5: AND-split (dimension → WHERE, measure → HAVING) --------------
+  // ---- AND-split (dimension → WHERE, measure → HAVING) --------------
 
-  test("Phase 5 where: AND compound splits — dimension to WHERE, measure to HAVING") {
+  test("where: AND compound splits — dimension to WHERE, measure to HAVING") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -367,9 +367,9 @@ class SemanticDFSpec
     rows shouldBe Map("AA" -> 550L)
   }
 
-  // ---- Phase 5: OR-whole (mixing dim+measure stays whole, post-agg) -----------
+  // ---- OR-whole (mixing dim+measure stays whole, post-agg) -----------
 
-  test("Phase 5 where: OR mixing dim+measure stays whole (post-agg)") {
+  test("where: OR mixing dim+measure stays whole (post-agg)") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -384,7 +384,7 @@ class SemanticDFSpec
     rows shouldBe Set("AA", "DL")
   }
 
-  test("Phase 5 having: explicit post-agg filter on a calc measure") {
+  test("having: explicit post-agg filter on a calc measure") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -402,7 +402,7 @@ class SemanticDFSpec
     rows shouldBe Set("UA", "DL")
   }
 
-  test("Phase 5 where: NOT / =!= / <= shorthand operators") {
+  test("where: NOT / =!= / <= shorthand operators") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -418,7 +418,7 @@ class SemanticDFSpec
     rows shouldBe Set("UA")
   }
 
-  test("Phase 5 where: =!= inequality on dimension") {
+  test("where: =!= inequality on dimension") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -431,9 +431,9 @@ class SemanticDFSpec
     rows shouldBe Set("AA", "UA")
   }
 
-  // ---- Phase 3: Percent-of-total (t.all, grand-total cross-join) --------------
+  // ---- Percent-of-total (t.all, grand-total cross-join) --------------
 
-  test("Phase 3 percent-of-total: base measure / its grand total") {
+  test("percent-of-total: base measure / its grand total") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(
@@ -454,7 +454,7 @@ class SemanticDFSpec
     rows("DL") shouldBe (1050.0 / 2375.0) +- 1e-9
   }
 
-  test("Phase 3 percent-of-total: all() on a CALC measure recomputes the formula at zero grain") {
+  test("percent-of-total: all() on a CALC measure recomputes the formula at zero grain") {
     // The crucial correctness test. avg_distance_per_flight is a calc (total_distance/flight_count).
     // t.all("avg...") MUST be the grand-total calc value (6750/30 = 225),
     // NOT the sum of per-group calcs (125+225+325 = 675). Summing per-group avgs would
@@ -479,7 +479,7 @@ class SemanticDFSpec
     rows("DL") shouldBe (325.0 / 225.0) +- 1e-9
   }
 
-  test("Phase 3 percent-of-total: pre-agg filter propagates to the totals table") {
+  test("percent-of-total: pre-agg filter propagates to the totals table") {
     // Classic BI trap: when a WHERE filter narrows rows, percent-of-total must be
     // computed against the FILTERED grand total, not the unfiltered one. Because the
     // totals table is built from the same (already-filtered) base, this works for free.
@@ -503,9 +503,9 @@ class SemanticDFSpec
     rows("UA") shouldBe (775.0 / 1325.0) +- 1e-9
   }
 
-  // ---- Phase 5 completion: orderBy / limit / query ---------------------------
+  // ---- completion: orderBy / limit / query ---------------------------
 
-  test("Phase 5 orderBy + limit: top-N after aggregate") {
+  test("orderBy + limit: top-N after aggregate") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -519,7 +519,7 @@ class SemanticDFSpec
     rows shouldBe Seq("DL", "UA")
   }
 
-  test("Phase 5 orderBy: bare string defaults to ascending") {
+  test("orderBy: bare string defaults to ascending") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -532,7 +532,7 @@ class SemanticDFSpec
     rows shouldBe Seq("AA", "DL", "UA")
   }
 
-  test("Phase 5 query: one-shot bundle (where + groupBy + having + orderBy + limit)") {
+  test("query: one-shot bundle (where + groupBy + having + orderBy + limit)") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -550,7 +550,7 @@ class SemanticDFSpec
     rows shouldBe Seq("DL", "UA")
   }
 
-  test("Phase 5 query: no-group grand total (single row) + limit 1") {
+  test("query: no-group grand total (single row) + limit 1") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
 
@@ -561,9 +561,9 @@ class SemanticDFSpec
     rows.head.getAs[Long]("total_passengers") shouldBe 2375L
   }
 
-  // ---- Phase 6: Time semantics (grain truncation + time_range + validation) ----
+  // ---- Time semantics (grain truncation + time_range + validation) ----
 
-  test("Phase 6 atTimeGrain: groups by truncated month") {
+  test("atTimeGrain: groups by truncated month") {
     val st = toSemanticTable(flightsWithTimeDf, name = Some("flights"))
       .withDimensions(Dimension.time("ts", t => t("ts")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -580,7 +580,7 @@ class SemanticDFSpec
     rows shouldBe Map("2024-01-01" -> 475L, "2024-02-01" -> 475L, "2024-03-01" -> 475L)
   }
 
-  test("Phase 6 atTimeGrain: TIME_GRAIN_ canonical name works too") {
+  test("atTimeGrain: TIME_GRAIN_ canonical name works too") {
     val st = toSemanticTable(flightsWithTimeDf, name = Some("flights"))
       .withDimensions(Dimension.time("ts", t => t("ts")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -590,7 +590,7 @@ class SemanticDFSpec
     rows should have length 3
   }
 
-  test("Phase 6 atTimeGrain: grain finer than smallestTimeGrain raises") {
+  test("atTimeGrain: grain finer than smallestTimeGrain raises") {
     val st = toSemanticTable(flightsWithTimeDf, name = Some("flights"))
       .withDimensions(Dimension.time("ts", t => t("ts"), smallestTimeGrain = Some("day")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -602,7 +602,7 @@ class SemanticDFSpec
     ex.getMessage should include ("finer than")
   }
 
-  test("Phase 6 atTimeGrain: non-time dimension raises a clear error") {
+  test("atTimeGrain: non-time dimension raises a clear error") {
     val st = toSemanticTable(flightsDf, name = Some("flights"))
       .withDimensions(Dimension("carrier", t => t("carrier")))  // not a time dim
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -613,7 +613,7 @@ class SemanticDFSpec
     ex.getMessage should include ("not a time dimension")
   }
 
-  test("Phase 6 query: timeGrain truncates the time dimension") {
+  test("query: timeGrain truncates the time dimension") {
     val st = toSemanticTable(flightsWithTimeDf, name = Some("flights"))
       .withDimensions(Dimension.time("ts", t => t("ts")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))
@@ -628,7 +628,7 @@ class SemanticDFSpec
     rows shouldBe Seq(475L, 475L, 475L)
   }
 
-  test("Phase 6 query: timeRange filters rows by raw timestamp (pre-truncation)") {
+  test("query: timeRange filters rows by raw timestamp (pre-truncation)") {
     val st = toSemanticTable(flightsWithTimeDf, name = Some("flights"))
       .withDimensions(Dimension.time("ts", t => t("ts")))
       .withMeasures(Measure("total_passengers", t => sum(t("passengers"))))

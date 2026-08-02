@@ -2,7 +2,7 @@
 
 **Status:** DRAFT — pending user sign-off before any code is written.
 **Authors:** Synthesized from the senior-data-engineer + senior-software-architect
-review dispatch (post PR #241, post SparkConnect control plane).
+review dispatch (post (see version history), post SparkConnect control plane).
 **Scope:** Wire the four remaining `semanticdf-platform` Restate-service stubs
 (`ModelService`, `QueryService`, `AuditService`, `CatalogService`) to the
 `semanticdf` library + a durable Postgres audit/registry substrate.
@@ -172,7 +172,7 @@ CREATE TABLE IF NOT EXISTS semanticdf_catalog.audit_events (
   PRIMARY KEY (tenant, ts, dedup_hash)
 ) PARTITION BY RANGE (ts);
 
--- monthly partitions created on demand (PR #X helper)
+-- monthly partitions created on demand (a future helper)
 CREATE TABLE IF NOT EXISTS semanticdf_catalog.audit_events_YYYY_MM
   PARTITION OF semanticdf_catalog.audit_events
   FOR VALUES FROM (...) TO (...);
@@ -615,7 +615,7 @@ All three PRs are flag-gated. Rollback path:
 - (PR-C has no env; rollback is revert-the-PR — single file)
 
 Migrations of the Postgres tables are pure additive (`IF NOT EXISTS`).
-Existing deployments with the `streaming_streams` table (from PR #234)
+Existing deployments with the `streaming_streams` table (from (see version history))
 upgrade cleanly.
 
 ---
@@ -628,7 +628,7 @@ test-by-test breakdown.
 
 The single highest-priority follow-up PR is **PR-A** (AuditService) — it
 removes a real bug (audit events currently vanish), reuses the existing
-Postgres pattern from PR #234, and has the smallest blast radius of the
+Postgres pattern from (see version history), and has the smallest blast radius of the
 three. After PR-A lands, PR-B follows. PR-C lands last.
 
 ---
@@ -647,7 +647,7 @@ three. After PR-A lands, PR-B follows. PR-C lands last.
 - **Async/queue-based audit sink** (per `audit-log.md:166`): not on the
   v0.2.2 critical path.
 - **`platform-architecture.md` says streaming is P2 (not v1)**:
-  *streaming is already shipped in v0.2.1 (PR #220+)* — this design doc is stale and should be updated as part of PR-B's doc-update.
+  *streaming is already shipped in v0.2.1 ((see version history)+)* — this design doc is stale and should be updated as part of PR-B's doc-update.
 
 ---
 

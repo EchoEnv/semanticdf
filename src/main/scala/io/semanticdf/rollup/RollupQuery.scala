@@ -15,7 +15,7 @@ import io.semanticdf.predicate.Predicate
   *
   * ## Why a separate type
   *
-  * The previous design (v0.2.4 PR #328 / #329) made `useRollup` return
+  * The previous design (earlier design revisions) made `useRollup` return
   * a `SemanticTable` with `root = SemanticRollupOp(...)`. This intertwined
   * the rollup state with the existing op tree and caused 5 audit cycles
   * with 19+ HIGH-severity bugs -- `MatchError` on joins, `IllegalStateException`

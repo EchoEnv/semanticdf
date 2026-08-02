@@ -196,7 +196,7 @@ class RollupSerializationSpec extends AnyFunSuite with SparkSessionFixture with 
 
   test("SemanticTable: listRollups() returns equal content after round-trip (regression guard)") {
     // Lower-overhead variant of the previous test: focuses on the `rollups`
-    // field — the new field added in PR #330 that wasn't covered by the
+    // field — the new field added during the rollup redesign that wasn't covered by the
     // pre-existing `SemanticTable: Java-serializable` test.
     val r1 = Rollup("r1", "flights", Seq("carrier"),
       Seq(RollupMeasure("pax_sum", "sum", "pax_sum")),

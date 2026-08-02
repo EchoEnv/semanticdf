@@ -49,7 +49,7 @@ design would have had to hand-roll.
 |---|---|---|
 | **Restate runtime** | Hosts the platform's services. Journal in Postgres. mTLS between services. | Restate server binary (Rust), 1+ nodes, 3-AZ. |
 | **Platform services** (in the Restate runtime) | `ModelService`, `QueryService`, `StreamingService`, `AuditService`, `CatalogService` | Java 21, defined as Restate `@Service` / `@VirtualObject` / `@Workflow`. |
-| **`semanticdf` library** (unchanged) | Pure-data compiler. The platform calls into it inside `Restate.run("model.persist", ...)` (the only journal-bounded step); compile and lineage run in handler scope (see §9.1, PR #249). | Scala 2.13 / Spark; consumed as a JAR. |
+| **`semanticdf` library** (unchanged) | Pure-data compiler. The platform calls into it inside `Restate.run("model.persist", ...)` (the only journal-bounded step); compile and lineage run in handler scope (see §9.1, (see version history)). | Scala 2.13 / Spark; consumed as a JAR. |
 | **Postgres** | Platform metadata (model registry, lineage, audit, query journal mirror) **and** Restate's journal | Managed (RDS / Cloud SQL), 3-AZ sync replication. |
 | **Object storage** (S3 / MinIO / GCS) | Raw data tables (Iceberg) + Restate's WAL/snapshots | Object storage. |
 | **Engine adapters** | Per-engine: Trino plugin (Java), Spark SDK (Scala). Consume the platform's REST + optionally the Restate protocol. | Each engine has its own thin adapter. |
@@ -126,7 +126,7 @@ For a query:
    the relevant `ModelService` (VirtualObject) for the plan. The
    response is cached in L1 for next time.
 3. The Scala library compiles the model **in handler scope**
-   (not inside `Restate.run` — see §9.1, PR #249). The
+   (not inside `Restate.run` — see §9.1, (see version history)). The
    journal-bounded step is `Restate.run("model.persist", ...)`,
    which writes a small, Jackson-clean `ModelDefinition` record
    to Postgres (the platform's record store). The result cache
@@ -190,7 +190,7 @@ manifest to Postgres via the {@code ModelStore}:
   the SHA-256 manifest hash, and the canonical
   {@code Lineage.workspaceJsonFor(model)} output.
 
-Compilation steps run in handler scope (PR #249). Only the
+Compilation steps run in handler scope ((see version history)). Only the
 durable Postgres persist ({@code Restate.run("model.persist", ...)})
 is journal-bounded — compile and lineage are deliberately
 handler-scope because the compiled {@code SemanticTable} carries
@@ -372,7 +372,7 @@ step). Sizing must be re-done.
 ### 9.1 The 3 biggest risks
 
 1. **The Java-platform → Scala-library boundary is inside a Restate
-   journal entry.** PR #249 moved compile and lineage OUT of
+   journal entry.** (see version history) moved compile and lineage OUT of
    `Restate.run` — they now run in handler scope because the
    compiled `SemanticTable` carries a Spark `Dataset.rdd` chain
    that Jackson cannot reconstruct during replay. The remaining

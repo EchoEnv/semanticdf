@@ -851,7 +851,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 
 (Reordered per Arch M2: manifest first, companion infra early, routing last.)
 
-### PR #0: Companion infrastructure (~150 LoC, ~1 PR)
+### (see version history): Companion infrastructure (~150 LoC, ~1 PR)
 
 - `TimeGrain.Order`, `TimeGrain.finerOrEqual`, `TimeGrain.finer` (new)
 - `SemanticTable.findDimensionTimeGrain(d)` (new)
@@ -860,7 +860,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 **Tests**: 3 falsifiable tests
 **Risk**: ZERO (additive only)
 
-### PR #1: Rollup types + manifest round-trip (~400 LoC, ~1 PR)
+### (see version history): Rollup types + manifest round-trip (~400 LoC, ~1 PR)
 
 - `Rollup`, `RollupMeasure`, `RollupAggregator` (Sum/Count/Min/Max/Avg/Stddev)
 - `RollupFreshness.Track`, `OnStalePolicy` (NoTracking REMOVED as default)
@@ -871,7 +871,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 **Tests**: 8 falsifiable tests (types, manifest round-trip, backward compat)
 **Risk**: Low (no compile-path changes)
 
-### PR #2: `SemanticRollupOp` (wrapping) + `SemanticAggregateOp.resolveModel` update (~300 LoC, ~1 PR)
+### (see version history): `SemanticRollupOp` (wrapping) + `SemanticAggregateOp.resolveModel` update (~300 LoC, ~1 PR)
 
 - New `SemanticRollupOp` with `source: SemanticOp` field
 - Update `SemanticAggregateOp.resolveModel` to walk through it
@@ -880,7 +880,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 **Tests**: 6 falsifiable tests (wrapping, preserve wrappers, resolveModel walks through)
 **Risk**: Medium (touches op-tree hot path)
 
-### PR #3: Routing + freshness + cache-key (~400 LoC, ~1 PR)
+### (see version history): Routing + freshness + cache-key (~400 LoC, ~1 PR)
 
 - `SemanticTable.findRollupMatch`
 - Routing decision in `toDataFrameInternal` (all 3 sites)
@@ -890,7 +890,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 **Tests**: 5 falsifiable tests (match, freshness, cache generation)
 **Risk**: High (touches hot path + cache key)
 
-### PR #4: Example + docs (~150 LoC, ~1 PR)
+### (see version history): Example + docs (~150 LoC, ~1 PR)
 
 - `examples/runtime-tuning/src/main/scala/com/example/runtime/RollupMain.scala`
 - README update
@@ -914,7 +914,7 @@ Note: `sourceProvider = _ => spark.read.parquet(rollupPath)` — the `rollupPath
 
 ### karpathy
 
-- Surgical: each PR touches ≤ 3 production files. PR #0 adds companion infra; PR #1 adds types + manifest; PR #2 adds the op; PR #3 adds routing; PR #4 adds example.
+- Surgical: each PR touches ≤ 3 production files. (see version history) adds companion infra; (see version history) adds types + manifest; (see version history) adds the op; (see version history) adds routing; (see version history) adds example.
 - Verifiable: 23 falsifiable tests (was 21 in v1).
 - No opportunistic refactors: only rollup-related changes.
 
