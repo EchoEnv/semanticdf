@@ -376,5 +376,13 @@ final class SemanticTable private[semanticdf] (
       * "I want the join result persisted") gets it. Implementation:
       * `joinMaterializeLevel` helper in `SemanticTableMutation`. */
     val materializeLevel: Option[org.apache.spark.storage.StorageLevel] = None,
-) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection {
+    /** Pre-aggregated rollups registered on this model. Pure-data
+      * metadata only -- the actual DataFrame sources live in a
+      * [[io.semanticdf.rollup.RollupRegistry]], passed at use time via
+      * [[io.semanticdf.rollup.SemanticTableRollup.useRollup]].
+      *
+      * Default `Nil` (no rollups). Set via
+      * [[io.semanticdf.rollup.SemanticTableRollup.withRollup]]. */
+    val rollups: List[io.semanticdf.rollup.Rollup] = Nil,
+) extends Serializable with SemanticTableCore with SemanticTableStreaming with SemanticTableMutation with SemanticTableCollection with io.semanticdf.rollup.SemanticTableRollup {
 }

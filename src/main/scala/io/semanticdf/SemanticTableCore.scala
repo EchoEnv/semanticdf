@@ -839,7 +839,14 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     grainMap.foreach { case (dim, g) => t = t.atTimeGrain(dim, g) }
     where.foreach(p  => t = t.where(p))
     having.foreach(p => t = t.having(p))
-    var result: SemanticTable = t.groupBy(dimensions.toSeq: _*).aggregate(measures.toSeq: _*)
+    // If the root is a SemanticRollupOp, the rollup is already pre-aggregated.
+    // The user's query dimensions/measures must match the rollup's grain
+    // (validated at useRollup time; re-aggregation is v0.3.x+ scope).
+    // Skip the groupBy/aggregate wrapping.
+    var result: SemanticTable = t.root match {
+      case _: SemanticRollupOp => t
+      case _ => t.groupBy(dimensions.toSeq: _*).aggregate(measures.toSeq: _*)
+    }
     if (orderBy.nonEmpty) result = result.orderBy(orderBy.toSeq: _*)
     limit.foreach(n => result = result.limit(n))
     // Stamp the captured request shape so the audit event emitted at
@@ -1278,6 +1285,16 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
     case SemanticLimitOp(src, _)   => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
           salt = salt).resolveRootModel
+    case r: SemanticRollupOp =>
+      // Rollup: the model is the rollup's own grain. We return an empty
+      // MergedSemanticModel with the rollup's name. The rollup's dimensions
+      // are not exposed via `model.dimensions` because doing so would
+      // recurse through `resolveRootModel`. Users who need the rollup's
+      // dimensions should use `rollup.rollupDimensions` directly.
+      // Limitation: fluent operations like `findDimension` on a rollup-
+      // rooted table return None. This is acceptable for v0.2.4 (manual
+      // rollups only) -- auto-routing in v0.3.x will revisit.
+      MergedSemanticModel(Map.empty, Map.empty, Some(r.rollup.baseModel), None)
     case SemanticHintOp(src, _, _) => new SemanticTable(src, auditSink = this.auditSink, auditRequest = this.auditRequest, resultCache = this.resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,
           salt = salt).resolveRootModel
