@@ -62,6 +62,11 @@ object CacheKey {
       // whereHash / havingHash are SHA-256 hex strings (64 chars,
       // [0-9a-f]) — no delimiter or length collision possible. Keep
       // them as-is for readability.
+      //
+      // Phase 1 consolidation: PredicateHasher internally converts via
+      // [[io.semanticdf.predicate.PredicateConverter.toCore]] to the
+      // engine-portable core.predicate ADT for the actual hash computation.
+      // Callers pass the Spark-bearing Predicate directly — no API change.
       val whereHash  = req.where.map(PredicateHasher.hash).getOrElse("")
       val havingHash = req.having.map(PredicateHasher.hash).getOrElse("")
       // Order-preserving: the user-requested column order is part of
