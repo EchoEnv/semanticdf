@@ -33,10 +33,22 @@ import io.semanticdf.tools.OkfGen
   */
 class OkfRoundTripSpec extends AnyFunSuite {
 
+  // Walk up from cwd to find the project root (the dir that contains
+    // `examples/`). Handles all module cwd depths in the multi-module tree.
+  private def resolveExamplesRoot: File = {
+    val cwd = System.getProperty("user.dir")
+    Iterator
+      .iterate(new java.io.File(cwd))(_.getParentFile)
+      .take(5)
+      .map(d => new java.io.File(d, "examples"))
+      .find(_.isDirectory)
+      .getOrElse(throw new IllegalStateException(
+        s"Could not locate examples/ from cwd=$cwd"))
+  }
+
   // Locate every YAML under any examples/<name>/models/ directory.
   private val exampleYamls: Seq[File] = {
-    val examplesRoot = new File("examples")
-    require(examplesRoot.isDirectory, "examples/ directory not found — run from project root")
+    val examplesRoot = resolveExamplesRoot
     val modelsDirs = Option(examplesRoot.listFiles())
       .map(_.toSeq).getOrElse(Nil)
       .filter(_.isDirectory)

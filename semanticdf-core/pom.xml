@@ -68,6 +68,21 @@
   </dependencies>
 
   <build>
-    <!-- Inherit build config from parent (scala-maven-plugin, scalatest-maven-plugin). -->
+    <!-- Opt-in to the parent's pluginManagement declarations. Without this,
+         the Scala compiler never runs and the core jar ships empty. -->
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
   </build>
 </project>
