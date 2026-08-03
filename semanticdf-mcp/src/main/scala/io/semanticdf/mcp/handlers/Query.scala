@@ -198,18 +198,20 @@ object Query {
       ast:  Option[Any],
       flat: Option[Seq[Any]],
   ): Option[io.semanticdf.predicate.Predicate] = {
-    val astPred  = ast.map(AstPredicates.parse)
-    // Phase 1 consolidation: route the JSON-flat path through the engine-portable
-    // core ADT (parseAllCore → CorePredicate) and convert back via the boundary
-    // converter. Keeps `mergedWhere`'s return type as the Spark-bearing
-    // Predicate, so the user-facing `SemanticTable.query(where = ...)` surface
-    // is untouched.
-    val flatPred = flat.flatMap(JsonPredicates.parseAllCore).map(io.semanticdf.predicate.PredicateConverter.fromCore)
+    // Phase 1 consolidation: BOTH the AST and flat paths now produce
+    // engine-portable core predicates directly. The merge step (when
+    // both are present) AND-combines them at the core level. The final
+    // convert-back to the Spark-bearing original happens at the very
+    // end — once per query, not once per AST node.
+    val astPred  = ast.map(AstPredicates.parseCore)
+    val flatPred = flat.flatMap(JsonPredicates.parseAllCore)
     (astPred, flatPred) match {
       case (None,    None)    => None
-      case (Some(a), None)    => Some(a)
-      case (None,    Some(f)) => Some(f)
-      case (Some(a), Some(f)) => Some(io.semanticdf.predicate.Predicate.And(a, f))
+      case (Some(a), None)    => Some(io.semanticdf.predicate.PredicateConverter.fromCore(a))
+      case (None,    Some(f)) => Some(io.semanticdf.predicate.PredicateConverter.fromCore(f))
+      case (Some(a), Some(f)) => Some(io.semanticdf.predicate.PredicateConverter.fromCore(
+        io.semanticdf.core.predicate.Predicate.And(a, f),
+      ))
     }
   }
 
