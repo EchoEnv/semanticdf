@@ -36,7 +36,7 @@ In your project's `pom.xml`:
 
 ```xml
 <properties>
-    <semanticdf.version>0.2.3</semanticdf.version>
+    <semanticdf.version>0.2.4</semanticdf.version>
 </properties>
 
 <dependencies>

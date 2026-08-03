@@ -1,5 +1,135 @@
 # Release notes
 
+## v0.2.4 — manual rollups feature
+
+9 PRs. **992 library tests green on Spark 3.5.8 + 4.1.1 (was 848).** Ships the
+manual rollups feature (long-running design pillar), a pre-existing join
+metadata bug fix, and a docs cleanup pass. v0.3.0 will add auto-routing and
+freshness enforcement on top of this foundation.
+
+### Headline
+
+- **`Rollup` / `RollupRegistry` / `RollupQuery` — manual rollups, redux**.
+  A new `io.semanticdf.rollup` package lets users register pre-aggregated
+  rollup tables on a `SemanticTable` via `.withRollup(rollup)` and query
+  them via `model.useRollup(name, registry).execute(spark)`. The `Rollup`
+  value class is pure metadata (no DataFrame reference); the actual rollup
+  source lives in a separate `RollupRegistry` that's threaded through at
+  query time. The redesign separates `RollupQuery` from the fluent chain —
+  a `useRollup` result has no `withDimensions`/`groupBy`/`join_one`
+  methods (compile error), preventing the 19 HIGH-severity bugs found
+  across 4 audit cycles of the v1 implementation. Path-2 contract: rollups
+  do NOT survive joins (`joined.useRollup` throws) — keeping the contract
+  honest about which DataFrame actually ships to executors.
+
+- **Join metadata preservation (H-D1, pre-existing bug)**.
+  Every `join_one` / `join_many` / `join_cross` silently reset
+  `version` / `sourceTable` / `status` / `postAggPredicates` on the joined
+  result. DE reviewer caught it during the rollup audit; root cause was
+  two distinct failure modes (hardcoded defaults in the lambda-path
+  early-return + unnamed fields in the typed-key fall-through). Fixed at
+  all 5 join sites by propagating `this.{metadata...}`. Users who set
+  `version` / `status` on a model and then join it now get that metadata
+  on the joined result, as expected.
+
+- **Rollup serialization audit-closed** — new `RollupSerializationSpec`
+  (8 tests) round-trips `Rollup`, `RollupMeasure`, the aggregator /
+  freshness / on-stale-policy singletons, and `SemanticTable.withRollup(...)`
+  through Java serialization. The 3 sealed traits (`RollupAggregator`,
+  `RollupFreshness`, `OnStalePolicy`) explicitly `extends Serializable` for
+  contract clarity (the case classes / case objects were already
+  Serializable through the default Scala mixin).
+
+- **Docs / Scaladoc provenance cleanup** — the rollup cycle (PRs
+  `#327`–`#335`) accumulated internal `PR #N` / `Phase N` / `ADR #N`
+  references in user-facing prose. Stripped from all 11 source files, 4
+  modern design docs, and the 30+ test names in `SemanticDFSpec`.
+  Historical design docs (`rollups.v0.md`, `rollups.v1.md`) moved to
+  `docs/design/archive/` with a README pointing forward to
+  `docs/design/rollups.md`. Audit-finding IDs (H-D1, H-1, M-D1, L-D1)
+  preserved — they're stable internal review IDs.
+
+### Breaking change to flag
+
+The rollup package is **additive** — no existing API removed. Two
+notable behavior changes that may surface in existing tests:
+
+- **`useRollup` returns `RollupQuery`, not `SemanticTable`.** Tests that
+  did `assert(result.isInstanceOf[SemanticTable])` after `useRollup`
+  must use `assert(result.isInstanceOf[RollupQuery])`. The type-system
+  separation is the load-bearing fix for the v1 design's bugs.
+
+- **Joined models have empty rollups.** `model.join_one(other).useRollup(...)`
+  throws `IllegalArgumentException` (joined has no rollups to use).
+  Re-register via `joined.withRollup(...)` requires a NAMED joined model
+  with the rollup's `baseModel` matching the joined model's name. Anonymous
+  joined models cannot host rollups at all.
+
+### What stays the same
+
+- `SemanticTable.toDataFrame(...)` and `.toStreamingQuery(...)` — unchanged
+- `withAuditSink` / `withResultCache` / `withMaxRows` / `withBroadcastJoinThreshold` / `withMaterialize` / `withSalt` — all six runtime knobs unchanged
+- All YAML loading, manifest round-trip, and Semantica-flavored fluent API unchanged
+
+### Test counts (was 848 at v0.2.0)
+
+| Version | Tests | Delta | Notes |
+|---|---|---|---|
+| v0.2.0 | 848 | — | |
+| v0.2.1 | 856 | +8 | streaming registry |
+| v0.2.2 | 949 | +93 | services-completion charter |
+| v0.2.3 | 915 | -34 | post-charter dedup |
+| **v0.2.4** | **992** | **+77** | rollups feature + serialization tests |
+
+77 new tests in this release: 50 rollup-package tests + 8 join metadata regression
+tests + 8 rollup serialization round-trip tests + the rest from misc rollup audit
+fixes (H1 propagation, H2 WHERE-before-projection, H4 final-class smart
+constructor, etc.).
+
+### What's deferred (v0.3.0+)
+
+- **Rollup auto-routing**: `model.query(measures, dims)` should pick the
+  best rollup automatically. v0.2.4 only ships `useRollup(...)` — the
+  caller names the rollup explicitly. Auto-routing requires the
+  `RollupAggregator` algebra extension (Min/Max/Avg/Stddev) plus
+  freshness enforcement, which is the v0.3.0 scope.
+- **`RollupFreshness.Track` runtime enforcement**: the field is stored
+  (and round-trips through Java serialization), but `RollupQuery.execute`
+  doesn't yet consult it. Documented in the Scaladoc; the field carries
+  the intended policy for downstream consumers (manifest round-trip
+  exposes the freshness metadata) until enforcement lands.
+- **Manifest rollup round-trip**: v0.2.4 drops rollups at manifest
+  serialization (`rollups = Nil`) with a documented "re-register after
+  load" instruction. v0.3.0 will round-trip them once the freshness
+  schema is finalized.
+- **Min / Max / Avg / Stddev aggregators**: only `sum` and `count`
+  shipped in v0.2.4 (both exact-additive). Min/Max are partial-additive
+  (correct at the rollup's grain only); Avg/Stddev require
+  `sum/count` and `sum/sum²/count` state algebra respectively.
+
+### Co-instruction: do not use rollups with a streaming source
+
+The SmartStream Detect is a no-op for streaming joins (Spark's
+`ResolveWriteToStream` rule disables auto-routing for streaming
+DataFrames with a WARN). The runtime-tuning knobs work for streaming
+sources EXCEPT `withSalt` — same Spark limitation. Rollups on
+streaming models are not currently supported (manual registration of
+a streaming source's DataFrame doesn't round-trip cleanly).
+
+In summary, v0.2.4 ships:
+
+- **Rollup subpackage** — pure-metadata `Rollup` + separated
+  `RollupRegistry` + driver-local `RollupQuery`. Manual rollups only —
+  no auto-routing.
+- **`Semantica-Spec` / `Runtime-Tuning` / `Audit-Cache** co-invariance
+  unchanged.
+- **Pre-existing H-D1 join bug** fixed at all 5 join sites.
+- **Rollup serialization audit** closed (8 new tests, 3 trait
+  contracts).
+- **Provenance cleanup** across 19 files.
+
+Total test count: **992** library / green on Spark 3.5.8 + 4.1.1.
+
 ## v0.2.3 — runtime tuning + audit-cache co-invariance
 
 33 PRs. 915 library tests green on Spark 3.5.8 + 4.1.1 (was 848). Two new
