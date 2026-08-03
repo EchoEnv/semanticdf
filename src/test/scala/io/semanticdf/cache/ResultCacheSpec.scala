@@ -23,6 +23,11 @@ import org.scalatest.matchers.should.Matchers._
   * results without re-execution. */
 class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
 
+  // Phase 1 consolidation: QueryRequest.where/having are core-typed.
+  // Implicit conversion lets callers pass the original Spark-bearing Predicate.
+  implicit private def toCorePredicate(p: io.semanticdf.predicate.Predicate): io.semanticdf.core.predicate.Predicate =
+    io.semanticdf.predicate.PredicateConverter.toCore(p)
+
   // ----------------------------------------------------------------
   // CacheKey
   // ----------------------------------------------------------------
@@ -662,8 +667,10 @@ class ResultCacheSpec extends AnyFunSuite with SparkSessionFixture with FlightsF
       version: Int = 0,
       measures: Seq[String] = Seq("flight_count"),
       dimensions: Seq[String] = Seq("carrier"),
-      where: Option[io.semanticdf.predicate.Predicate] = None,
-      having: Option[io.semanticdf.predicate.Predicate] = None,
+      // Phase 1 consolidation: QueryRequest.where is now core-typed.
+      // The implicit below lets callers keep passing the original Predicate.
+      where: Option[io.semanticdf.core.predicate.Predicate] = None,
+      having: Option[io.semanticdf.core.predicate.Predicate] = None,
       orderBy: Seq[(String, String)] = Seq.empty,
       limit: Option[Int] = None,
       timeGrain: Option[String] = None,

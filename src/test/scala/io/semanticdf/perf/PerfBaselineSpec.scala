@@ -1,4 +1,5 @@
 package io.semanticdf.perf
+import io.semanticdf.core.predicate.{Predicate => CorePredicate}
 import io.semanticdf.predicate._
 
 import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, toSemanticTable}
@@ -37,6 +38,11 @@ import org.scalatest.funsuite.AnyFunSuite
   * The output is verbose (info lines on every test) so the numbers
   * are easy to grep. */
 class PerfBaselineSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
+
+  // Phase 1 consolidation: PredicateHasher now operates on core.predicate.Predicate.
+  // Implicit conversion at the test boundary keeps existing assertions compact.
+  implicit private def toCorePredicate(p: io.semanticdf.predicate.Predicate): CorePredicate =
+    io.semanticdf.predicate.PredicateConverter.toCore(p)
 
   /** Measure the median of N runs of `f`. Drops the first run as a
     * warmup. Returns the median in milliseconds. */

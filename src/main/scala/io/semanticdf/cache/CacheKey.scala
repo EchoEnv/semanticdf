@@ -63,10 +63,11 @@ object CacheKey {
       // [0-9a-f]) — no delimiter or length collision possible. Keep
       // them as-is for readability.
       //
-      // Phase 1 consolidation: PredicateHasher internally converts via
-      // [[io.semanticdf.predicate.PredicateConverter.toCore]] to the
-      // engine-portable core.predicate ADT for the actual hash computation.
-      // Callers pass the Spark-bearing Predicate directly — no API change.
+      // Phase 1 consolidation: `QueryRequest.where` / `having` are
+      // core-typed (engine-portable). No converter call on the hot path —
+      // the conversion happens once at query-capture time
+      // ([[io.semanticdf.SemanticTableCore.query]]). The cache-key
+      // computation is pure data ops on the core ADT.
       val whereHash  = req.where.map(PredicateHasher.hash).getOrElse("")
       val havingHash = req.having.map(PredicateHasher.hash).getOrElse("")
       // Order-preserving: the user-requested column order is part of

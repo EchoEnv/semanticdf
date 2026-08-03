@@ -1,6 +1,6 @@
 package io.semanticdf.audit
 
-import io.semanticdf.predicate.Predicate
+import io.semanticdf.core.predicate.{Predicate => CorePredicate}
 
 /** Audit-side capture of a user's query request.
   *
@@ -35,8 +35,20 @@ final case class QueryRequest(
     version:    Int = 0,
     measures:   Seq[String] = Seq.empty,
     dimensions: Seq[String] = Seq.empty,
-    where:      Option[Predicate] = None,
-    having:     Option[Predicate] = None,
+    /** Where predicate as the engine-portable `core.predicate.Predicate`.
+      *
+      * Phase 1 consolidation: the audit/cache-key chain operates on the
+      * engine-portable ADT, so the where/having fields hold core predicates.
+      * The user-facing fluent API (`SemanticTable.query(where = ...)`) is
+      * still typed as `io.semanticdf.predicate.Predicate`; the conversion
+      * to core happens once at query-capture time in [[io.semanticdf.SemanticTableCore]]
+      * (the only place that builds an `AuditQueryRequest` from user input).
+      *
+      * Zero user API change: this DTO is internal to the audit/cache layer. */
+    where:      Option[CorePredicate] = None,
+    /** Having predicate, same contract as [[where]] — engine-portable core
+      * form, converted at query-capture time. */
+    having:     Option[CorePredicate] = None,
     /** Sort spec, captured for cache-key equivalence. The order
       * (and direction) of the keys is part of the result contract:
       * `Seq(carrier asc, revenue desc)` is NOT the same answer as
