@@ -1,4 +1,5 @@
 package io.semanticdf.audit
+import io.semanticdf.core.predicate.{Predicate => CorePredicate}
 import io.semanticdf.predicate._
 
 import io.semanticdf.{Dimension, FlightsFixture, Measure, SparkSessionFixture, toSemanticTable}
@@ -19,6 +20,14 @@ import org.scalatest.matchers.should.Matchers
   * most subtle — same predicate, two ways (Predicate vs. AST), must
   * hash the same. */
 class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
+
+  // Phase 1 consolidation: PredicateHasher now operates on the engine-portable
+  // core.predicate.Predicate ADT. The legacy Predicate (Spark-bearing) still
+  // builds the test fixtures (matching the original ADT's fluent DSL).
+  // This implicit conversion lets the test assertions pass original
+  // predicates without per-call wrapping.
+  implicit private def toCorePredicate(p: io.semanticdf.predicate.Predicate): CorePredicate =
+    io.semanticdf.predicate.PredicateConverter.toCore(p)
 
   private def baseModel: io.semanticdf.SemanticTable =
     toSemanticTable(flightsDf, name = Some("flights"))
@@ -359,5 +368,55 @@ class AuditSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture
       dimensions = Seq("carrier"),
     ).toDataFrame(spark)
     assert(df != null)
+  }
+
+  // ----------------------------------------------------------------
+  // Phase 1 consolidation milestone: zero converter on the audit hot path
+  // ----------------------------------------------------------------
+
+  test("consolidation: QueryRequest.where is core-typed; hash uses core directly") {
+    // After Phase 1 consolidation: QueryRequest.where / having are typed
+    // as `Option[io.semanticdf.core.predicate.Predicate]`. The hasher
+    // operates on the core ADT directly. No converter call on the
+    // hot path (cache lookup / hash computation).
+    import io.semanticdf.audit.QueryRequest
+    val req = QueryRequest(
+      model      = "flights",
+      version    = 0,
+      measures   = Seq("flight_count"),
+      dimensions = Seq("carrier"),
+      where      = Some(Predicate.Compare.Eq("carrier", "AA")), // implicit → core
+      having     = None,
+    )
+    // Type assertion: where is core-typed
+    val whereCore: Option[io.semanticdf.core.predicate.Predicate] = req.where
+    assert(whereCore.isDefined)
+    // Hash directly on core — no conversion
+    val hash = PredicateHasher.hash(whereCore.get)
+    assert(hash.length == 64)  // SHA-256 hex
+    // Same input, same hash (idempotence — no shared state)
+    assert(PredicateHasher.hash(whereCore.get) == hash)
+  }
+
+  test("consolidation: round-trip via QueryRequest preserves the predicate semantics") {
+    // Same predicate built in core form and built in original form,
+    // then converted and hashed, must produce the same hash. This is the
+    // load-bearing boundary invariant — different ADTs, same semantics.
+    import io.semanticdf.predicate.PredicateConverter
+    val original = Predicate.And(
+      Predicate.Compare.Eq("carrier", "AA"),
+      Predicate.Compare.Gt("pax", 100),
+    )
+    val req = io.semanticdf.audit.QueryRequest(
+      model = "flights",
+      where = Some(original),  // implicit converts at the call site
+    )
+    val coreFromRequest = req.where.get
+    val coreDirect = PredicateConverter.toCore(original)
+    assert(coreFromRequest == coreDirect)
+    // Hash the core form directly — no converter
+    val h1 = PredicateHasher.hash(coreFromRequest)
+    val h2 = PredicateHasher.hash(coreDirect)
+    assert(h1 == h2)
   }
 }

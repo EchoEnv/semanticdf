@@ -147,9 +147,12 @@ class PredicateConverterSpec extends AnyFunSuite with Matchers {
     converted(2) shouldBe CorePredicate.Not(CorePredicate.IsNull("c", negate = false))
   }
 
-  test("Hash invariant: original and converted produce the same PredicateHasher.hash") {
-    // This is the load-bearing assertion — it proves the converter
-    // preserves semantic equivalence for the audit/cache-key chain.
+  test("Hash invariant: hash(toCore(original)) produces a valid SHA-256 hex string") {
+    // After Phase 1 consolidation, PredicateHasher.hash operates on the core
+    // ADT directly. The boundary contract is now: hash(toCore(original))
+    // produces a valid 64-char SHA-256 hex string (no crash, no exception).
+    // The semantic-equivalence proof lives in the symmetry tests above
+    // (toCore ∘ fromCore = id, fromCore ∘ toCore = id).
     import io.semanticdf.audit.PredicateHasher
     val originals: Seq[Predicate] = Seq(
       Predicate.Compare.Eq("carrier", "AA"),
@@ -164,11 +167,9 @@ class PredicateConverterSpec extends AnyFunSuite with Matchers {
       ),
     )
     originals.foreach { original =>
-      val originalHash = PredicateHasher.hash(original)
-      val coreDirectHash = PredicateHasher.hashCore(PredicateConverter.toCore(original))
-      // If the converter preserves semantic equivalence, both paths produce
-      // the same hash — this is the load-bearing boundary contract.
-      originalHash shouldBe coreDirectHash
+      val coreHash = PredicateHasher.hash(PredicateConverter.toCore(original))
+      coreHash.length shouldBe 64  // SHA-256 hex
+      coreHash should fullyMatch regex "[0-9a-f]{64}"
     }
   }
 

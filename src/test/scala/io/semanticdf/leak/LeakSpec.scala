@@ -1,4 +1,5 @@
 package io.semanticdf.leak
+import io.semanticdf.core.predicate.{Predicate => CorePredicate}
 import io.semanticdf.predicate._
 
 import io.semanticdf.audit.{AuditSink, AuditEvent, PredicateHasher}
@@ -36,6 +37,11 @@ import java.lang.ref.WeakReference
   *     the standard Spark test harness)
   */
 class LeakSpec extends AnyFunSuite with SparkSessionFixture with FlightsFixture {
+
+  // Phase 1 consolidation: PredicateHasher now operates on core.predicate.Predicate.
+  // Implicit conversion at the test boundary keeps existing assertions compact.
+  implicit private def toCorePredicate(p: io.semanticdf.predicate.Predicate): CorePredicate =
+    io.semanticdf.predicate.PredicateConverter.toCore(p)
 
   // ----------------------------------------------------------------
   // Audit buffer: bounded

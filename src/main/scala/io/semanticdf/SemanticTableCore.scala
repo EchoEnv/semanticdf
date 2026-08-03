@@ -854,8 +854,13 @@ salt = salt, rollups = this.rollups)
       version    = this.version,
       measures   = measures.toSeq,
       dimensions = dimensions.toSeq,
-      where      = where,
-      having     = having,
+      // Phase 1 consolidation: convert at the audit/cache boundary.
+      // QueryRequest.where/having are typed as the engine-portable core
+      // ADT (so the hasher + cache-key chain have no converter on the hot
+      // path). The user-facing `query()` parameter is still the original
+      // Spark-bearing Predicate, so we convert once here at capture time.
+      where      = where.map(io.semanticdf.predicate.PredicateConverter.toCore),
+      having     = having.map(io.semanticdf.predicate.PredicateConverter.toCore),
       orderBy    = orderBy.toSeq.map { case SortKey.Asc(name)  => (name, "asc")
                                        case SortKey.Desc(name) => (name, "desc") },
       limit      = limit,
