@@ -25,12 +25,31 @@ import io.semanticdf.adapters._
 class ManifestJoinedCliBehaviorSpec extends org.scalatest.funsuite.AnyFunSuite
     with org.scalatest.matchers.should.Matchers {
 
+  /** Walk up from cwd to find the project root. The path can point to
+    * either an existing file OR an existing directory — handles both
+    * `examples/foo` (dir) and `examples/foo/data/bar.csv` (file).
+    *
+    * Returns the absolute path if found anywhere in the parent chain;
+    * throws `IllegalStateException` otherwise. */
+  private def resolveProjectPath(relPath: String): String = {
+    val cwd = System.getProperty("user.dir")
+    Iterator
+      .iterate(new java.io.File(cwd))(_.getParentFile)
+      .take(5)
+      .map(d => new java.io.File(d, relPath))
+      .find(p => p.exists)  // matches files AND directories
+      .map(_.getAbsolutePath)
+      .getOrElse(throw new IllegalStateException(
+        s"Could not locate $relPath from cwd=$cwd"))
+  }
+
+
   test("toJson on a joined-rooted SemanticTable throws IllegalStateException with recipe §10 message") {
     val spark = org.apache.spark.sql.SparkSession.builder()
       .master("local[1]").appName("joined-behavior").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     try {
-      val ex = "examples/customer-analytics"
+      val ex = resolveProjectPath("examples/customer-analytics")
       spark.read.option("header","true").option("inferSchema","true")
         .csv(s"$ex/data/customers.csv").createOrReplaceTempView("customers_csv")
       spark.read.option("header","true").option("inferSchema","true")
@@ -85,11 +104,11 @@ class ManifestJoinedCliBehaviorSpec extends org.scalatest.funsuite.AnyFunSuite
     spark.sparkContext.setLogLevel("WARN")
     try {
       spark.read.option("header","true").option("inferSchema","true")
-        .csv("examples/customer-analytics/data/customers.csv").createOrReplaceTempView("customers_csv")
+        .csv(resolveProjectPath("examples/customer-analytics/data/customers.csv")).createOrReplaceTempView("customers_csv")
       spark.read.option("header","true").option("inferSchema","true")
-        .csv("examples/customer-analytics/data/orders.csv").createOrReplaceTempView("orders_csv")
+        .csv(resolveProjectPath("examples/customer-analytics/data/orders.csv")).createOrReplaceTempView("orders_csv")
 
-      val models = YamlLoader.loadDir("examples/customer-analytics/models", spark)
+      val models = YamlLoader.loadDir(resolveProjectPath("examples/customer-analytics/models"), spark)
       val identity = SemanticManifest.Identity(
         id              = "io.semanticdf.examples.customeranalytics.orders",
         manifestVersion = SemanticManifest.InitialManifestVersion,

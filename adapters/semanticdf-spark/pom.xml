@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-spark — the Spark-bearing layer of the semanticdf library.
+
+  This module contains everything that depends on Spark (compile,
+  SemanticScope, ResultCache, audit, etc.) plus all the user-facing
+  fluent APIs (SemanticTable, groupBy, where, having, etc.).
+
+  Depends on `semanticdf-core` for the engine-portable ADTs
+  (Predicate, FieldRef, etc.). Uses those ADTs as the data-only
+  representation of filter expressions.
+
+  What this module DOES:
+    - Compile the library op-tree to a Spark DataFrame
+    - Implement the fluent DSL (where / having / groupBy / aggregate)
+    - Provide the audit / cache / serialization layers
+    - Use semanticdf-core's Predicate for data-side operations
+
+  What this module DOES NOT do:
+    - Define the engine-portable ADTs (those live in semanticdf-core)
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.2.4</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-spark_2.13</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-spark</name>
+  <description>
+    Spark-bearing layer of the semanticdf library. Depends on
+    semanticdf-core for the engine-portable ADTs; provides the fluent
+    DSL, audit / cache / serialization, and Spark compile pipeline.
+  </description>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (no Spark in this dep) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_2.13</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- Spark: default scope — needed on the compile classpath for the Scala plugin.
+         At runtime, semanticdf-spark is shipped INTO a Spark job (users add it as
+         a library in their cluster), so Spark is implicitly present and doesn't need
+         to be in the published jar's classpath. The runtime classpath is supplied
+         by the consumer's Spark distribution. -->
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-sql_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-catalyst_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.spark</groupId>
+      <artifactId>spark-core_${scala.binary.version}</artifactId>
+    </dependency>
+
+    <!-- YAML for manifest readers -->
+    <dependency>
+      <groupId>org.yaml</groupId>
+      <artifactId>snakeyaml</artifactId>
+      <version>1.33</version>
+    </dependency>
+
+    <!-- Jackson for typed-row serialization (RestateCachedRow) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+      <version>2.15.2</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.module</groupId>
+      <artifactId>jackson-module-scala_2.13</artifactId>
+      <version>2.15.2</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- JSON Schema validator for ManifestSchemaValidationSpec -->
+    <dependency>
+      <groupId>com.networknt</groupId>
+      <artifactId>json-schema-validator</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- Opt-in to the parent's pluginManagement declarations. The plugins
+         here are inherited from parent and used to compile + test. -->
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

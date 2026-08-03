@@ -6,12 +6,21 @@
   <modelVersion>4.0.0</modelVersion>
 
   <groupId>io.semanticdf</groupId>
-  <artifactId>semanticdf_2.13</artifactId>
+  <artifactId>semanticdf-parent</artifactId>
   <version>0.2.4</version>
-  <packaging>jar</packaging>
+  <packaging>pom</packaging>
 
-  <name>semanticdf</name>
-  <description>A semantic layer for Apache Spark (JVM), adapted from Boring Semantic Layer.</description>
+  <name>semanticdf-parent</name>
+  <description>
+    Parent POM for the semanticdf multi-module build. Aggregates:
+      - semanticdf-core (engine-portable ADTs, no Spark deps)
+      - adapters/semanticdf-spark (Spark engine adapter — the library)
+  </description>
+
+  <modules>
+    <module>semanticdf-core</module>
+    <module>adapters/semanticdf-spark</module>
+  </modules>
 
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -42,154 +51,174 @@
     <spark.test.argLine>--add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang.invoke=ALL-UNNAMED --add-opens=java.base/java.lang.reflect=ALL-UNNAMED --add-opens=java.base/java.io=ALL-UNNAMED --add-opens=java.base/java.net=ALL-UNNAMED --add-opens=java.base/java.nio=ALL-UNNAMED --add-opens=java.base/java.util=ALL-UNNAMED --add-opens=java.base/java.util.concurrent=ALL-UNNAMED --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED --add-opens=java.base/sun.nio.ch=ALL-UNNAMED --add-opens=java.base/sun.nio.cs=ALL-UNNAMED --add-opens=java.base/sun.security.action=ALL-UNNAMED --add-opens=java.base/sun.util.calendar=ALL-UNNAMED</spark.test.argLine>
   </properties>
 
-  <dependencies>
-    <!-- Spark is `provided`: semanticdf is a library dropped into the user's Spark job. -->
-    <dependency>
-      <groupId>org.apache.spark</groupId>
-      <artifactId>spark-sql_${scala.binary.version}</artifactId>
-      <version>${spark.version}</version>
-      <scope>provided</scope>
-    </dependency>
+  <dependencyManagement>
+    <dependencies>
+      <!-- The library modules depend on each other and on Spark. Pin here
+           so each module's pom is short and consistent. -->
+      <dependency>
+        <groupId>io.semanticdf</groupId>
+        <artifactId>semanticdf-core_2.13</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>io.semanticdf</groupId>
+        <artifactId>semanticdf-spark_2.13</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.spark</groupId>
+        <artifactId>spark-sql_${scala.binary.version}</artifactId>
+        <version>${spark.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.spark</groupId>
+        <artifactId>spark-catalyst_${scala.binary.version}</artifactId>
+        <version>${spark.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.apache.spark</groupId>
+        <artifactId>spark-core_${scala.binary.version}</artifactId>
+        <version>${spark.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.scala-lang</groupId>
+        <artifactId>scala-library</artifactId>
+        <version>${scala.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest_${scala.binary.version}</artifactId>
+        <version>${scalatest.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.yaml</groupId>
+        <artifactId>snakeyaml</artifactId>
+        <version>1.33</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-databind</artifactId>
+        <version>2.15.2</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.module</groupId>
+        <artifactId>jackson-module-scala_2.13</artifactId>
+        <version>2.15.2</version>
+      </dependency>
+      <dependency>
+        <groupId>com.networknt</groupId>
+        <artifactId>json-schema-validator</artifactId>
+        <version>1.5.2</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
 
-    <dependency>
-      <groupId>org.scalatest</groupId>
-      <artifactId>scalatest_${scala.binary.version}</artifactId>
-      <version>${scalatest.version}</version>
-      <scope>test</scope>
-    </dependency>
-
-    <!-- YAML model loader (DESIGN: declarative model definitions for non-Scala consumers).
-         SnakeYAML is standalone (no transitive deps) and API-stable, avoiding the Jackson
-         version-matching problem that arises when jackson-dataformat-yaml must match
-         Spark's own provided jackson-core version across 3.5.x → 4.x. -->
-    <dependency>
-      <groupId>org.yaml</groupId>
-      <artifactId>snakeyaml</artifactId>
-      <version>1.33</version>
-    </dependency>
-
-    <!-- Jackson for the manifest artifact serializer. Pinned to a Spark-compatible
-         version (mirrors the MCP module's jackson pin) so we don't drag a transitive
-         jackson that fights Spark's version range. -->
-    <dependency>
-      <groupId>com.fasterxml.jackson.core</groupId>
-      <artifactId>jackson-databind</artifactId>
-      <version>2.15.2</version>
-    </dependency>
-    <dependency>
-      <groupId>com.fasterxml.jackson.module</groupId>
-      <artifactId>jackson-module-scala_2.13</artifactId>
-      <version>2.15.2</version>
-    </dependency>
-
-    <!-- Build-time JSON Schema validator for manifest artifacts (PR #162).
-         networknt/json-schema-validator supports Draft 7 (our schema)
-         and the 2020-12 dialect; runs at `mvn test` so a malformed
-         example manifest fails the build before it reaches CI. -->
-    <dependency>
-      <groupId>com.networknt</groupId>
-      <artifactId>json-schema-validator</artifactId>
-      <version>1.5.2</version>
-      <scope>test</scope>
-    </dependency>
-  </dependencies>
+  <!-- No <dependencies> block: this is a pom-packaging parent. Child
+       modules declare their own deps and inherit only the
+       dependencyManagement above for version pinning. -->
 
   <build>
-    <plugins>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-compiler-plugin</artifactId>
-        <version>${maven.compiler.plugin.version}</version>
-        <configuration>
-          <release>${maven.compiler.release}</release>
-        </configuration>
-      </plugin>
+    <pluginManagement>
+      <plugins>
+        <!-- Same plugins as before, but in <pluginManagement> so they're
+             version-pinned and inherited by children, NOT executed on the
+             parent itself. Children opt-in by declaring them in their
+             own <build><plugins>. -->
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven.compiler.plugin.version}</version>
+          <configuration>
+            <release>${maven.compiler.release}</release>
+          </configuration>
+        </plugin>
 
-      <plugin>
-        <groupId>net.alchim31.maven</groupId>
-        <artifactId>scala-maven-plugin</artifactId>
-        <version>${scala.maven.plugin.version}</version>
-        <configuration>
-          <scalaVersion>${scala.version}</scalaVersion>
-          <args>
-            <arg>-deprecation</arg>
-            <arg>-feature</arg>
-            <arg>-unchecked</arg>
-          </args>
-        </configuration>
-        <executions>
-          <execution>
-            <id>scala-compile</id>
-            <phase>process-resources</phase>
-            <goals>
-              <goal>add-source</goal>
-              <goal>compile</goal>
-            </goals>
-          </execution>
-          <execution>
-            <id>scala-test-compile</id>
-            <phase>process-test-resources</phase>
-            <goals>
-              <goal>testCompile</goal>
-            </goals>
-          </execution>
-          <execution>
-            <id>scala-doc-jar</id>
-            <phase>package</phase>
-            <goals>
-              <goal>doc-jar</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
+        <plugin>
+          <groupId>net.alchim31.maven</groupId>
+          <artifactId>scala-maven-plugin</artifactId>
+          <version>${scala.maven.plugin.version}</version>
+          <configuration>
+            <scalaVersion>${scala.version}</scalaVersion>
+            <args>
+              <arg>-deprecation</arg>
+              <arg>-feature</arg>
+              <arg>-unchecked</arg>
+            </args>
+          </configuration>
+          <executions>
+            <execution>
+              <id>scala-compile</id>
+              <phase>process-resources</phase>
+              <goals>
+                <goal>add-source</goal>
+                <goal>compile</goal>
+              </goals>
+            </execution>
+            <execution>
+              <id>scala-test-compile</id>
+              <phase>process-test-resources</phase>
+              <goals>
+                <goal>testCompile</goal>
+              </goals>
+            </execution>
+            <execution>
+              <id>scala-doc-jar</id>
+              <phase>package</phase>
+              <goals>
+                <goal>doc-jar</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
 
-      <plugin>
-        <groupId>org.codehaus.mojo</groupId>
-        <artifactId>exec-maven-plugin</artifactId>
-        <version>3.5.0</version>
-        <configuration>
-          <mainClass>io.semanticdf.tools.Main</mainClass>
-          <!-- Use compile classpath so target/classes (Scala-compiled output) is included. -->
-          <classpathScope>compile</classpathScope>
-        </configuration>
-      </plugin>
+        <plugin>
+          <groupId>org.codehaus.mojo</groupId>
+          <artifactId>exec-maven-plugin</artifactId>
+          <version>3.5.0</version>
+          <configuration>
+            <mainClass>io.semanticdf.tools.Main</mainClass>
+            <!-- Use compile classpath so target/classes (Scala-compiled output) is included. -->
+            <classpathScope>compile</classpathScope>
+          </configuration>
+        </plugin>
 
-      <plugin>
-        <groupId>org.scalatest</groupId>
-        <artifactId>scalatest-maven-plugin</artifactId>
-        <version>${scalatest.maven.plugin.version}</version>
-        <configuration>
-          <argLine>${spark.test.argLine}</argLine>
-          <suffixes>Spec</suffixes>
-          <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
-          <junitxml>.</junitxml>
-          <filereports>semanticdf-test-suite.txt</filereports>
-        </configuration>
-        <executions>
-          <execution>
-            <id>test</id>
-            <goals>
-              <goal>test</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
+        <plugin>
+          <groupId>org.scalatest</groupId>
+          <artifactId>scalatest-maven-plugin</artifactId>
+          <version>${scalatest.maven.plugin.version}</version>
+          <configuration>
+            <argLine>${spark.test.argLine}</argLine>
+            <suffixes>Spec</suffixes>
+            <reportsDirectory>${project.build.directory}/surefire-reports</reportsDirectory>
+            <junitxml>.</junitxml>
+            <filereports>semanticdf-test-suite.txt</filereports>
+          </configuration>
+          <executions>
+            <execution>
+              <id>test</id>
+              <goals>
+                <goal>test</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
 
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-source-plugin</artifactId>
-        <version>3.3.1</version>
-        <executions>
-          <execution>
-            <id>attach-sources</id>
-            <phase>verify</phase>
-            <goals>
-              <goal>jar-no-fork</goal>
-            </goals>
-          </execution>
-        </executions>
-      </plugin>
-    </plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-source-plugin</artifactId>
+          <version>3.3.1</version>
+          <executions>
+            <execution>
+              <id>attach-sources</id>
+              <phase>verify</phase>
+              <goals>
+                <goal>jar-no-fork</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+      </plugins>
+    </pluginManagement>
   </build>
 
   <!-- Spark 4.x leg (DESIGN §7, ADR 0002). Verified green: 3.5.8 (default), 4.0.0, 4.1.1.

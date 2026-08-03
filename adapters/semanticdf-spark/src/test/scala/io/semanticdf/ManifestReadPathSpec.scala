@@ -13,6 +13,25 @@ import org.apache.spark.sql.SparkSession
 class ManifestReadPathSpec extends org.scalatest.funsuite.AnyFunSuite
     with org.scalatest.matchers.should.Matchers {
 
+  /** Walk up from cwd to find the project root. The path can point to
+    * either an existing file OR an existing directory — handles both
+    * `examples/foo` (dir) and `examples/foo/data/bar.csv` (file).
+    *
+    * Returns the absolute path if found anywhere in the parent chain;
+    * throws `IllegalStateException` otherwise. */
+  private def resolveProjectPath(relPath: String): String = {
+    val cwd = System.getProperty("user.dir")
+    Iterator
+      .iterate(new java.io.File(cwd))(_.getParentFile)
+      .take(5)
+      .map(d => new java.io.File(d, relPath))
+      .find(p => p.exists)  // matches files AND directories
+      .map(_.getAbsolutePath)
+      .getOrElse(throw new IllegalStateException(
+        s"Could not locate $relPath from cwd=$cwd"))
+  }
+
+
   test("manifest → SemanticTable (single-table manifest) works and round-trips") {
     // 1. Build a SemanticTable from a YAML model.
     // 2. Emit a manifest via the new Identity path.
@@ -22,7 +41,7 @@ class ManifestReadPathSpec extends org.scalatest.funsuite.AnyFunSuite
     val spark = SparkSession.builder().master("local[1]").appName("read-path").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     try {
-      val ex = "examples/customer-analytics"
+      val ex = resolveProjectPath("examples/customer-analytics")
       spark.read.option("header","true").option("inferSchema","true")
         .csv(s"$ex/data/customers.csv").createOrReplaceTempView("customers_csv")
 

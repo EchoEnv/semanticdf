@@ -20,6 +20,9 @@ class ManifestIdentityAuditSpec extends org.scalatest.funsuite.AnyFunSuite
   private val mapper = new ObjectMapper()
 
   // (example dir, model yml filename, FQN id, namespace)
+  // Relative paths are resolved at runtime against the project root,
+  // which we find by walking up from cwd until we find an `examples/` dir.
+  // Works regardless of which module's cwd the tests run from.
   private val cases = Seq(
     ("examples/starter",                 "flights.yml",  "io.semanticdf.examples.starter.flights",        "default"),
     ("examples/starter",                 "carriers.yml", "io.semanticdf.examples.starter.carriers",       "default"),
@@ -32,7 +35,22 @@ class ManifestIdentityAuditSpec extends org.scalatest.funsuite.AnyFunSuite
     ("examples/telco-analytics",         "plans.yml",    "io.semanticdf.examples.telcoanalytics.plans",       "default"),
     ("examples/telco-analytics",         "promotions.yml","io.semanticdf.examples.telcoanalytics.promotions",  "default"),
     ("examples/window-analytics",        "flights.yml",  "io.semanticdf.examples.windowanalytics.flights",    "default"),
-  )
+  ).map { case (relDir, yml, id, ns) => (resolveProjectPath(relDir), yml, id, ns) }
+
+  /** Walk up from cwd to find the project root (the dir that contains
+    * `examples/`). Handles all module cwd depths in the multi-module
+    * tree (e.g. `adapters/semanticdf-spark/`). */
+  private def resolveProjectPath(relPath: String): String = {
+    val cwd = System.getProperty("user.dir")
+    Iterator
+      .iterate(new java.io.File(cwd))(_.getParentFile)
+      .take(5)
+      .map(d => new java.io.File(d, relPath))
+      .find(_.isDirectory)
+      .map(_.getAbsolutePath)
+      .getOrElse(throw new IllegalStateException(
+        s"Could not locate $relPath from cwd=$cwd"))
+  }
 
   /** Read the YAML's first non-comment, non-blank `table:` line.
     * Comments start with `#`; YAML files in this repo use inline
