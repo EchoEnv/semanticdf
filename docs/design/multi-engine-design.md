@@ -1,5 +1,5 @@
 # Design: SemanticDF multi-engine portability (v0.3.0)
-> Status: **REVISED DRAFT for stacked-lens re-review**.
+> Status: **REVISED DRAFT (revision 3) for final stacked-lens re-review**.
 > Approved direction: **Path A — portable core plus engine adapters**.
 > Target engines: Spark, Trino, Databricks/Unity Catalog, Snowflake, Dremio,
 > and custom in-house query/catalog platforms.
@@ -25,7 +25,7 @@ Primary artifacts:
   registry; an optional request `engine` selects a registered provider.
 The design makes five material corrections to the previous draft:
 1. `EngineContext` is not a timeout plus string map. It carries typed materialize,
-   cache, audit, join, streaming-sink, timeout, and cancellation policies.
+   cache, audit, join, timeout, and cancellation policies.
 2. Capabilities describe what an engine supports; policies describe what this query
    asks the engine to do. Structured calc-depth, aggregate-function, expression-shape,
    late-binding, and set-op support replace coarse booleans.
@@ -77,8 +77,8 @@ DE-specific HIGH findings:
 
 | # | Revision disposition | Ground-truth citation |
 |---|---|---|
-| 18 | Reserve a typed `Window` shape but reject it from portable v0.3.0; deliver in v0.4.0 (§4.1.3). | `src/main/scala/io/semanticdf/SemanticTableMutation.scala:241-250`; pre-revision portable `Expr` at `docs/design/multi-engine-design.md:191-273` omitted it. |
-| 19 | Reserve `TotalRef`/percent-of-total but defer portable lowering to v0.4.0 (§4.1.3). | `src/main/scala/io/semanticdf/Scope.scala:12-26,68-94` and `src/main/scala/io/semanticdf/SemanticOp.scala:1281-1318` establish existing Spark `t.all(name)`. |
+| 18 | Defer portable analytic-frame expressions to v0.4.0; reject them in v0.3.0 (§4.1.3). | `src/main/scala/io/semanticdf/SemanticTableMutation.scala:241-250`; pre-revision portable `Expr` omitted the shape. |
+| 19 | Defer portable percent-of-total expressions to v0.4.0 (§4.1.3). | `src/main/scala/io/semanticdf/Scope.scala:12-26,68-94` and `src/main/scala/io/semanticdf/SemanticOp.scala:1281-1318` establish existing Spark `t.all(name)`. |
 | 20 | Add decimal, timestamp, date, array, map, and struct literals (§4.1.1). | `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/Query.scala:323-335`; pre-revision literal ADT at `docs/design/multi-engine-design.md:251-259` omitted them. |
 | 21 | Define the full portable `SealedDataType` ADT and type `Cast` with it (§4.1.1). | `src/main/scala/io/semanticdf/adapters/SemanticManifest.scala:1025-1118` and `semanticdf-mcp/src/main/scala/io/semanticdf/mcp/handlers/Query.scala:323-335` depend on Spark types today. |
 | 22 | Explicitly defer Union/Except/Intersect to v0.4.0; this carries forward current scope (§4.2). | `src/main/scala/io/semanticdf/SemanticOp.scala:343-1139` has no set-operation node. |
@@ -86,7 +86,19 @@ DE-specific HIGH findings:
 | 24 | Remove `NativeLambdas`; keep only `SparkLambdaEval` as a Spark-specific compatibility feature (§4.5.2). | `src/main/scala/io/semanticdf/Model.scala:278-281` stores a `SemanticScope => Column`, which cannot be a portable feature. |
 | 25 | Specify the exact execution overloads and add `ExecuteAmbiguitySpec` (§6.2). | `src/main/scala/io/semanticdf/SemanticTableCore.scala:308-311`; `src/main/scala/io/semanticdf/rollup/RollupQuery.scala:92-96` has the explicit Spark terminal. |
 | 26 | Correct the regression baselines to 963 Scala-only / 1124 cross-project (§7.6). | Pre-revision `docs/design/multi-engine-design.md:700-708,740-748` used stale 992; Maven wiring is `pom.xml:100-181`. |
-## 1. Goals & non-goals
+  18-26 | Keep the reviewed semantic direction, but close the remaining definitional and wiring gaps below. | This revision is the approved final pass before round-3 sign-off.
+
+**Round-2 closure section (revision 3).** The following changes close the final round-2
+findings and are intentionally narrow. H1 removes speculative portable ADTs rather than
+inventing behavior: the six set-operation cases, the analytic-window/frame/total
+expression cases, streaming sink policy/output modes, and the provider sink callback are
+reserved in §11 only. This explicitly honors karpathy-guidelines §2 and closes the
+round-2 phantom-ADT finding. H2 defines `TransformSpec`, `PortableQueryResult`,
+`ExplainResult`, `EngineError`, `CatalogError`, `TrinoRuntimeRegistry`, `SparkPlanHandle`,
+and `CalculatedMeasure` inline. H3 corrects the Maven/Spark-free verification. H4 wires
+`AuditSinkRef` through `AuditSinkRegistry`; H5 wires concrete MCP providers through
+`MCPEngineProvider` and its registry. M1-M10 are closed in §§4-7 and each affected
+snippet is marked with its round-2 finding where the change occurs.
 ### 1.1 Goals
 1. **Preserve the Spark user contract.** Existing fluent chains, DataFrame-returning
    terminals, streaming terminals, Scala lambdas, YAML loading, CLI names, and MCP
@@ -309,29 +321,14 @@ object CompareOp {
 `Between` is inclusive at both ends; adapters may lower it to `>=` and `<=`. Empty
 string remains non-null. Null comparisons retain SQL three-valued logic.
 #### 4.1.3 Explicit v0.4.0 deferrals
-Existing Spark lambda windows (`SemanticTableMutation.scala:241-250`) and Spark
-`t.all(name)` (`Scope.scala:68-94`, `SemanticOp.scala:1281-1318`) remain. Portable
-versions are reserved but rejected by v0.3 `QueryBuilder` with
-`FeatureDeferred("v0.4.0")`; Trino cannot compute them until v0.4.0 (findings 18-19).
-```scala
-sealed trait WindowFrame extends Product with Serializable
-object WindowFrame {
-  sealed trait Bound extends Product with Serializable
-  case object UnboundedPreceding extends Bound; case object CurrentRow extends Bound
-  case object UnboundedFollowing extends Bound
-  final case class Preceding(rows: Long) extends Bound
-  final case class Following(rows: Long) extends Bound
-  final case class RowsBetween(start: Bound, end: Bound) extends WindowFrame
-  final case class RangeBetween(start: Bound, end: Bound) extends WindowFrame
-}
-final case class Window(
-    function: Expr,
-    partitionBy: List[Expr],
-    orderBy: List[SortKey],
-    frame: WindowFrame,
-) extends Expr
-final case class TotalRef(name: String) extends Expr // portable `t.all`, v0.4.0
-```
+Existing Spark lambda analytic behavior and Spark percent-of-total behavior remain in
+the compatibility lane. Portable v0.3.0 contains neither their speculative expression
+ADTs nor a lowering contract. `QueryBuilder` rejects requests for these features with
+`FeatureDeferred("v0.4.0")`; Trino cannot compute them until a v0.4 RFC defines their
+shape, null/order semantics, and capability negotiation. This closes round-2 findings
+18-19 without carrying phantom types into the v0.3.0 contract. The reserved names and
+all six set-operation variants are listed only in §11, with the explicit removal
+rationale required by karpathy-guidelines §2.
 ### 4.2 Relational IR and schema-bearing scans
 The previous `Scan(source, projection)` had no schema. The selected `SourceResolver`
 produces fields at query-build time; only then does the builder emit `ResolvedScan`.
@@ -399,17 +396,10 @@ final case class AggregateCall(
 ```
 Percentile/accuracy live in `arguments`; capability ids stay finite. Exact median is
 never replaced by approximate percentile.
-Set-op names are reserved for structured capabilities, but no `RelOp.SetOperation`
-ships in v0.3.0 and every v0.3 adapter reports an empty set. This carries forward the
-current node inventory (`SemanticOp.scala:343-1139`) and is not a regression (finding 22).
-```scala
-sealed trait SetOp extends Product with Serializable
-object SetOp {
-  case object UnionDistinct extends SetOp; case object UnionAll extends SetOp
-  case object ExceptDistinct extends SetOp; case object ExceptAll extends SetOp
-  case object IntersectDistinct extends SetOp; case object IntersectAll extends SetOp
-}
-```
+Set-operation support is absent from the v0.3.0 relational IR. This carries forward
+the current node inventory (`SemanticOp.scala:343-1139`) and is not a regression
+(round-2 finding 22). The speculative ADT and all six cases were removed in v0.3.0 per
+karpathy §2 and review round-2 finding 22; the reservation is recorded only in §11.
 ### 4.3 Sources, providers, resolver lifecycle, and rollups
 #### 4.3.1 Typed references
 ```scala
@@ -429,7 +419,6 @@ object ProviderRef {
       name: String, schemaHint: Option[List[Field]] = None,
   ) extends ProviderRef                 // () => DataFrame
   final case class TableResolver(name: String) extends ProviderRef // String => DataFrame
-  final case class SinkCallback(name: String) extends ProviderRef  // DataFrame => Unit
 }
 ```
 There is no `kind: String`. DataFrame-specific provider refs return
@@ -467,7 +456,6 @@ object LookupResult {
 final case class SparkProviderRegistry(
     dataFrameSources: Map[String, () => DataFrame] = Map.empty,
     tableResolvers: Map[String, String => DataFrame] = Map.empty,
-    sinkCallbacks: Map[String, DataFrame => Unit] = Map.empty,
 ) {
   def register(ref: ProviderRef.DataFrameSource, f: () => DataFrame) =
     copy(dataFrameSources = dataFrameSources + (ref.name -> f))
@@ -475,7 +463,22 @@ final case class SparkProviderRegistry(
     dataFrameSources.get(ref.name).map(LookupResult.Found(_))
       .getOrElse(LookupResult.NotFound)
 }
-final case class EngineRegistry(sparkProviders: SparkProviderRegistry /* typed maps */)
+trait EngineRegistry extends Serializable
+final case class SparkRuntimeRegistry(
+    providers: SparkProviderRegistry,
+    sourceResolvers: Map[String, SourceResolver] = Map.empty,
+) extends EngineRegistry
+final class TrinoRuntimeRegistry(
+    val sourceResolvers: Map[String, SourceResolver],
+    val catalogs: Map[String, CatalogAdapter],
+    val resultCaches: Map[String, ResultCache],
+    val cancellationClients: Map[String, TrinoStatementClient],
+) extends EngineRegistry {
+  def resolver(name: String): Either[EngineError, SourceResolver] =
+    sourceResolvers.get(name).toRight(EngineError.ConnectionFailed("resolver unavailable: " + name))
+  def catalog(name: String): Either[CatalogError, CatalogAdapter] =
+    catalogs.get(name).toRight(CatalogError.Unsupported("catalog unavailable: " + name))
+}
 ```
 Lifecycle (finding 8; current analogue `rollup/Rollup.scala:320-353`):
 - owner: engine-side `EngineRegistry`, populated by user/framework (`YamlLoader`);
@@ -503,13 +506,27 @@ final case class RollupRegistration(
 )
 ```
 `ManifestDocument` stores `RollupSpec` only. Missing registration is `NotFound`, not a
-stale portable statistic.
+stale portable statistic. `ManualRollupSpec` is rewritten at the §6 registration
+boundary into `RollupSpec`; the rewrite copies name/base model/dimensions/measures and
+freshness, resolves the provider by ref, and computes `RollupPrecompute` only on the
+selected engine. It never puts a provider thunk or engine-native statistic in the
+portable model (round-2 finding 8 / M10).
 ### 4.4 Pure model, manifest v2, and bounded extensions
 #### 4.4.1 Model and closed extensions
 ```scala
+final case class CalculatedMeasure(name: String, expr: Expr)
+    extends Product with Serializable
+
+// Portable transforms are deliberately an empty ADT in v0.3.0. A Spark
+// `SemanticScope => Column` cannot be serialized or lowered by SQL engines.
+sealed trait TransformSpec extends Product with Serializable
+object TransformSpec {
+  val portableCases: List[TransformSpec] = Nil
+}
+
 final case class ModelPolicyDefaults(
     materialize: MaterializePolicy, cache: CachePolicy, audit: AuditPolicy,
-) extends Serializable
+) extends Product with Serializable
 final class Model private[model] (
     val name: String,
     val description: Option[String],
@@ -526,7 +543,7 @@ final class Model private[model] (
     val defaultPolicies: ModelPolicyDefaults,
     val extensions: Map[String, ExtensionValue],
 ) extends Serializable
-sealed trait ExtensionValue extends Serializable
+sealed trait ExtensionValue extends Product with Serializable
 object ExtensionValue {
   final case class String(v: scala.Predef.String) extends ExtensionValue
   final case class Bool(v: Boolean) extends ExtensionValue
@@ -536,11 +553,32 @@ object ExtensionValue {
       fields: scala.collection.immutable.Map[scala.Predef.String, ExtensionValue],
   ) extends ExtensionValue
 }
+
+object Model {
+  def of(name: String, source: SourceRef, dimensions: List[Dimension],
+      measures: List[Measure]): Model =
+    new Model(name, None, source, dimensions, measures, Nil, Nil, Nil, Nil, 1,
+      ModelStatus.Draft, Nil, ModelPolicyDefaults(MaterializePolicy.None,
+        CachePolicy.NoCache, AuditPolicy.NoAudit), Map.empty)
+}
+object Dimension {
+  def field(name: String, dataType: SealedDataType): Dimension =
+    Dimension(name, Expr.ColumnRef(name), Some(dataType))
+}
+object Measure {
+  def aggregate(name: String, fn: AggregateFn, expr: Expr): Measure =
+    Measure(name, AggregateCall(fn, Some(expr), name), portable = true)
+}
 ```
-The smart constructor validates names, collisions, references, calc cycles, types,
-policy defaults, and extension limits. Legacy `SemanticScope => Column` values
-(`Model.scala:278-281`) remain in `semanticdf-spark` and are not portable.
+The portable constructor has no transform argument: `Model.of` sets `transforms = Nil`.
+A Spark compatibility constructor may retain legacy lambdas outside this class. The
+smart constructor validates names, collisions, references, calc cycles, types, policy
+defaults, and extension limits. The definitions above close round-2 findings H2 and M7;
+`CalculatedMeasure` is now concrete, while `TransformSpec` has no speculative cases.
+Legacy `SemanticScope => Column` values (`Model.scala:278-281`) remain in
+`semanticdf-spark` and are not portable.
 `ExtensionValue` is closed—no `Any`, class tag, callback, or engine object (finding 12).
+```
 ```scala
 final case class ExternalExtensionBlob(
     digest: String, uri: java.net.URI, byteLength: Long,
@@ -642,10 +680,56 @@ for v1 Spark; v2 resolves its `SourceRef`. V1 writing is temporarily explicit an
 rejects unrepresentable values instead of inventing `<lambda>`. Golden migration,
 joined-model, rollup, passthrough, schema, and digest tests are required.
 ### 4.5 Engine contracts, policies, capabilities, plans, and results
+```scala
+sealed trait EngineError extends Product with Serializable
+object EngineError {
+  final case class UnsupportedCapability(capability: Capability, reason: String)
+      extends EngineError
+  final case class IncompatibleExprShape(shape: String) extends EngineError
+  final case class FeatureDeferred(feature: String, release: String) extends EngineError
+  final case class CancellationFailed(reason: String) extends EngineError
+  final case class ConnectionFailed(reason: String) extends EngineError
+  final case class QueryTimedOut(cancelStatus: String) extends EngineError
+  final case class AuditSinkUnavailable(name: String) extends EngineError
+  final case class ProviderInvocationFailed(name: String, reason: String) extends EngineError
+  final case class SourceSchemaChanged(source: String) extends EngineError
+  final case class EngineUnavailable(name: String, available: List[String], wasDefault: Boolean)
+      extends EngineError
+}
+sealed trait CatalogError extends Product with Serializable
+object CatalogError {
+  final case class Conflict(reason: String, current: Option[CatalogRef]) extends CatalogError
+  final case class Unauthorized(reason: String) extends CatalogError
+  final case class Network(reason: String) extends CatalogError
+  final case class Unsupported(reason: String) extends CatalogError
+  final case class MalformedManifest(reason: String) extends CatalogError
+}
+sealed trait Capability extends Product with Serializable
+object Capability {
+  final case class Named(value: String) extends Capability
+  type MaxCalcDepth = Int
+  type AggregateFunctions = Set[AggregateFn]
+  type SupportedExpr = Set[ExprShape]
+  type LateBinding = Boolean
+}
+
+final case class EngineIdentity(name: String, nativeVersion: String,
+    engineAdapterVersion: String) extends Product with Serializable
+
+final case class ExplainResult(
+    engine: EngineIdentity,
+    logicalPlan: String,
+    nativePlan: Option[String],
+    sql: Option[String],
+    warnings: List[EngineWarning],
+) extends Product with Serializable
+```
+These closed failures are the missing round-2 H2 definitions. Compile and execute paths
+must return `EngineError`; catalog adapters must return `CatalogError`. `Capability.Named`
+keeps unsupported-capability diagnostics typed without creating speculative per-feature
+classes.
 #### 4.5.1 Engine and typed request context
 ```scala
-final case class EngineIdentity(name: String, version: String, implHash: String)
-    extends Serializable
 trait Engine[R] {
   def identity: EngineIdentity
   def capabilities: EngineCapabilities
@@ -665,7 +749,8 @@ object MaterializePolicy {
   final case class Persist(level: StorageLevel) extends MaterializePolicy
   case object Cache extends MaterializePolicy
 }
-final case class CacheRef(name: String); final case class AuditSinkRef(name: String)
+final case class CacheRef(name: String) extends Product with Serializable
+final case class AuditSinkRef(name: String) extends Product with Serializable
 sealed trait CachePolicy extends Product with Serializable
 object CachePolicy {
   case object NoCache extends CachePolicy
@@ -675,41 +760,47 @@ object CachePolicy {
 sealed trait AuditPolicy extends Product with Serializable
 object AuditPolicy {
   case object NoAudit extends AuditPolicy
-  final case class EmitEvents(sink: AuditSinkRef) extends AuditPolicy
+  final case class EmitEvents(sinkRef: AuditSinkRef) extends AuditPolicy
 }
 sealed trait JoinStrategy extends Product with Serializable
-object JoinStrategy { case object Broadcast extends JoinStrategy; case object ShuffleHash extends JoinStrategy; case object SortMerge extends JoinStrategy }
-sealed trait OutputMode extends Product with Serializable
-object OutputMode { case object Append extends OutputMode; case object Update extends OutputMode; case object Complete extends OutputMode }
+object JoinStrategy {
+  case object Broadcast extends JoinStrategy
+  case object ShuffleHash extends JoinStrategy
+  case object SortMerge extends JoinStrategy
+}
 final case class JoinHints(
     broadcastRightBelowBytes: Option[Long] = None,
     skewFactor: Option[Int] = None,
     preferredStrategy: Option[JoinStrategy] = None,
-) extends Serializable
-sealed trait StreamingSinkPolicy extends Product with Serializable
-object StreamingSinkPolicy {
-  final case class Callback(ref: ProviderRef.SinkCallback) extends StreamingSinkPolicy
-  final case class Table(ref: SourceRef.ByName, mode: OutputMode) extends StreamingSinkPolicy
-}
+) extends Product with Serializable
 sealed trait CancellationCapability extends Product with Serializable
 object CancellationCapability {
-  sealed trait Kind extends Product with Serializable
-  case object CooperativeKind extends Kind; case object SparkJobTagKind extends Kind; case object RemoteStatementKind extends Kind
-  case object Unsupported extends CancellationCapability
   final case class Cooperative(requestId: String) extends CancellationCapability
   final case class SparkJobTag(requestId: String) extends CancellationCapability
   final case class RemoteStatement(requestId: String) extends CancellationCapability
+  case object Unsupported extends CancellationCapability
+}
+sealed trait CancellationMode extends Product with Serializable
+object CancellationMode {
+  case object Cooperative extends CancellationMode
+  case object SparkJobTag extends CancellationMode
+  case object RemoteStatement extends CancellationMode
+  case object Unsupported extends CancellationMode
 }
 final case class EngineContext(
     materializePolicy: MaterializePolicy,
     cachePolicy: CachePolicy,
     auditPolicy: AuditPolicy,
     joinHints: JoinHints,
-    streamingSinkPolicy: Option[StreamingSinkPolicy],
     timeout: scala.concurrent.duration.Duration,
     cancellation: CancellationCapability,
-) extends Serializable
+) extends Product with Serializable
 ```
+`CancellationCapability` is the request's selected mechanism; `CancellationMode` is the
+engine's advertised set. The nested `Kind` hierarchy was removed in v0.3.0 per
+karpathy §2 and round-2 finding M3. Streaming output policy ADTs were also removed in
+v0.3.0 per karpathy §2 and the round-2 phantom-ADT finding; their reservation is only in
+§11.
 `ReadThrough` returns a hit or executes and populates a miss; `WriteThrough` bypasses reads and replaces the entry only after successful execution. This models behavior currently spread over `SemanticTableCore.scala:80-220` and `SemanticTable.scala:109-298` (findings 1-2).
 Typed refs resolve through the driver registry; runtime objects never enter core data.
 #### 4.5.2 Structured capabilities, not booleans
@@ -721,15 +812,8 @@ object ExprShape {
   case object NullChecks extends ExprShape; case object StringFunctions extends ExprShape
   case object ArrayFunctions extends ExprShape; case object Arithmetic extends ExprShape
   case object CaseWhen extends ExprShape; case object Cast extends ExprShape
-  case object Window extends ExprShape; case object Subquery extends ExprShape
+  case object AnalyticFrame extends ExprShape; case object Subquery extends ExprShape
   case object PercentOfTotal extends ExprShape
-}
-object Capability {
-  type MaxCalcDepth = Int
-  type AggregateFunctions = Set[AggregateFn]
-  type SupportedExpr = Set[ExprShape]
-  type LateBinding = Boolean
-  type SetOps = Set[SetOp]
 }
 sealed trait EngineFeature extends Product with Serializable
 object EngineFeature {
@@ -744,17 +828,22 @@ final case class CapabilitySet(
     aggregateFunctions: Capability.AggregateFunctions,
     supportedExpr: Capability.SupportedExpr,
     lateBinding: Capability.LateBinding,
-    setOps: Capability.SetOps,
     features: Set[EngineFeature],
-) extends Serializable
+) extends Product with Serializable
 final case class EngineCapabilities(
     query: CapabilitySet,
-    cancellationCapability: Set[CancellationCapability.Kind],
-) extends Serializable
+    cancellationCapability: Set[CancellationMode],
+) extends Product with Serializable
 ```
-Depth 0 means no calcs; functions/shapes/set ops are individually declared; late binding is explicit. The review notation `Capability.SupportedExpr: Set[Expr]` is represented as `Set[ExprShape]` because support is constructor-level, not a set of expression instances. `NativeLambdas` is dropped. `SparkLambdaEval` preserves current
-closures (`Model.scala:278-281`) but a portable query cannot require it (findings 7,24;
-calc behavior is grounded in `SemanticOp.scala:1139-1455`).
+Depth 0 means no calculated measures. The algorithm is the longest path in the
+calculated-measure DAG, counting transitive `Expr.MeasureRef` references: **depth = max
+length of `MeasureRef → Expr → MeasureRef → …` chain in a single query's calc DAG.**
+SQL engines with subqueries and CTEs publish `maxCalcDepth = Int.MaxValue`; the limit is
+still bounded by validation of cyclic graphs. Functions and expression shapes are
+individually declared, late binding is explicit, and no v0.3 capability field references
+a removed speculative ADT (round-2 findings 7, 22, M4, M8). `NativeLambdas` is dropped.
+`SparkLambdaEval` preserves current closures (`Model.scala:278-281`) but a portable query
+cannot require it (findings 7,24; calc behavior is grounded in `SemanticOp.scala:1139-1455`).
 #### 4.5.3 Policy disposition and cancellation
 ```scala
 sealed trait PolicyDisposition extends Product with Serializable
@@ -774,7 +863,7 @@ object PolicyDisposition {
 | audit emit | apply; missing sink rejects | apply | apply | apply |
 | broadcast hint | warn/omit if unsupported | apply | warn/omit | warn/omit if adapter version lacks support |
 | skew hint | reject | apply; Photon may warn | reject | reject |
-| streaming sink | reject v0.3 | existing Spark lane only | reject | reject |
+| streaming request | n/a in v0.3 portable IR | existing Spark lane only | n/a in v0.3 portable IR | n/a in v0.3 portable IR |
 Warnings appear on plan/MCP envelope; rejects occur before native execution. There is no
 silent ignore. A finite server timeout requires a supported cancellation kind. Timeout
 calls native cancellation, waits a bounded acknowledgement, then returns
@@ -784,42 +873,63 @@ moves Spark-specific handler logic from `Query.scala:75-95,226-299` behind the e
 and closes finding 17.
 #### 4.5.4 Inspectable plans and portable results
 ```scala
-sealed trait ExecutionPlan[+R] {
-  def warnings: List[String]
+sealed trait EngineWarning extends Product with Serializable
+object EngineWarning {
+  final case class PolicyAdapted(original: String, adapted: String) extends EngineWarning
+  final case class ImplicitAssumptionMade(name: String) extends EngineWarning
+  final case class CapabilityReluctantlySupported(name: String) extends EngineWarning
+}
+final class SparkPlanHandle private[spark] (
+    val underlying: org.apache.spark.sql.execution.QueryPlan,
+) {
+  // Engine-local opaque handle. It is deliberately not Serializable.
+}
+sealed trait ExecutionPlan[+R] extends Product with Serializable {
+  def warnings: List[EngineWarning]
   def requiredCapabilities: CapabilitySet
   def normalizedSchema: ResultSchema
 }
 final case class SparkExecutionPlan(
     native: SparkPlanHandle,
-    warnings: List[String],
+    warnings: List[EngineWarning],
     requiredCapabilities: CapabilitySet,
     normalizedSchema: ResultSchema,
 ) extends ExecutionPlan[DataFrame]
 final case class TrinoExecutionPlan(
     sql: String,
     params: Map[String, Any],
-    warnings: List[String],
+    warnings: List[EngineWarning],
     requiredCapabilities: CapabilitySet,
     normalizedSchema: ResultSchema,
 ) extends ExecutionPlan[TrinoResult]
-final class ResultSchema(val fields: List[Field]) extends Serializable
-final class ResultRow(val values: List[Any], val schema: ResultSchema) extends Serializable
+final case class ResultSchema(fields: List[Field])
+    extends Product with Serializable
+final case class ResultRow(values: List[Any], schema: ResultSchema)
+    extends Product with Serializable
+final case class PortableQueryResult(
+    schema: ResultSchema,
+    rows: Iterator[ResultRow],
+    metadata: Map[String, String],
+) extends Product with Serializable
 trait ResultEncoder[-R] {
   def schema(result: R): Either[ResultError, ResultSchema]
   def rows(result: R): Either[ResultError, Iterator[ResultRow]]
 }
-final case class TrinoResult(/* native columns/pages */) {
+final case class TrinoResult(/* native columns/pages */) extends Product with Serializable {
   def toResultRows: List[ResultRow] = TrinoResultEncoder.rows(this).toList
 }
 ```
-Plans expose warnings, requirements, schema, and native explain inputs; parameters are
-redacted by default. Native plans are driver-local, not promised serializable (finding
-10). Result rules (finding 16; current Spark conversion `Query.scala:94-100,303-335`):
-null is JVM null and rejected in non-null fields; decimals preserve declared precision
-and scale without silent rounding; timestamps normalize to UTC `Instant` using the
-declared zone; dates are `LocalDate`; arrays are recursive `Vector[Any]`; structs are
-nested `ResultRow`; maps are ordered `Vector[(Any,Any)]` with non-null keys; MCP emits
-ISO dates/times and string decimals when JSON numeric precision would be lost.
+Plans expose typed warnings, requirements, schema, and native explain inputs; parameters
+are redacted by default. `SparkPlanHandle` is driver-local and not serializable, closing
+round-2 findings H2 and 10. `ResultSchema` and `ResultRow` are case classes because
+conformance tests compare them with `==` (round-2 finding M1). `PortableQueryResult` is
+the engine-neutral MCP result container (round-2 finding H2). Result rules (finding 16;
+current Spark conversion `Query.scala:94-100,303-335`): null is JVM null and rejected in
+non-null fields; decimals preserve declared precision and scale without silent rounding;
+timestamps normalize to UTC `Instant` using the declared zone; dates are `LocalDate`;
+arrays are recursive `Vector[Any]`; structs are nested `ResultRow`; maps are ordered
+`Vector[(Any,Any)]` with non-null keys; MCP emits ISO dates/times and string decimals when
+JSON numeric precision would be lost.
 #### 4.5.5 Engine identity in cache and audit
 ```scala
 final case class CacheKeyInput(
@@ -864,18 +974,19 @@ semanticdf-core_2.13
 The bridge isolates `TrinoResult.toDataFrame`; a Trino-only app resolves no Spark.
 Required CI proof (acceptance criteria, not a claim about the unimplemented split):
 ```bash
-mvn -pl semanticdf-core -am dependency:tree -Dincludes=org.apache.spark -Dscope=compile
-# no Spark lines
-jdeps -recursive semanticdf-core/target/semanticdf-core_2.13-*.jar | grep org.apache.spark
-# no output
-```
-Core also has Maven Enforcer `bannedDependencies=org.apache.spark:*` and
-`CoreClasspathSpec`, which loads all public core classes without Spark.
+grep -r 'org.apache.spark' semanticdf-core/src/main/scala # no output
+# Optional: inspect transitive bytecode references after packaging.
+jdeps -recursive semanticdf-core/target/*.jar | grep -v 'scala-library' | grep org.apache.spark # no output
+``` 
+This source grep is the primary check because Spark is `provided` in `pom.xml:56-62`;
+Maven dependency scope alone cannot prove that core bytecode has no Spark reference
+(round-2 finding H3). Core also has Maven Enforcer `bannedDependencies=org.apache.spark:*`
+and `CoreClasspathSpec`, which loads all public core classes without Spark.
 ### 5.2 Engine sketches
 ```scala
-final class SparkEngine(spark: SparkSession, runtime: EngineRegistry)
+final class SparkEngine(spark: SparkSession, runtime: SparkRuntimeRegistry)
     extends Engine[DataFrame] {
-  val identity = EngineIdentity("spark", spark.version, BuildInfo.gitHash)
+  val identity = EngineIdentity("spark", spark.version, "semanticdf-spark-adapter-v0.3.0")
   val capabilities = SparkCapabilities.forVersion(spark.version)
   def compile(p: RelOp, c: EngineContext) =
     SparkPolicyValidator.validate(c, capabilities).flatMap(SparkPlanLowering.lower(p, _, spark))
@@ -885,7 +996,7 @@ final class SparkEngine(spark: SparkSession, runtime: EngineRegistry)
 }
 final class TrinoEngine(client: TrinoStatementClient, runtime: TrinoRuntimeRegistry)
     extends Engine[TrinoResult] {
-  val identity = EngineIdentity("trino", client.serverVersion, BuildInfo.gitHash)
+  val identity = EngineIdentity("trino", client.serverVersion, "semanticdf-trino-adapter-v0.3.0")
   val capabilities = TrinoCapabilities.forVersion(client.serverVersion)
   def compile(p: RelOp, c: EngineContext) =
     TrinoPolicyValidator.validate(c, capabilities).flatMap(TrinoSqlLowering.lower(p, _))
@@ -894,6 +1005,9 @@ final class TrinoEngine(client: TrinoStatementClient, runtime: TrinoRuntimeRegis
   def explain(p: ExecutionPlan[TrinoResult]) = TrinoExplain.render(p, client)
 }
 ```
+The adapter version is a manually-set constant, changed whenever lowering or result
+semantics change; it replaces the undefined `BuildInfo.gitHash` and closes round-2 M9.
+
 Databricks reuses Spark lowering but owns runtime/Connect identity, Photon validation,
 cancellation, and Unity Catalog. Spark legacy lambdas enter only `SparkLambdaEval`.
 ### 5.3 Catalog identity and publication
@@ -926,13 +1040,18 @@ blob digests. This closes finding 13; the prior design's adapter was unversioned
 
 | Capability | Spark portable | Trino | Databricks portable | Snowflake |
 |---|---|---|---|---|
-| calc depth | 64 | 16 | 64 | 32 |
+| calc depth | 64 | Int.MaxValue | 64 | Int.MaxValue |
 | aggregates | Sum, Count, CountDistinct, Avg, Min, Max, both Stddev, both Variance, Median, both exact Percentile, ApproxPercentile, First, Last (version-gated) | Sum, Count, CountDistinct, Avg, Min, Max, both Stddev, both Variance, ApproxPercentile | Spark set, runtime-gated | Sum, Count, CountDistinct, Avg, Min, Max, both Stddev, both Variance, Median, both exact Percentile, ApproxPercentile |
 | expr shapes | v0.3 base | base, array version-gated | v0.3 base | v0.3 base |
 | late binding | false portable | false | false portable | false |
-| set ops | empty | empty | empty | empty |
+| set operations | absent from v0.3 IR | absent from v0.3 IR | absent from v0.3 IR | absent from v0.3 IR |
 | cancellation | job tag | remote statement | Spark/Connect | JDBC/query id if available |
 | SparkLambdaEval | compatibility only | no | compatibility only | no |
+
+`Int.MaxValue` is not a claim that execution is unbounded: for SQL engines with
+subqueries and CTEs it means no engine-specific calc-depth cap beyond cycle detection and
+resource limits. The published depth remains the longest transitive `MeasureRef` path
+specified in §4.5.2 (round-2 finding M8).
 Per-engine quirks:
 - Trino decimal derivation is cast to declared precision/scale only if lossless;
   overflow/rounding need returns `DecimalOverflow`; precision max is 38.
@@ -962,7 +1081,9 @@ val portable = Model.of(
 ```
 Portable query building resolves source schema first. Trino results expose
 `toResultRows`; `toDataFrame` is an extension in `semanticdf-trino-spark-bridge`, not a
-core/Trino Spark dependency.
+core/Trino Spark dependency. At this boundary, a legacy `ManualRollupSpec` is rewritten
+to the portable `RollupSpec` plus a driver-local `RollupRegistration`; its provider is
+resolved and precomputed only after engine selection (round-2 M10).
 ### 6.2 Exact overloads and ambiguity proof
 ```scala
 final class Query(/* state */) {
@@ -990,7 +1111,6 @@ val context = EngineContext(
   cachePolicy = CachePolicy.ReadThrough(CacheRef("dashboard")),
   auditPolicy = AuditPolicy.EmitEvents(AuditSinkRef("operations")),
   joinHints = JoinHints(broadcastRightBelowBytes = Some(8L * 1024 * 1024)),
-  streamingSinkPolicy = None,
   timeout = scala.concurrent.duration.Duration("30s"),
   cancellation = CancellationCapability.RemoteStatement("request-42"),
 )
@@ -999,9 +1119,24 @@ val result: TrinoResult = portable.query(...).executeWithContext(context, trinoE
 ### 6.4 MCP registry and concrete handler change
 The current `Query` owns a Spark session and Spark row conversion
 (`Query.scala:29-40,75-95`); current `QueryRequest` has no engine
-(`Query.scala:601-621`). The server must change (finding 3).
+(`Query.scala:601-621`). The server must change (round-2 finding 3 and H5).
 ```scala
-trait EngineProvider {
+trait AuditSink { // engine-local operational interface; never in portable model data
+  def emit(event: AuditEvent): Unit
+}
+final class AuditSinkRegistry(sinks: Map[String, AuditSink]) {
+  def get(name: String): Either[EngineError, AuditSink] =
+    sinks.get(name).toRight(EngineError.AuditSinkUnavailable(name))
+}
+object AuditResolution {
+  def resolve(policy: AuditPolicy, registry: AuditSinkRegistry):
+      Either[EngineError, Option[AuditSink]] = policy match {
+    case AuditPolicy.NoAudit => Right(None)
+    case AuditPolicy.EmitEvents(sinkRef) => registry.get(sinkRef.name).map(Some(_))
+  }
+}
+
+trait MCPEngineProvider {
   def identity: EngineIdentity
   def available: Boolean
   def query(model: Model, request: QueryRequest, context: EngineContext):
@@ -1009,22 +1144,55 @@ trait EngineProvider {
   def explain(model: Model, request: QueryRequest, context: EngineContext):
       Either[EngineError, ExplainResult]
 }
+final class SparkEngineProvider(
+    spark: SparkSession,
+    runtime: SparkRuntimeRegistry,
+    auditSinks: AuditSinkRegistry,
+) extends MCPEngineProvider {
+  private val engine = new SparkEngine(spark, runtime)
+  val identity: EngineIdentity = engine.identity
+  val available: Boolean = spark != null
+  def query(model: Model, request: QueryRequest, context: EngineContext) =
+    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+      SparkMCPExecution.query(engine, model, request, context))
+  def explain(model: Model, request: QueryRequest, context: EngineContext) =
+    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+      SparkMCPExecution.explain(engine, model, request, context))
+}
+final class TrinoEngineProvider(
+    client: TrinoStatementClient,
+    runtime: TrinoRuntimeRegistry,
+    auditSinks: AuditSinkRegistry,
+) extends MCPEngineProvider {
+  private val engine = new TrinoEngine(client, runtime)
+  val identity: EngineIdentity = engine.identity
+  val available: Boolean = client.isHealthy
+  def query(model: Model, request: QueryRequest, context: EngineContext) =
+    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+      TrinoMCPExecution.query(engine, model, request, context))
+  def explain(model: Model, request: QueryRequest, context: EngineContext) =
+    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+      TrinoMCPExecution.explain(engine, model, request, context))
+}
 final class MCPEngineRegistry(
-    engines: Map[String, EngineProvider],
+    engines: Map[String, MCPEngineProvider],
     default: String,
 ) {
+  require(engines.contains(default),
+    s"MCPEngineRegistry default '$default' not in registered engines: ${engines.keys.toList.sorted}")
   def available(): List[String] = engines.collect {
     case (n, p) if p.available => n
   }.toList.sorted
-  def select(requested: Option[String]) = {
+  def select(requested: Option[String]):
+      Either[EngineError, (String, MCPEngineProvider)] = {
     val chosen = requested.getOrElse(default)
-    engines.get(chosen).filter(_.available).toRight(
-      QueryErrors.EngineUnavailable(chosen, available(), requested.isEmpty))
+    engines.get(chosen).filter(_.available).map(chosen -> _).toRight(
+      EngineError.EngineUnavailable(chosen, available(), requested.isEmpty))
   }
 }
 val registry = new MCPEngineRegistry(
-  Map("spark" -> new SparkEngineProvider(sparkRuntime),
-      "trino" -> new TrinoEngineProvider(trinoRuntime)),
+  Map("spark" -> new SparkEngineProvider(spark, sparkRuntime, auditSinks),
+      "trino" -> new TrinoEngineProvider(trinoClient, trinoRuntime, auditSinks)),
   default = "spark",
 )
 final case class QueryRequest(
@@ -1033,18 +1201,18 @@ final case class QueryRequest(
     dimensions: Option[Seq[String]] = None,
     /* existing fields unchanged */
     engine: Option[String] = None,
-)
-object QueryErrors {
-  final case class EngineUnavailable(
-      requested: String, available: List[String], wasDefault: Boolean,
-  ) extends RuntimeException("ENGINE_UNAVAILABLE: " + requested)
-}
+) extends Product with Serializable
 ```
+`Engine.compile()` resolves `AuditPolicy.EmitEvents(AuditSinkRef("operations"))` through
+`AuditSinkRegistry.get("operations")` before lowering or execution; a missing sink is a
+typed compile failure, never a dropped audit event. This closes round-2 H4 and preserves
+the `AuditEvent.scala:65-143` requirement without retaining a sink in `Query`'s
+constructor.
 Handler change:
 ```scala
 final class Query(engineRegistry: MCPEngineRegistry, maxRows: Int, timeoutMs: Long) {
   def handle(models: Models, request: QueryRequest): Envelope[Query.Data] = {
-    val provider = engineRegistry.select(request.engine).fold(throw _, identity)
+    val (name, provider) = engineRegistry.select(request.engine).fold(throw _, identity)
     val model = models.portable(request.model)
     val context = Query.contextFor(request, provider, timeoutMs)
     val result = provider.query(model, request, context).fold(Query.raise, identity)
@@ -1057,6 +1225,16 @@ Absent request engine selects the configured default. Missing/unavailable defaul
 typed code with `wasDefault=false`. Neither case falls back to another engine. Validate
 against `available()` before building the query; `explain` shares selection. Existing
 response `{columns,rows,row_count,truncated}` remains; metadata adds engine identity.
+The `queryToolSchema` patch is additive and closes round-2 M6:
+```scala
+val queryToolSchema = existingQueryToolSchema.deepMerge(Json.obj(
+  "properties" -> Json.obj(
+    "engine" -> Json.obj("type" -> "string",
+      "description" -> "Registered engine name; omitted uses the server default"),
+  ),
+  "required" -> existingQueryToolSchema("required"),
+))
+```
 ```json
 {"model":"orders","measures":["amount"],"dimensions":["region"],
  "engine":"trino"}
@@ -1115,11 +1293,13 @@ Do not commit to Phase 2 production scope until the proof demonstrates all of:
    normalized schema; explain succeeds without query execution.
 6. A forced timeout cancels the remote Trino query, not merely the caller Future.
 7. Manifest v2 round-trips the proof model and a v1 fixture migrates to the same model.
-8. Explicit unsupported window, `TotalRef`, set op, aggregate, and policy requests return
-   the intended typed errors.
-**Gate outcomes:** proceed with Option C; narrow v0.3 scope; or use Option B temporarily
-with a recorded duplication-removal plan. A failed gate is evidence, not schedule
-slippage to hide by reducing tests.
+8. Explicitly unsupported deferred analytic, total, set-operation, aggregate, and policy
+   requests return the intended typed errors.
+**Gate failure decision tree (round-2 finding M5):** hold Phase 1; produce a 2-page RCA
+within 1 week; if the RCA shows a fundamental C-blocking issue, revert Phase 1 to a
+Trino-isolated bridge (no `semanticdf-trino` module) and ship v0.3.0 without Trino
+support; if the RCA shows an integration-only issue, fix it in Phase 1 with an explicit
+timeline. The gate does NOT constitute schedule permission to slip tests.
 ### 7.3 Phase 2 — production Trino adapter
 Realistic range: **4,000-6,000 LoC**, expected midpoint about **5,450 LoC**.
 Work breakdown:
@@ -1173,7 +1353,7 @@ Portable streaming remains deferred; only the existing Spark streaming lane is r
 **Phase 4 — Snowflake/Dremio:** estimate each independently after a capability and
 cancellation spike. Planning placeholder: 4,000-6,000 LoC per SQL engine, including
 catalog and integration tests. Do not reuse the old “2,000 LoC each” assumption.
-**Phase 5 — custom platform SDK:** publish core conformance fixtures, `EngineProvider`
+**Phase 5 — custom platform SDK:** publish core conformance fixtures, `MCPEngineProvider`
 helpers, typed registry builders, catalog CAS helpers, extension-blob helpers, and a
 reference adapter. Estimate 1,500-2,500 LoC after two production engines reveal the
 stable seam.
@@ -1260,7 +1440,7 @@ The migration follows reproduce, trace, falsify, cross-reference, verify:
 | MCP explicit engine silently falls back | Medium / High | registry selection rules; `ENGINE_UNAVAILABLE`; no fallback test |
 | MCP deployment omits configured default | Low / High | startup health check plus typed default-unavailable response |
 | Explain leaks parameter secrets | Medium / Medium | redacted values; types/names only by default; security snapshot |
-| Deferred Window/TotalRef appears supported | Medium / High | reserved shape plus `FeatureDeferred(v0.4.0)` tests; absent capabilities |
+| Deferred analytic/total shape appears supported | Medium / High | v0.3 rejects deferred analytic, total, and set-operation requests with `FeatureDeferred(v0.4.0)`; absent capabilities |
 | Trino/Databricks estimates remain low | Medium / Medium | WBS ranges; Phase-1 gate; package-level tracking; re-estimate after spike |
 | Photon/native optimizer changes semantics | Low / High | optimizer is never semantic authority; cross-engine results; warning on fallback |
 ### 8.1 Falsifiable phase claims
@@ -1305,6 +1485,13 @@ unbounded production Trino result support; existing MCP `maxRows` remains a hard
 Resolved questions from the previous draft—opaque extensions, audit engine field,
 manifest versioning, MCP engine visibility, provider lifecycle, and cancellation
 location—are removed.
+**Reserved v0.4.0 RFC items.** `SetOp` (including `UnionDistinct`, `UnionAll`,
+`ExceptDistinct`, `ExceptAll`, `IntersectDistinct`, and `IntersectAll`), `Window`,
+`WindowFrame`, `TotalRef`, `StreamingSinkPolicy`, `OutputMode.Append`, `OutputMode.Update`,
+`OutputMode.Complete`, and `ProviderRef.SinkCallback` are reserved for a v0.4.0 RFC.
+Every one was removed from v0.3.0 to honor karpathy-guidelines §2 and review round-2
+finding H1; none is a v0.3.0 type, expression case, capability member, or provider
+reference. The RFC must define semantics before any of these names return to the IR.
 1. Should a future async public API return `Future`, a cancelable effect type, or only a
    driver-local `QueryHandle` while keeping `Engine` synchronous in v0.3?
 2. What bounded page/cursor contract should replace `List[ResultRow]` for large remote
@@ -1313,10 +1500,10 @@ location—are removed.
    behavior affects source types/statistics even when SQL engine version is stable.
 4. Should result maps remain ordered pairs in all Scala APIs or expose a convenience
    `Map` only when key types and uniqueness make conversion lossless?
-5. What is the v0.4 delivery order: portable window functions, percent-of-total, or set
-   operations? Capability shapes reserve all three but imply no order.
-6. How should adapter `implHash` be generated for locally patched/vendor builds so it is
-   stable across process restarts but changes when lowering behavior changes?
+5. What is the v0.4 delivery order for the reserved analytic, total, and set-operation
+   features? Their RFCs imply no order today.
+6. How should adapter `engineAdapterVersion` be generated or manually governed for
+   locally patched/vendor builds so it changes when lowering behavior changes?
 These questions must not be answered by string parameters in `EngineContext`.
 ## 12. Glossary
 
@@ -1329,28 +1516,39 @@ These questions must not be answered by string parameters in `EngineContext`.
 | `Field` | Name, portable data type, and nullability in a resolved/result schema |
 | `ResolvedScan` | Relational scan containing source ref, resolved fields, and projection |
 | `SourceRef` | Serializable source identity, never a native source object |
-| `ProviderRef` | Typed identifier for one driver-local closure shape |
+| `ProviderRef` | Typed identifier for one driver-local closure shape (`DataFrameSource`, `TableResolver`) |
 | `SourceResolver` | Engine-side adapter that resolves a source to schema/stats or typed failure |
 | `ResolvedSource` | Closed result of source resolution: scan, incompatible, auth failed, or not found |
 | `Engine[R]` | Adapter contract for compile, execute, explain, identity, and capabilities |
-| `EngineProvider` | Server composition of engine, source resolver, result encoder, catalog, and runtime registries |
-| `EngineRegistry` | Engine-side immutable owner of provider/cache/audit/cancellation/rollup registrations |
 | `MCPEngineRegistry` | Server registry mapping request engine names to available engine providers and a default |
+| `MCPEngineProvider` | MCP-facing engine implementation returning portable query/explain results |
+| `EngineError` | Closed compile/execute failure ADT, including unsupported capability, connection, timeout, and cancellation failures |
+| `CatalogError` | Closed catalog failure ADT: conflict, authorization, network, unsupported operation, or malformed manifest |
+| `EngineWarning` | Closed non-fatal plan diagnostic ADT; warnings are typed, never arbitrary strings |
+| `Capability` | Typed capability diagnostic name used by unsupported-capability errors |
+| `TransformSpec` | Empty v0.3 portable transform ADT; portable model construction sets transforms to `Nil` |
+| `CalculatedMeasure` | Named portable calculated expression, represented as `(name, Expr)` |
+| `ExplainResult` | Serializable logical/native explain output with SQL and typed warnings |
+| `PortableQueryResult` | Serializable result schema, normalized rows, and string metadata returned by MCP providers |
+| `SparkPlanHandle` | Non-serializable, engine-local opaque wrapper around a Spark query plan |
+| `TrinoRuntimeRegistry` | Driver-local Trino runtime registry for resolvers, catalogs, caches, and cancellation clients |
+| `AuditSinkRegistry` | Driver-local name-to-`AuditSink` resolver used during engine compilation |
+| `CancellationMode` | Engine-advertised native cancellation mechanism, distinct from a request capability |
+| `ManualRollupSpec` | Legacy rollup declaration rewritten into portable `RollupSpec` at engine registration |
 | `EngineIdentity` | Engine name, native version, and adapter implementation hash |
-| `EngineContext` | Typed per-query policy/cancellation request |
+| `EngineContext` | Typed per-query policy/cancellation request, with `auditPolicy: AuditPolicy` resolved at compile time |
 | `MaterializePolicy` | Per-query request for no materialization, persistence level, or engine cache |
 | `CachePolicy` | Per-query no-cache, read-through, or write-through behavior |
-| `AuditPolicy` | Per-query no-audit or typed sink-reference behavior |
+| `AuditPolicy` | Per-query no-audit or typed `AuditSinkRef` (resolved at compile time through `AuditSinkRegistry`) |
 | `JoinHints` | Typed, best-effort join planning requests with explicit disposition |
-| `StreamingSinkPolicy` | Typed Spark-lane streaming sink request; portable streaming remains deferred |
-| `CancellationCapability` | Selected per-request native cancellation mechanism |
-| `CapabilitySet` | Portable query requirements: calc depth, aggregate functions, expression shapes, late binding, set ops, and features |
-| `EngineCapabilities` | An engine's query capability set plus supported cancellation-capability kinds |
+| `CancellationCapability` | Selected per-request native cancellation mechanism (Cooperative, SparkJobTag, RemoteStatement, or Unsupported) |
+| `CapabilitySet` | Portable query requirements: calc depth, aggregate functions, expression shapes, late binding, and features |
+| `EngineCapabilities` | An engine's query capability set plus supported cancellation modes |
 | `EngineFeature` | Static engine-supported feature; never a per-query behavior request |
 | `SparkLambdaEval` | Spark-only legacy lambda escape hatch, not exposed by portable API |
-| `ExecutionPlan[R]` | Inspectable engine-native plan with warnings, requirements, and normalized schema |
-| `ResultSchema` | Portable ordered result fields |
-| `ResultRow` | Portable normalized values tied to a result schema |
+| `ExecutionPlan[R]` | Inspectable engine-native plan with typed warnings, requirements, and normalized schema |
+| `ResultSchema` | Portable ordered result fields (case class so conformance tests can use `==`) |
+| `ResultRow` | Portable normalized values tied to a result schema (case class) |
 | `ResultEncoder[R]` | Bridge from an engine-native result to portable schema/rows |
 | `ManifestDocument` | Version-2 persistent document containing a portable model and canonical digest |
 | `JsonSchema[A]` | Versioned validation/read/write contract for a wire document |
@@ -1362,8 +1560,6 @@ These questions must not be answered by string parameters in `EngineContext`.
 | `RollupSpec` | Portable rollup metadata with no provider or precomputed engine fields |
 | `RollupRegistration` | Engine-side binding of rollup spec, provider ref, and computed source facts |
 | `PolicyDisposition` | Applied, applied with warning, or rejected result for one requested policy |
-| `SetOp` | Reserved typed union/except/intersect variant; relational node deferred to v0.4 |
-| `Window` / `TotalRef` | Reserved v0.4 portable expression shapes |
 ## 13. References
 Current implementation grounding:
 - `src/main/scala/io/semanticdf/SemanticTableCore.scala:80-220,308-311`
@@ -1390,6 +1586,19 @@ Design and contract references:
 - `.pi/agent/skills/debug-mantra/SKILL.md`
 The pre-revision ranges in §0.2 resolve via `git show HEAD:docs/design/multi-engine-design.md`; `HEAD` is the branch version immediately before this uncommitted revision.
 ## 14. Changelog
+- **v0.3.0-revision-3:** final pass. Removed phantom ADTs (`SetOp`, `Window`,
+  `WindowFrame`, `TotalRef`, `StreamingSinkPolicy`, `OutputMode.*`,
+  `ProviderRef.SinkCallback`) per karpathy §2 and round-2 H1; defined `TransformSpec`,
+  `PortableQueryResult`, `ExplainResult`, `EngineError`, `CatalogError`,
+  `TrinoRuntimeRegistry`, `SparkPlanHandle`, and `CalculatedMeasure` (H2); corrected
+  the Maven/Spark-free verification (H3); wired `AuditSinkRegistry` (H4); added concrete
+  `MCPEngineProvider` implementations and registry (H5); collapsed
+  `CancellationCapability.Kind` (M3); added `EngineWarning` ADT (M2); defined
+  `ResultSchema`/`ResultRow` as case classes (M1); specified calc-depth algorithm and
+  changed SQL engines to `Int.MaxValue` (M4, M8); added gate failure decision tree (M5);
+  added `queryToolSchema` engine-property patch (M6); defined `Model.of`,
+  `Dimension.field`, and `Measure.aggregate` (M7); replaced `BuildInfo.gitHash` with
+  `engineAdapterVersion` (M9); added `ManualRollupSpec` rewrite (M10).
 - **v0.3.0-revision-2:** Path A revision after DE + Architect falsification passes.
   Added typed policies/cancellation, structured capabilities, resolved scans, provider
   lifecycle, rollup registration split, manifest v2 wire migration, Maven module proof,
