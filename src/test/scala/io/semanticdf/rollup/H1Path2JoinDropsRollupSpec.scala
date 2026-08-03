@@ -5,7 +5,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 /** Path-2 contract: rollups do NOT survive joins.
   *
-  * The v0.2.4 redesign (PR #330, Post329RedesignSpec.scala:92-95) explicitly
+  * The v0.2.4 redesign (the v0.2.4 rollup redesign) explicitly
   * said: "Joins on SemanticTable are forbidden when a rollup is active
   *  (useRollup returns a different type)."
   *

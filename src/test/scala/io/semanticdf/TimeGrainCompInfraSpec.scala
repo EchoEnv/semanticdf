@@ -3,7 +3,7 @@ package io.semanticdf
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
-/** Companion-infrastructure tests for v0.2.4 manual rollups PR #0.
+/** Companion-infrastructure tests for v0.2.4 manual rollups companion infrastructure.
   *
   * Pins the contracts of `TimeGrain.finer` / `finerOrEqual` and
   * `SemanticTable.findDimensionTimeGrain`. These are reused by

@@ -4,7 +4,7 @@ import io.semanticdf.SemanticTable
 
 /** Methods on [[SemanticTable]] for the rollups feature (v0.2.4 redesign).
   *
-  * In the previous design (PR #328 / #329), `useRollup` returned a
+  * In the previous design (earlier design revisions), `useRollup` returned a
   * `SemanticTable` with `root = SemanticRollupOp(...)`, which intertwined
   * rollup state with the existing op tree and caused 5 audit cycles
   * with 19+ HIGH-severity bugs. The new design returns a separate

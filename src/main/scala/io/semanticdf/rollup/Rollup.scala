@@ -224,7 +224,7 @@ object RollupMeasure {
   * is in scope; for manual rollups, Sum+Count covers the common case.
   *
   * `extends Serializable` so a [[Rollup]] containing this field on its
-  * `RollupMeasure` survives Java serialization in cluster mode. PR #334.
+  * `RollupMeasure` survives Java serialization in cluster mode.
   */
 sealed trait RollupAggregator extends Serializable {
   /** Canonical name (matches the Spark SQL aggregator name). */
@@ -267,7 +267,7 @@ object RollupAggregator {
 /** Freshness tracking.
   *
   * `extends Serializable` so a [[Rollup]] containing this field survives
-  * Java serialization in cluster mode. PR #334. Note that
+  * Java serialization in cluster mode. Note that
   * [[RollupFreshness.Track]] includes a `watermarkProvider: () => Instant`
   * closure — if the caller passes a custom closure that captures outer
   * state (SparkSession, loggers, etc.), the round-trip will fail at
@@ -293,7 +293,7 @@ object RollupFreshness {
   *
   * `extends Serializable` so a [[RollupFreshness.Track]] containing this
   * on its `onStale` field survives Java serialization in cluster mode.
-  * PR #334.
+  * (see audit history).
   */
 sealed trait OnStalePolicy extends Serializable
 

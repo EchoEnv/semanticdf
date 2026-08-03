@@ -6,7 +6,7 @@ import org.apache.spark.sql.functions.{col => fcol, sum}
 import org.scalatest.funsuite.AnyFunSuite
 
 /** Falsification tests for the v0.2.4 redesign. These 5 tests were the
-  * HIGH-severity bugs in the v1 design (PR #328 / #329). After the
+  * HIGH-severity bugs in the v1 design (earlier revisions). After the
   * redesign, `useRollup` returns a separate `RollupQuery` type that
   * CANNOT call `withDimensions`, `withMeasures`, `groupBy`, `aggregate`,
   * `join_one`, or `atTimeGrain` -- the type system prevents the bugs.

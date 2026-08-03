@@ -14,7 +14,7 @@ from scratch.
 Common case this fixes: a user runs the same query multiple times in a
 session — e.g., a Jupyter notebook iterating over the result, an agent
 loopping on the same shape, or a streaming `foreachBatch` micro-batch
-re-emitting the same aggregate. The `withResultCache` flag (PR #295)
+re-emitting the same aggregate. The `withResultCache` flag ((see version history))
 catches the *rows-after-collect* case; `withMaterialize` catches the
 *DataFrame-before-collect* case. They are complementary, not redundant.
 
@@ -202,7 +202,7 @@ private[semanticdf] def joinMaterializeLevel(other: SemanticTable):
 ```
 
 Precedence: LEFT wins when both set, RIGHT is the fallback. Matches
-the broadcastJoinThreshold pattern (PR #306/#307).
+the broadcastJoinThreshold pattern ((see version history)/#307).
 
 ### Propagation through `new SemanticTable(...)` callsites
 
@@ -277,7 +277,7 @@ round-trip losslessly. The implementation plan:
 | **No retained `DataFrame` ref** (REVISED) | Removes the memory leak, the race, the `@transient` requirement, and the API surface | Retain the ref, manage `unpersist()` — but the agent review found 3 HIGH bugs in that approach |
 | **No `unpersist()` on `SemanticTable`** (REVISED) | User unpersists via the returned `DataFrame` reference; simpler API | Add `unpersist()` method on the table — but this requires the retained ref |
 | `limit → persist → collect` order (REVISED) | Persist the LIMITED result; safety cap is preserved | `persist → limit → collect` — materializes the full DataFrame, defeats `maxRows` |
-| LEFT-wins precedence on joins | Matches broadcastJoinThreshold pattern (PR #306/#307) | Other rule — not applicable, no "tighter" concept |
+| LEFT-wins precedence on joins | Matches broadcastJoinThreshold pattern ((see version history)/#307) | Other rule — not applicable, no "tighter" concept |
 | Streaming path no-op (REVISED: by default-args) | The default constructor sets `materializeLevel = None`; the batchModel uses named args and doesn't override | Explicit reset — but the default-args approach is correct BY CONSTRUCTION |
 | No `BlockManager.unpersistRdd` cleanup | The user is responsible for unpersist; the library doesn't track persist | Active cleanup — but the library doesn't have the RDD ID to unpersist |
 

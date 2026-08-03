@@ -4,7 +4,7 @@ import org.apache.spark.sql.{Row, SparkSession}
 import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.scalatest.funsuite.AnyFunSuite
 
-/** Regression test for H-D1 (PR #332).
+/** Regression test for H-D1 (join metadata preservation).
   *
   * H-D1: every `join_one` / `join_many` / `join_cross` silently reset
   * `version` / `sourceTable` / `status` on the joined result. Two distinct
