@@ -199,7 +199,12 @@ object Query {
       flat: Option[Seq[Any]],
   ): Option[io.semanticdf.predicate.Predicate] = {
     val astPred  = ast.map(AstPredicates.parse)
-    val flatPred = flat.flatMap(JsonPredicates.parseAll)
+    // Phase 1 consolidation: route the JSON-flat path through the engine-portable
+    // core ADT (parseAllCore → CorePredicate) and convert back via the boundary
+    // converter. Keeps `mergedWhere`'s return type as the Spark-bearing
+    // Predicate, so the user-facing `SemanticTable.query(where = ...)` surface
+    // is untouched.
+    val flatPred = flat.flatMap(JsonPredicates.parseAllCore).map(io.semanticdf.predicate.PredicateConverter.fromCore)
     (astPred, flatPred) match {
       case (None,    None)    => None
       case (Some(a), None)    => Some(a)

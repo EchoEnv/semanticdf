@@ -202,4 +202,140 @@ class JsonPredicatesSpec extends AnyFunSuite {
     case s: String => "\"" + s + "\""
     case other     => other.toString
   }
+
+  // -------------------------------------------------------------------------
+  // Core ADT entry points (parseCore, parseAllCore)
+  //
+  // Phase 1 consolidation: the engine-portable core ADT mirrors the original
+  // ADT structurally. parseCore / parseAllCore produce core predicates
+  // directly, bypassing the Spark-bearing original. The JSON shape contract
+  // and error types are identical to parse / parseAll.
+  // -------------------------------------------------------------------------
+
+  test("parseCore: Compare.Eq produces a core Compare.Eq") {
+    val json = asJavaMap("""{ "type": "eq", "field": "carrier", "value": "AA" }""")
+    val parsed = JsonPredicates.parseCore(json)
+    parsed shouldBe io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA")
+  }
+
+  test("parseCore: every Compare subtype produces the matching core case class") {
+    Seq(
+      ("eq", "AA",  io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA")),
+      ("ne", "AA",  io.semanticdf.core.predicate.Predicate.Compare.Ne("carrier", "AA")),
+      ("lt", 100,   io.semanticdf.core.predicate.Predicate.Compare.Lt("carrier", 100)),
+      ("le", 100,   io.semanticdf.core.predicate.Predicate.Compare.Le("carrier", 100)),
+      ("gt", 100,   io.semanticdf.core.predicate.Predicate.Compare.Gt("carrier", 100)),
+      ("ge", 100,   io.semanticdf.core.predicate.Predicate.Compare.Ge("carrier", 100)),
+    ).foreach { case (op, value, expected) =>
+      val json = asJavaMap(s"""{ "type": "$op", "field": "carrier", "value": ${jsValue(value)} }""")
+      JsonPredicates.parseCore(json) shouldBe expected
+    }
+  }
+
+  test("parseCore: In (non-negated) produces core In") {
+    val json = asJavaMap("""{ "type": "in", "field": "carrier", "values": ["AA", "UA", "DL"] }""")
+    JsonPredicates.parseCore(json) shouldBe
+      io.semanticdf.core.predicate.Predicate.In("carrier", Seq("AA", "UA", "DL"), negate = false)
+  }
+
+  test("parseCore: In (negated) produces core In with negate=true") {
+    val json = asJavaMap("""{ "type": "not_in", "field": "carrier", "values": ["AA"] }""")
+    JsonPredicates.parseCore(json) shouldBe
+      io.semanticdf.core.predicate.Predicate.In("carrier", Seq("AA"), negate = true)
+  }
+
+  test("parseCore: is_null / is_not_null produce core IsNull") {
+    JsonPredicates.parseCore(asJavaMap("""{ "type": "is_null", "field": "origin" }""")) shouldBe
+      io.semanticdf.core.predicate.Predicate.IsNull("origin", negate = false)
+    JsonPredicates.parseCore(asJavaMap("""{ "type": "is_not_null", "field": "origin" }""")) shouldBe
+      io.semanticdf.core.predicate.Predicate.IsNull("origin", negate = true)
+  }
+
+  test("parseCore: And produces core And with recursively-converted children") {
+    val json = asJavaMap("""{
+      "type": "and",
+      "predicates": [
+        { "type": "eq", "field": "carrier", "value": "AA" },
+        { "type": "gt", "field": "pax",      "value": 100   }
+      ]
+    }""")
+    JsonPredicates.parseCore(json) shouldBe io.semanticdf.core.predicate.Predicate.And(
+      io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA"),
+      io.semanticdf.core.predicate.Predicate.Compare.Gt("pax", 100),
+    )
+  }
+
+  test("parseCore: Or produces core Or") {
+    val json = asJavaMap("""{
+      "type": "or",
+      "predicates": [
+        { "type": "eq", "field": "carrier", "value": "AA" },
+        { "type": "eq", "field": "carrier", "value": "UA" }
+      ]
+    }""")
+    JsonPredicates.parseCore(json) shouldBe io.semanticdf.core.predicate.Predicate.Or(
+      io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA"),
+      io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "UA"),
+    )
+  }
+
+  test("parseCore: Not produces core Not") {
+    val json = asJavaMap("""{
+      "type": "not",
+      "predicate": { "type": "eq", "field": "carrier", "value": "AA" }
+    }""")
+    JsonPredicates.parseCore(json) shouldBe io.semanticdf.core.predicate.Predicate.Not(
+      io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA"),
+    )
+  }
+
+  test("parseCore: throws InvalidPredicate on bad shape (same error contract as parse)") {
+    val ex = intercept[JsonPredicates.InvalidPredicate] {
+      JsonPredicates.parseCore(asJavaMap("""{ "field": "carrier", "value": "AA" }"""))
+    }
+    ex.getMessage should include ("'type'")
+  }
+
+  test("parseCore: throws UnsupportedOp on unknown op (same error contract as parse)") {
+    val ex = intercept[JsonPredicates.UnsupportedOp] {
+      JsonPredicates.parseCore(asJavaMap("""{ "type": "wat", "field": "carrier", "value": "AA" }"""))
+    }
+    ex.getMessage should include ("wat")
+  }
+
+  test("parseAllCore: empty list returns None") {
+    JsonPredicates.parseAllCore(Nil) shouldBe None
+  }
+
+  test("parseAllCore: singleton list returns Some(core-predicate)") {
+    val json = asJavaMap("""{ "type": "eq", "field": "carrier", "value": "AA" }""")
+    JsonPredicates.parseAllCore(Seq(json)) shouldBe
+      Some(io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA"))
+  }
+
+  test("parseAllCore: multi-element list returns Some(core-And(...))") {
+    val json1 = asJavaMap("""{ "type": "eq", "field": "carrier", "value": "AA" }""")
+    val json2 = asJavaMap("""{ "type": "gt", "field": "pax",      "value": 100   }""")
+    JsonPredicates.parseAllCore(Seq(json1, json2)) shouldBe
+      Some(io.semanticdf.core.predicate.Predicate.And(
+        io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA"),
+        io.semanticdf.core.predicate.Predicate.Compare.Gt("pax", 100),
+      ))
+  }
+
+  test("parseCore / parse parity: same JSON produces equivalent predicates via both APIs") {
+    // Load-bearing assertion: the two adapters agree on the JSON contract.
+    // parse → original, parseCore → core. Both produce semantically equivalent
+    // predicates that, via PredicateConverter, are == to each other.
+    val json = asJavaMap("""{
+      "type": "and",
+      "predicates": [
+        { "type": "eq", "field": "carrier", "value": "AA" },
+        { "type": "gt", "field": "pax",      "value": 100   }
+      ]
+    }""")
+    val original = JsonPredicates.parse(json)
+    val core     = JsonPredicates.parseCore(json)
+    io.semanticdf.predicate.PredicateConverter.toCore(original) shouldBe core
+  }
 }
