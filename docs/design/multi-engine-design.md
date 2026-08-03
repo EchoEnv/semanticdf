@@ -590,12 +590,9 @@ object ModelValidationError {
   final case class InvalidName(reason: String) extends ModelValidationError
   final case class DuplicateMember(kind: String, name: String) extends ModelValidationError
   final case class UnknownReference(referent: String, target: String) extends ModelValidationError
-  final case class CalcCycle(names: List[String]) extends ModelValidationError
   final case class CalcDepthExceeded(depth: Int, max: Int) extends ModelValidationError
-  final case class InvalidExpr(reason: String) extends ModelValidationError
   final case class ExtensionEnvelopeExceeded(fieldCount: Int, byteCount: Int)
       extends ModelValidationError
-  final case class InvalidPolicyDefault(reason: String) extends ModelValidationError
 }
 
 object Model {
@@ -667,13 +664,35 @@ private[model] object ModelValidator {
       else {
         val calcNames: Set[String] =
           calculatedMeasures.iterator.map(_.name).toSet
+        // (2b) duplicate calc-measure names: a `Set` collapses duplicates
+        // silently, so a length diff is the only way to detect them.
+        val duplicateCalc = calculatedMeasures.iterator.map(_.name)
+          .foldLeft((Set.empty[String], Option.empty[String])) {
+            case ((seen, found), n) =>
+              if (found.isDefined) (seen, found)
+              else if (seen.contains(n)) (seen, Some(n))
+              else (seen + n, found)
+          }._2
+        if (duplicateCalc.isDefined)
+          Left(ModelValidationError.DuplicateMember(
+            "calculatedMeasure", duplicateCalc.get))
+        // (2c) calc-measure name must not collide with a declared
+        // dimension or measure.
+        else if (calcNames.exists(n =>
+            declaredDimensions.contains(n) || declaredMeasures.contains(n)))
+          Left(ModelValidationError.DuplicateMember(
+            "calculatedMeasure",
+            calcNames.iterator
+              .filter(n => declaredDimensions.contains(n) || declaredMeasures.contains(n))
+              .next()))
         // (3) references
-        val unresolvedRef = calculatedMeasures.iterator.flatMap { cm =>
-          collectMeasureRefs(cm.expr).iterator.filterNot(declaredMeasures.contains)
-        }.toList
-        if (unresolvedRef.nonEmpty)
-          Left(ModelValidationError.UnknownReference(
-            "calculatedMeasures", unresolvedRef.head))
+        else {
+          val unresolvedRef = calculatedMeasures.iterator.flatMap { cm =>
+            collectMeasureRefs(cm.expr).iterator.filterNot(declaredMeasures.contains)
+          }.toList
+          if (unresolvedRef.nonEmpty)
+            Left(ModelValidationError.UnknownReference(
+              "calculatedMeasures", unresolvedRef.head))
         else {
           // (4) cycle + depth (delegated to portable-calc-depth helper).
           // Note: `Capability.MaxCalcDepth` is a type alias (= Int); the
@@ -686,6 +705,12 @@ private[model] object ModelValidator {
           CalcGraph.checkAcyclicAndDepth(
             calcNames, calculatedMeasures, maxDepthBound)
             .left.map(ModelValidationError.CalcDepthExceeded(_, maxDepthBound))
+            // Widen the Left supertype so the subsequent `flatMap` (whose
+            // inner `Either` carries `ExtensionEnvelopeExceeded`) type-checks.
+            // `CalcDepthExceeded` and `ExtensionEnvelopeExceeded` are siblings
+            // under `ModelValidationError`; without widening, the chained
+            // `flatMap` cannot unify their Left types.
+            .left.map(identity): Either[ModelValidationError, Unit]
             .flatMap(_ =>
               // (5) extension limits
               ExtensionLimits.check(extensions)
@@ -700,6 +725,7 @@ private[model] object ModelValidator {
       }
     }
   }
+}
 
   private def collectMeasureRefs(e: Expr): List[String] = e match {
     case Expr.MeasureRef(n)         => List(n)
@@ -884,7 +910,7 @@ object EngineError {
   // reaches the MCP envelope (see §6.4). Compiler enforces coverage on add.
   def toErrorDetail(err: EngineError): io.modelcontextprotocol.spec.McpSchema.ErrorDetail =
     err match {
-      case UnsupportedCapability(c, reason)    => ErrorDetail("unsupported_capability", s"${c.value}: $reason")
+      case UnsupportedCapability(Capability.Named(name), reason) => ErrorDetail("unsupported_capability", s"$name: $reason")
       case IncompatibleExprShape(s, e)         => ErrorDetail("incompatible_expr_shape", s"$s [engine=${e.name}]")
       case DecimalOverflow(v, p, sc)           => ErrorDetail("decimal_overflow", s"$v does not fit DECIMAL($p,$sc)")
       case FeatureDeferred(f, r)               => ErrorDetail("feature_deferred", s"$f deferred to $r")
@@ -1097,19 +1123,74 @@ sealed trait ExecutionPlan[+R] {
   def requiredCapabilities: CapabilitySet
   def normalizedSchema: ResultSchema
 }
-final case class SparkExecutionPlan(
-    native: SparkPlanHandle,
-    warnings: List[EngineWarning],
-    requiredCapabilities: CapabilitySet,
-    normalizedSchema: ResultSchema,
-) extends ExecutionPlan[DataFrame]
-final case class TrinoExecutionPlan(
-    sql: String,
-    params: Map[String, Any],
-    warnings: List[EngineWarning],
-    requiredCapabilities: CapabilitySet,
-    normalizedSchema: ResultSchema,
-) extends ExecutionPlan[TrinoResult]
+// Deliberately NOT `case class`: a `case class` would auto-extend
+// `Product with Serializable`, which would silently re-introduce the
+// cluster-mode hazard the §0.2 round-3 HIGH 2 fix removed. The companion
+// `apply` factory preserves call-site ergonomics without inheriting the
+// `Product with Serializable` parents. Closes round-5 Architect HIGH-A.
+final class SparkExecutionPlan(
+    val native: SparkPlanHandle,
+    val warnings: List[EngineWarning],
+    val requiredCapabilities: CapabilitySet,
+    val normalizedSchema: ResultSchema,
+) extends ExecutionPlan[DataFrame] {
+  override def equals(other: Any): Boolean = other match {
+    case that: SparkExecutionPlan =>
+      this.native == that.native &&
+      this.warnings == that.warnings &&
+      this.requiredCapabilities == that.requiredCapabilities &&
+      this.normalizedSchema == that.normalizedSchema
+    case _ => false
+  }
+  override def hashCode(): Int = {
+    val state = Seq(native, warnings, requiredCapabilities, normalizedSchema)
+    state.foldLeft(0)((acc, v) => 31 * acc + v.hashCode())
+  }
+  override def toString: String =
+    s"SparkExecutionPlan($native, $warnings, $requiredCapabilities, $normalizedSchema)"
+}
+object SparkExecutionPlan {
+  def apply(
+      native: SparkPlanHandle,
+      warnings: List[EngineWarning],
+      requiredCapabilities: CapabilitySet,
+      normalizedSchema: ResultSchema,
+  ): SparkExecutionPlan =
+    new SparkExecutionPlan(native, warnings, requiredCapabilities, normalizedSchema)
+}
+final class TrinoExecutionPlan(
+    val sql: String,
+    val params: Map[String, Any],
+    val warnings: List[EngineWarning],
+    val requiredCapabilities: CapabilitySet,
+    val normalizedSchema: ResultSchema,
+) extends ExecutionPlan[TrinoResult] {
+  override def equals(other: Any): Boolean = other match {
+    case that: TrinoExecutionPlan =>
+      this.sql == that.sql &&
+      this.params == that.params &&
+      this.warnings == that.warnings &&
+      this.requiredCapabilities == that.requiredCapabilities &&
+      this.normalizedSchema == that.normalizedSchema
+    case _ => false
+  }
+  override def hashCode(): Int = {
+    val state = Seq(sql, params, warnings, requiredCapabilities, normalizedSchema)
+    state.foldLeft(0)((acc, v) => 31 * acc + v.hashCode())
+  }
+  override def toString: String =
+    s"TrinoExecutionPlan($sql, $params, $warnings, $requiredCapabilities, $normalizedSchema)"
+}
+object TrinoExecutionPlan {
+  def apply(
+      sql: String,
+      params: Map[String, Any],
+      warnings: List[EngineWarning],
+      requiredCapabilities: CapabilitySet,
+      normalizedSchema: ResultSchema,
+  ): TrinoExecutionPlan =
+    new TrinoExecutionPlan(sql, params, warnings, requiredCapabilities, normalizedSchema)
+}
 
 // Serializable plan summary for cache/audit/MCP envelope use. Holds only
 // portable fields (no `SparkPlanHandle`, no native execution handle).
@@ -1430,6 +1511,10 @@ final class MCPEngineRegistry(
 ) {
   require(engines.contains(default),
     s"MCPEngineRegistry default '$default' not in registered engines: ${engines.keys.toList.sorted}")
+  // Eager availability check: a misconfigured default must fail boot, not the
+  // first per-request call. Closes round-5 DE H5.
+  require(engines(default).available,
+    s"MCPEngineRegistry default '$default' is configured but not available: ${engines(default).identity}")
   def available(): List[String] = engines.collect {
     case (n, p) if p.available => n
   }.toList.sorted
