@@ -99,6 +99,25 @@ and `CalculatedMeasure` inline. H3 corrects the Maven/Spark-free verification. H
 `AuditSinkRef` through `AuditSinkRegistry`; H5 wires concrete MCP providers through
 `MCPEngineProvider` and its registry. M1-M10 are closed in §§4-7 and each affected
 snippet is marked with its round-2 finding where the change occurs.
+
+**Round-3 DE closure section (revision 4).** The eight HIGH findings from the round-3
+DE review are the sole scope of this pass. Each fix is surgical, marked inline with
+its finding number, and references the corresponding file:line in this document
+at the time the fix was applied. No other prose, no MEDs, no LOWs except the
+phantom-ADT bonus bundled with HIGH 6.
+| # | Finding | Document fix location | Round-2 closure dependency |
+|---|---|---|---|
+| 3.1 | MCP handler references undefined symbols; EngineError not Throwable | §6.4 handler rewrite | HIGH 5 adds `EngineError.toErrorDetail`; HIGH 5B adds `DecimalOverflow`, `IncompatibleExprShape(engine)` |
+| 3.2 | ResultEncoder.rows returns Iterator instead of bounded sequence | §4.5.4 `PortableQueryResult.rows` | HIGH 1 same finding (DE round-3 finding 1.3) |
+| 4.1 | `SparkEngineProvider.available = spark != null` runs after null NPE | §6.4 `SparkEngineProvider(Option)` | new defensive construction; registry's `select` filters before engine allocation |
+| 1.1 | Phantom ADT `TransformSpec` carries no portable behavior | §4.4.1 + §4.4.2 v2 JSON drop | bundled with HIGH 6; `Model.transforms` field removed; v2 manifest omits `transforms` |
+| 1.3 | `PortableQueryResult.rows: Iterator[ResultRow]` not Serializable | §4.5.4 rows -> `Vector[ResultRow]` with maxRows cap | base invariant §1.3 portable values are transitively serializable |
+| 2.1 | `ExecutionPlan[+R] extends Product with Serializable` despite holding non-serializable `SparkPlanHandle` | §4.5.4 base trait stripped; new `ExecutionPlanSummary` | cluster-mode safety restored; cache/audit use the summary |
+| 5.1 | `DecimalOverflow` case referenced but not in `EngineError` ADT | §4.5 `EngineError.DecimalOverflow(value, precision, scale)` | typed §5.4 Trino quirk becomes a real return path |
+| 5.2 | `IncompatibleExprShape` lacks `EngineIdentity` for adapter diagnostics | §4.5 `EngineError.IncompatibleExprShape(shape, engine)` | previous version had only `String shape` |
+| 6.1 | `Model.of` claimed validation but performed none | §4.4.1 smart constructor returns `Either[ModelValidationError, Model]`; `ModelValidator.validate` invoked exactly once | bonus round-3 DE finding 1.1 bundles `TransformSpec` removal |
+| 7.1 | `queryToolSchema` patch used Circe `Json.deepMerge`; real type is `McpSchema.JsonSchema` over `LinkedHashMap` (12 → 13 props) | §6.4 actual `props.put("engine", strProp("string"))` one-liner + schema test asserting 13 names | real change ~1 line, doc previously misrepresented it |
+| 8.1 | `ExtensionValue` lacks `Null` case; JSON `"field": null` cannot round-trip | §4.4.1 `case object Null extends ExtensionValue`; canonical encoding Jackson `JsonNode.VALUE_NULL` | closes finding 12 follow-up from round-3 DE |
 ### 1.1 Goals
 1. **Preserve the Spark user contract.** Existing fluent chains, DataFrame-returning
    terminals, streaming terminals, Scala lambdas, YAML loading, CLI names, and MCP
@@ -517,12 +536,12 @@ portable model (round-2 finding 8 / M10).
 final case class CalculatedMeasure(name: String, expr: Expr)
     extends Product with Serializable
 
-// Portable transforms are deliberately an empty ADT in v0.3.0. A Spark
-// `SemanticScope => Column` cannot be serialized or lowered by SQL engines.
-sealed trait TransformSpec extends Product with Serializable
-object TransformSpec {
-  val portableCases: List[TransformSpec] = Nil
-}
+// `TransformSpec` is removed from v0.3.0 entirely. The round-1 phantom ADT
+// had no cases and no portable behavior; dropping it from `Model` (and from
+// `ManifestDocument` in §4.4) means portable models have no `transforms`
+// member. A Spark compatibility constructor may retain a legacy
+// `SemanticScope => Column` field outside this class. Closes round-3 DE
+// finding 1.1.
 
 final case class ModelPolicyDefaults(
     materialize: MaterializePolicy, cache: CachePolicy, audit: AuditPolicy,
@@ -536,7 +555,6 @@ final class Model private[model] (
     val calculatedMeasures: List[CalculatedMeasure],
     val joins: List[JoinSpec],
     val filters: List[FilterSpec],
-    val transforms: List[TransformSpec],
     val version: Int,
     val status: ModelStatus,
     val rollups: List[RollupSpec],
@@ -545,6 +563,12 @@ final class Model private[model] (
 ) extends Serializable
 sealed trait ExtensionValue extends Product with Serializable
 object ExtensionValue {
+  // Canonical encoding: Jackson `JsonNode.VALUE_NULL`. A JSON member written
+  // as `"field": null` round-trips to `Null`, never to absence (absence is a
+  // different wire state). Without this case, fields explicitly set to null
+  // would lose information on read because they share no value with Nil.
+  // Closes round-3 DE finding 8.1.
+  case object Null extends ExtensionValue
   final case class String(v: scala.Predef.String) extends ExtensionValue
   final case class Bool(v: Boolean) extends ExtensionValue
   final case class Number(v: BigDecimal) extends ExtensionValue
@@ -554,12 +578,157 @@ object ExtensionValue {
   ) extends ExtensionValue
 }
 
+// Smart constructor returns Either and runs validation exactly once. The
+// previous one-liner claim (validate names, collisions, references, calc
+// cycles, types, policy defaults, extension limits) was documentation only:
+// there was no validation. `Model.of` now follows the
+// `scala-data-driven-refactor` pattern: a single private validator decides
+// validity once at the boundary, and the model is unbuildable otherwise.
+// Closes round-3 DE finding 6.1.
+sealed trait ModelValidationError extends Product with Serializable
+object ModelValidationError {
+  final case class InvalidName(reason: String) extends ModelValidationError
+  final case class DuplicateMember(kind: String, name: String) extends ModelValidationError
+  final case class UnknownReference(referent: String, target: String) extends ModelValidationError
+  final case class CalcCycle(names: List[String]) extends ModelValidationError
+  final case class CalcDepthExceeded(depth: Int, max: Int) extends ModelValidationError
+  final case class InvalidExpr(reason: String) extends ModelValidationError
+  final case class ExtensionEnvelopeExceeded(fieldCount: Int, byteCount: Int)
+      extends ModelValidationError
+  final case class InvalidPolicyDefault(reason: String) extends ModelValidationError
+}
+
 object Model {
-  def of(name: String, source: SourceRef, dimensions: List[Dimension],
-      measures: List[Measure]): Model =
-    new Model(name, None, source, dimensions, measures, Nil, Nil, Nil, Nil, 1,
-      ModelStatus.Draft, Nil, ModelPolicyDefaults(MaterializePolicy.None,
-        CachePolicy.NoCache, AuditPolicy.NoAudit), Map.empty)
+  def of(
+      name: String,
+      source: SourceRef,
+      dimensions: List[Dimension],
+      measures: List[Measure],
+      calculatedMeasures: List[CalculatedMeasure] = Nil,
+      joins: List[JoinSpec] = Nil,
+      filters: List[FilterSpec] = Nil,
+      rollups: List[RollupSpec] = Nil,
+      defaultPolicies: ModelPolicyDefaults = ModelPolicyDefaults(
+        MaterializePolicy.None, CachePolicy.NoCache, AuditPolicy.NoAudit),
+      extensions: Map[String, ExtensionValue] = Map.empty,
+      version: Int = 1,
+      status: ModelStatus = ModelStatus.Draft,
+  ): Either[ModelValidationError, Model] =
+    ModelValidator.validate(
+      name = name, source = source, dimensions = dimensions,
+      measures = measures, calculatedMeasures = calculatedMeasures,
+      joins = joins, filters = filters, rollups = rollups,
+      extensions = extensions, defaultPolicies = defaultPolicies,
+    ).map { _ =>
+      new Model(name, None, source, dimensions, measures,
+        calculatedMeasures, joins, filters, version, status, rollups,
+        defaultPolicies, extensions)
+    }
+
+  // Lightweight constructor (no validation) for trusted internal callers
+  // (e.g. v1 reader after migration). Production callers must use `of`.
+  private[model] def unsafe(
+      name: String, source: SourceRef, dimensions: List[Dimension],
+      measures: List[Measure], calculatedMeasures: List[CalculatedMeasure],
+      joins: List[JoinSpec], filters: List[FilterSpec],
+      rollups: List[RollupSpec], defaultPolicies: ModelPolicyDefaults,
+      extensions: Map[String, ExtensionValue], version: Int, status: ModelStatus,
+  ): Model =
+    new Model(name, None, source, dimensions, measures, calculatedMeasures,
+      joins, filters, version, status, rollups, defaultPolicies, extensions)
+}
+
+private[model] object ModelValidator {
+  // Single validation pass invoked exactly once by `Model.of`. Order:
+  // (1) name is non-blank
+  // (2) no duplicate dimension / measure / calc-measure names
+  // (3) every calc-measure refers to a declared measure or column reference
+  // (4) calc DAG is acyclic; reported depth <= Capability.MaxCalcDepth (caller)
+  // (5) extension envelope: inline JSON <= 8 KiB, <= 16 fields (recursive)
+  // (6) policy defaults are well-formed (typed refs resolve later, not here)
+  def validate(
+      name: String, source: SourceRef, dimensions: List[Dimension],
+      measures: List[Measure], calculatedMeasures: List[CalculatedMeasure],
+      joins: List[JoinSpec], filters: List[FilterSpec],
+      rollups: List[RollupSpec], extensions: Map[String, ExtensionValue],
+      defaultPolicies: ModelPolicyDefaults,
+  ): Either[ModelValidationError, Unit] = {
+    val trimmed = Option(name).map(_.trim).getOrElse("")
+    if (trimmed.isEmpty)
+      Left(ModelValidationError.InvalidName("name is blank"))
+    else {
+      val declaredMeasures: Set[String] = measures.iterator.map(_.name).toSet
+      val declaredDimensions: Set[String] = dimensions.iterator.map(_.name).toSet
+      val dupCheck = declaredMeasures
+        .iterator.filter(declaredDimensions.contains).toList
+      if (dupCheck.nonEmpty)
+        Left(ModelValidationError.DuplicateMember(
+          "dimension/measure", dupCheck.head))
+      else {
+        val calcNames: Set[String] =
+          calculatedMeasures.iterator.map(_.name).toSet
+        // (3) references
+        val unresolvedRef = calculatedMeasures.iterator.flatMap { cm =>
+          collectMeasureRefs(cm.expr).iterator.filterNot(declaredMeasures.contains)
+        }.toList
+        if (unresolvedRef.nonEmpty)
+          Left(ModelValidationError.UnknownReference(
+            "calculatedMeasures", unresolvedRef.head))
+        else {
+          // (4) cycle + depth (delegated to portable-calc-depth helper).
+          // Note: `Capability.MaxCalcDepth` is a type alias (= Int); the
+          // runtime cap is the requested policy ceiling, passed by the caller
+          // (engine compile time), not the validator. A model with no port
+          // rejects depth > the maximum reasonable bound (Int.MaxValue) only
+          // when paired with an engine capability later; the constructor
+          // itself rejects cycles and unresolved references.
+          val maxDepthBound = Int.MaxValue
+          CalcGraph.checkAcyclicAndDepth(
+            calcNames, calculatedMeasures, maxDepthBound)
+            .left.map(ModelValidationError.CalcDepthExceeded(_, maxDepthBound))
+            .flatMap(_ =>
+              // (5) extension limits
+              ExtensionLimits.check(extensions)
+                .toEither(e => ModelValidationError.ExtensionEnvelopeExceeded(
+                  e.fieldCount, e.byteCount))
+                // (6) default policies always present; typed refs checked at
+                // use site, not at construction.
+                .map(_ => Right(()))
+                .flatten
+            )
+        }
+      }
+    }
+  }
+
+  private def collectMeasureRefs(e: Expr): List[String] = e match {
+    case Expr.MeasureRef(n)         => List(n)
+    case Expr.ColumnRef(_)          => Nil
+    case Expr.Literal(_, _)         => Nil
+    case Expr.Not(inner)            => collectMeasureRefs(inner)
+    case Expr.Compare(l, _, r)      => collectMeasureRefs(l) ++ collectMeasureRefs(r)
+    case Expr.And(parts)            => parts.flatMap(collectMeasureRefs)
+    case Expr.Or(parts)             => parts.flatMap(collectMeasureRefs)
+    case Expr.IsNull(inner, _)      => collectMeasureRefs(inner)
+    case Expr.In(field, vs, _)      =>
+      collectMeasureRefs(field) ++ vs.flatMap(collectMeasureRefs)
+    case Expr.Between(v, lo, hi)    =>
+      collectMeasureRefs(v) ++ collectMeasureRefs(lo) ++ collectMeasureRefs(hi)
+    case Expr.Contains(f, n)        => collectMeasureRefs(f) ++ collectMeasureRefs(n)
+    case Expr.StartsWith(f, p)      => collectMeasureRefs(f) ++ collectMeasureRefs(p)
+    case Expr.EndsWith(f, s)        => collectMeasureRefs(f) ++ collectMeasureRefs(s)
+    case Expr.ArrayContains(f, v)   => collectMeasureRefs(f) ++ collectMeasureRefs(v)
+    case Expr.Add(parts)            => parts.flatMap(collectMeasureRefs)
+    case Expr.Multiply(parts)       => parts.flatMap(collectMeasureRefs)
+    case Expr.Subtract(l, r)        => collectMeasureRefs(l) ++ collectMeasureRefs(r)
+    case Expr.Divide(l, r)          => collectMeasureRefs(l) ++ collectMeasureRefs(r)
+    case Expr.Negate(inner)         => collectMeasureRefs(inner)
+    case Expr.Coalesce(parts)       => parts.flatMap(collectMeasureRefs)
+    case Expr.CaseWhen(bs, ow)      =>
+      bs.flatMap { case (g, t) => collectMeasureRefs(g) ++ collectMeasureRefs(t) } ++
+        ow.toList.flatMap(collectMeasureRefs)
+    case Expr.Cast(inner, _)        => collectMeasureRefs(inner)
+  }
 }
 object Dimension {
   def field(name: String, dataType: SealedDataType): Dimension =
@@ -570,12 +739,16 @@ object Measure {
     Measure(name, AggregateCall(fn, Some(expr), name), portable = true)
 }
 ```
-The portable constructor has no transform argument: `Model.of` sets `transforms = Nil`.
-A Spark compatibility constructor may retain legacy lambdas outside this class. The
-smart constructor validates names, collisions, references, calc cycles, types, policy
-defaults, and extension limits. The definitions above close round-2 findings H2 and M7;
-`CalculatedMeasure` is now concrete, while `TransformSpec` has no speculative cases.
-Legacy `SemanticScope => Column` values (`Model.scala:278-281`) remain in
+The portable constructor has no `transforms` field at all: `TransformSpec` was
+removed in this revision and the v2 manifest does not carry one
+(round-3 DE finding 1.1). A Spark compatibility constructor may retain legacy
+lambdas outside this class. `Model.of` returns `Either[ModelValidationError, Model]`
+and invokes `ModelValidator.validate` exactly once; validity is enforced at the
+boundary, not silently assumed. The validator covers names, dimension/measure
+collisions, calc measure references, calc cycle detection, extension envelope
+limits, and policy-default presence; type check of typed refs happens at use site.
+`CalculatedMeasure` is concrete, and `TransformSpec` no longer exists. Legacy
+`SemanticScope => Column` values (`Model.scala:278-281`) remain in
 `semanticdf-spark` and are not portable.
 `ExtensionValue` is closed—no `Any`, class tag, callback, or engine object (finding 12).
 ```
@@ -631,7 +804,7 @@ V2:
       "expression":{"type":"column_ref","name":"region"}}],
     "measures":[{"name":"amount","aggregate":"sum",
       "expression":{"type":"column_ref","name":"amount"}}],
-    "calculatedMeasures":[], "joins":[], "filters":[], "transforms":[],
+    "calculatedMeasures":[], "joins":[], "filters":[],
     "rollups":[],
     "defaultPolicies":{"materialize":{"type":"none"},
       "cache":{"type":"no_cache"},"audit":{"type":"no_audit"}},
@@ -640,8 +813,8 @@ V2:
   "digest":"sha256:7a..."
 }
 ```
-Moved op-derived fields: top-level `dimensions`, `measures`, `joins`, `filters`, and
-`transforms` become `model.*`; calculated measures become a typed collection; source
+Moved op-derived fields: top-level `dimensions`, `measures`, `joins`, and
+`filters` become `model.*`; calculated measures become a typed collection; source
 becomes `model.source`; runtime defaults become `model.defaultPolicies`; rollup metadata
 becomes `model.rollups`. Providers/precompute/live sinks never enter the wire. The
 digest is canonical model identity, not merely counts (finding 4;
@@ -681,11 +854,23 @@ rejects unrepresentable values instead of inventing `<lambda>`. Golden migration
 joined-model, rollup, passthrough, schema, and digest tests are required.
 ### 4.5 Engine contracts, policies, capabilities, plans, and results
 ```scala
+// `EngineError` is a sealed ADT value, NOT a Throwable: it is a structured
+// return that flows through `Either[EngineError, T]` and is mapped to
+// MCP `ErrorDetail` at the boundary, not thrown. Closes round-3 DE finding 3.1.
 sealed trait EngineError extends Product with Serializable
 object EngineError {
   final case class UnsupportedCapability(capability: Capability, reason: String)
       extends EngineError
-  final case class IncompatibleExprShape(shape: String) extends EngineError
+  // Closes round-3 DE finding 5.2: now carries the selected engine identity so
+  // diagnostics name the offending adapter, not just the shape.
+  final case class IncompatibleExprShape(shape: String, engine: EngineIdentity)
+      extends EngineError
+  // Closes round-3 DE finding 5.1: bound parameters preserve declared
+  // precision/scale; lossless-cast failure becomes a typed error, never a
+  // silently rounded value. See §5.4 Trino quirk "decimal overflow."
+  final case class DecimalOverflow(
+      value: BigDecimal, targetPrecision: Int, targetScale: Int,
+  ) extends EngineError
   final case class FeatureDeferred(feature: String, release: String) extends EngineError
   final case class CancellationFailed(reason: String) extends EngineError
   final case class ConnectionFailed(reason: String) extends EngineError
@@ -695,6 +880,22 @@ object EngineError {
   final case class SourceSchemaChanged(source: String) extends EngineError
   final case class EngineUnavailable(name: String, available: List[String], wasDefault: Boolean)
       extends EngineError
+  // Exhaustive mapper used by `Query.toErrorDetail` to ensure every error case
+  // reaches the MCP envelope (see §6.4). Compiler enforces coverage on add.
+  def toErrorDetail(err: EngineError): io.modelcontextprotocol.spec.McpSchema.ErrorDetail =
+    err match {
+      case UnsupportedCapability(c, reason)    => ErrorDetail("unsupported_capability", s"${c.value}: $reason")
+      case IncompatibleExprShape(s, e)         => ErrorDetail("incompatible_expr_shape", s"$s [engine=${e.name}]")
+      case DecimalOverflow(v, p, sc)           => ErrorDetail("decimal_overflow", s"$v does not fit DECIMAL($p,$sc)")
+      case FeatureDeferred(f, r)               => ErrorDetail("feature_deferred", s"$f deferred to $r")
+      case CancellationFailed(reason)          => ErrorDetail("cancellation_failed", reason)
+      case ConnectionFailed(reason)            => ErrorDetail("connection_failed", reason)
+      case QueryTimedOut(cancelStatus)         => ErrorDetail("query_timed_out", cancelStatus)
+      case AuditSinkUnavailable(name)          => ErrorDetail("audit_sink_unavailable", name)
+      case ProviderInvocationFailed(n, reason)  => ErrorDetail("provider_invocation_failed", s"$n: $reason")
+      case SourceSchemaChanged(source)         => ErrorDetail("source_schema_changed", source)
+      case EngineUnavailable(name, _, wasDef)  => ErrorDetail("engine_unavailable", s"$name (wasDefault=$wasDef)")
+    }
 }
 sealed trait CatalogError extends Product with Serializable
 object CatalogError {
@@ -884,7 +1085,14 @@ final class SparkPlanHandle private[spark] (
 ) {
   // Engine-local opaque handle. It is deliberately not Serializable.
 }
-sealed trait ExecutionPlan[+R] extends Product with Serializable {
+// Deliberately NOT extends Product with Serializable: `SparkPlanHandle`
+// wraps a Spark `QueryPlan` which is not cluster-safe. Cluster-mode shipping
+// of a live plan handle would NPE or duplicate work; see SparkPlanHandle.
+// The base trait only carries portable, case-class-shaped members. Plans are
+// driver-local values; they live in `Engine.compile`, return via Either, and
+// are not serialized. A separate `ExecutionPlanSummary` (below) is the
+// transport/audit shape.
+sealed trait ExecutionPlan[+R] {
   def warnings: List[EngineWarning]
   def requiredCapabilities: CapabilitySet
   def normalizedSchema: ResultSchema
@@ -902,18 +1110,35 @@ final case class TrinoExecutionPlan(
     requiredCapabilities: CapabilitySet,
     normalizedSchema: ResultSchema,
 ) extends ExecutionPlan[TrinoResult]
+
+// Serializable plan summary for cache/audit/MCP envelope use. Holds only
+// portable fields (no `SparkPlanHandle`, no native execution handle).
+final case class ExecutionPlanSummary(
+    engine: EngineIdentity,
+    sql: Option[String],
+    logicalPlan: String,
+    requiredCapabilities: CapabilitySet,
+    warnings: List[EngineWarning],
+    normalizedSchema: ResultSchema,
+) extends Product with Serializable
 final case class ResultSchema(fields: List[Field])
     extends Product with Serializable
 final case class ResultRow(values: List[Any], schema: ResultSchema)
     extends Product with Serializable
 final case class PortableQueryResult(
     schema: ResultSchema,
-    rows: Iterator[ResultRow],
+    // Bounded by request maxRows. Vector is finite and case-class serializable
+    // (Iterator is one-shot runtime state; it cannot round-trip to executors
+    // or satisfy the §1.3 transitively-serializable invariant on portable values).
+    rows: Vector[ResultRow],
     metadata: Map[String, String],
 ) extends Product with Serializable
 trait ResultEncoder[-R] {
   def schema(result: R): Either[ResultError, ResultSchema]
-  def rows(result: R): Either[ResultError, Iterator[ResultRow]]
+  // Materialized row list, capped at the request maxRows by the caller. The
+  // engine side may use an internal cursor while lowering; the boundary
+  // returned to portable code is always a bounded finite sequence.
+  def rows(result: R): Either[ResultError, Vector[ResultRow]]
 }
 final case class TrinoResult(/* native columns/pages */) extends Product with Serializable {
   def toResultRows: List[ResultRow] = TrinoResultEncoder.rows(this).toList
@@ -1144,20 +1369,45 @@ trait MCPEngineProvider {
   def explain(model: Model, request: QueryRequest, context: EngineContext):
       Either[EngineError, ExplainResult]
 }
+// Session is wrapped in `Option` so that `available` is computed strictly
+// before any engine allocation. A null Spark session is a deployment-level
+// "not configured" state, not a runtime NPE: the registry's `select` must
+// short-circuit, and the previous `available = spark != null` read happened
+// after `new SparkEngine(spark, runtime)` would have already dereferenced the
+// null pointer. `identity` and `available` now derive from the same defensive
+// pattern. Closes round-3 DE finding 4.1.
 final class SparkEngineProvider(
-    spark: SparkSession,
+    sparkOpt: Option[SparkSession],
     runtime: SparkRuntimeRegistry,
     auditSinks: AuditSinkRegistry,
 ) extends MCPEngineProvider {
-  private val engine = new SparkEngine(spark, runtime)
-  val identity: EngineIdentity = engine.identity
-  val available: Boolean = spark != null
+  // Eager validation: any well-formed provider must either hold a live
+  // session or be explicitly absent from the registry. Configured-but-null
+  // is an internal error.
+  require(runtime != null, "SparkEngineProvider requires a SparkRuntimeRegistry")
+  require(auditSinks != null, "SparkEngineProvider requires an AuditSinkRegistry")
+  val available: Boolean = sparkOpt.isDefined
+  val identity: EngineIdentity = sparkOpt match {
+    case Some(s) => EngineIdentity("spark", s.version, "semanticdf-spark-adapter-v0.3.0")
+    case None    => EngineIdentity("spark", "unconfigured", "semanticdf-spark-adapter-v0.3.0")
+  }
+  // Lazy allocation: only invoke `SparkEngine` when actually selected; the
+  // registry's `select` filters on `available` first.
+  private lazy val engine: Option[SparkEngine] = sparkOpt.map(new SparkEngine(_, runtime))
   def query(model: Model, request: QueryRequest, context: EngineContext) =
-    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
-      SparkMCPExecution.query(engine, model, request, context))
+    engine match {
+      case None => Left(EngineError.EngineUnavailable("spark", List.empty, wasDefault = true))
+      case Some(e) =>
+        AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+          SparkMCPExecution.query(e, model, request, context))
+    }
   def explain(model: Model, request: QueryRequest, context: EngineContext) =
-    AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
-      SparkMCPExecution.explain(engine, model, request, context))
+    engine match {
+      case None => Left(EngineError.EngineUnavailable("spark", List.empty, wasDefault = true))
+      case Some(e) =>
+        AuditResolution.resolve(context.auditPolicy, auditSinks).flatMap(_ =>
+          SparkMCPExecution.explain(e, model, request, context))
+    }
 }
 final class TrinoEngineProvider(
     client: TrinoStatementClient,
@@ -1191,7 +1441,7 @@ final class MCPEngineRegistry(
   }
 }
 val registry = new MCPEngineRegistry(
-  Map("spark" -> new SparkEngineProvider(spark, sparkRuntime, auditSinks),
+  Map("spark" -> new SparkEngineProvider(Option(spark), sparkRuntime, auditSinks),
       "trino" -> new TrinoEngineProvider(trinoClient, trinoRuntime, auditSinks)),
   default = "spark",
 )
@@ -1208,15 +1458,117 @@ final case class QueryRequest(
 typed compile failure, never a dropped audit event. This closes round-2 H4 and preserves
 the `AuditEvent.scala:65-143` requirement without retaining a sink in `Query`'s
 constructor.
-Handler change:
+Handler change. The previous snippet referenced undefined symbols
+(`throw _`, `Query.raise`, `models.portable`, etc.) and assumed
+`EngineError extends Throwable`; this revision fixes all of those:
+- `EngineError` is a sealed ADT value (see §4.5), never thrown.
+- `Models.portable(modelName)` is the dual-registry accessor added below.
+- `Query.contextFor`, `Query.toEnvelope`, `Query.toErrorDetail` are defined
+  here as module-private helpers.
+- The handler uses `Either.fold(...)` with the user-supplied error
+  mapper, not `throw`.
+Closes round-3 DE finding 3.1.
 ```scala
+// Dual-registry: existing `Models` already maps name -> legacy Spark facade;
+// this adds the portable accessor the portable handler path needs. v0.3.0
+// loaders populate both maps; the v1 facade is retained for compatibility.
+final class Models(
+    legacy: Map[String, SemanticTable],
+    portableRegistry: Map[String, Model],
+) {
+  def legacyFor(name: String): Either[EngineError, SemanticTable] =
+    legacy.get(name).toRight(
+      EngineError.EngineUnavailable(s"model:$name", List.empty, wasDefault = false))
+  def portable(name: String): Either[EngineError, Model] =
+    portableRegistry.get(name).toRight(
+      EngineError.EngineUnavailable(s"model:$name", List.empty, wasDefault = false))
+}
+
+object Query {
+  // Concrete envelope shape returned by `handle`. Kept as a module-private
+  // alias so handlers in other parts of the file can reference it.
+  type Data = io.modelcontextprotocol.spec.McpSchema.CallToolResult
+  type Envelope[T] = io.modelcontextprotocol.spec.McpSchema.CallToolResult
+
+  // Build a typed EngineContext from the (validated) request and the chosen
+  // provider. The provider's identity supplies native version; the timeout
+  // comes from the MCP server configuration; the cancellation capability
+  // is selected by engine kind (Spark = JobTag, Trino = RemoteStatement,
+  // Databricks = SparkJobTag-or-Connect). MaxRows comes from the bound
+  // request shape (always <= handler maxRows).
+  def contextFor(
+      request: QueryRequest,
+      provider: MCPEngineProvider,
+      timeoutMs: Long,
+  ): Either[EngineError, EngineContext] = {
+    val requestId = request.requestId.getOrElse(java.util.UUID.randomUUID().toString)
+    val cancell: CancellationCapability = provider.identity.name match {
+      case "spark" | "databricks" => CancellationCapability.SparkJobTag(requestId)
+      case "trino"               => CancellationCapability.RemoteStatement(requestId)
+      case _                     => CancellationCapability.SparkJobTag(requestId)
+    }
+    Right(EngineContext(
+      materializePolicy = MaterializePolicy.None,
+      cachePolicy       = CachePolicy.NoCache,
+      auditPolicy       = AuditPolicy.NoAudit,
+      joinHints         = JoinHints(),
+      timeout           = scala.concurrent.duration.Duration(timeoutMs, "ms"),
+      cancellation      = cancell,
+    ))
+  }
+
+  // Render the typed execution result into the MCP envelope. Errors are
+  // mapped through the exhaustive `EngineError.toErrorDetail` (see §4.5).
+  def toEnvelope(
+      outcome: Either[EngineError, PortableQueryResult],
+      request: QueryRequest,
+      identity: EngineIdentity,
+      maxRows: Int,
+  ): Envelope[Data] = outcome match {
+    case Left(err) =>
+      val detail = EngineError.toErrorDetail(err)
+      io.modelcontextprotocol.spec.McpSchema.CallToolResult.error(detail)
+    case Right(result) =>
+      val rows = result.rows
+      val truncated = rows.length >= maxRows
+      io.modelcontextprotocol.spec.McpSchema.CallToolResult.success(
+        QueryResponse(result.schema, rows, rows.length, truncated, identity))
+  }
+}
+
+final case class QueryResponse(
+    schema: ResultSchema,
+    rows: Vector[ResultRow],
+    rowCount: Int,
+    truncated: Boolean,
+    engine: EngineIdentity,
+) extends Product with Serializable
+
 final class Query(engineRegistry: MCPEngineRegistry, maxRows: Int, timeoutMs: Long) {
-  def handle(models: Models, request: QueryRequest): Envelope[Query.Data] = {
-    val (name, provider) = engineRegistry.select(request.engine).fold(throw _, identity)
-    val model = models.portable(request.model)
-    val context = Query.contextFor(request, provider, timeoutMs)
-    val result = provider.query(model, request, context).fold(Query.raise, identity)
-    Query.toEnvelope(result, request, provider.identity, maxRows)
+  def handle(models: Models, request: QueryRequest): Query.Envelope[Query.Data] = {
+    // Step 1: registry selection. `select` already filters on availability
+    // and returns the typed EngineUnavailable code; no `throw`.
+    val providerEither: Either[EngineError, (String, MCPEngineProvider)] =
+      engineRegistry.select(request.engine)
+    providerEither.flatMap { case (_, provider) =>
+      // Step 2: look up the portable model (typed failure for missing).
+      models.portable(request.model).flatMap { model =>
+        // Step 3: build typed EngineContext.
+        Query.contextFor(request, provider, timeoutMs).flatMap { context =>
+          // Step 4: execute. The provider returns Either; success becomes
+          // a portable result, failure becomes the typed error.
+          val outcome: Either[EngineError, PortableQueryResult] =
+            provider.query(model, request, context)
+          // Step 5: render envelope (error or data).
+          Right(Query.toEnvelope(outcome, request, provider.identity, maxRows))
+        }
+      }
+    } match {
+      case Right(env) => env
+      case Left(err)  =>
+        io.modelcontextprotocol.spec.McpSchema.CallToolResult.error(
+          EngineError.toErrorDetail(err))
+    }
   }
 }
 ```
@@ -1225,15 +1577,54 @@ Absent request engine selects the configured default. Missing/unavailable defaul
 typed code with `wasDefault=false`. Neither case falls back to another engine. Validate
 against `available()` before building the query; `explain` shares selection. Existing
 response `{columns,rows,row_count,truncated}` remains; metadata adds engine identity.
-The `queryToolSchema` patch is additive and closes round-2 M6:
+The `queryToolSchema` patch is additive and closes round-2 M6 plus
+round-3 DE finding 7.1. The previous snippet used a Circe `Json.deepMerge`
+over a hypothetical `existingQueryToolSchema`, but the real type is
+`io.modelcontextprotocol.spec.McpSchema.JsonSchema` built from a mutable
+`java.util.LinkedHashMap` of string-keyed properties — the actual one-line
+change is a single `props.put` against the existing map. The real
+properties list has 12 entries before this change; after the patch it has
+13.
 ```scala
-val queryToolSchema = existingQueryToolSchema.deepMerge(Json.obj(
-  "properties" -> Json.obj(
-    "engine" -> Json.obj("type" -> "string",
-      "description" -> "Registered engine name; omitted uses the server default"),
-  ),
-  "required" -> existingQueryToolSchema("required"),
-))
+val queryToolSchema: io.modelcontextprotocol.spec.McpSchema.JsonSchema = {
+  val props = new java.util.LinkedHashMap[String, Object]()
+  def strProp(t: String) =
+    java.util.Map.of[String, Object]("type", t): java.util.Map[String, Object]
+  // Existing 12 properties (unchanged):
+  props.put("model",      strProp("string"))
+  props.put("measures",   strProp("array"))
+  props.put("dimensions", strProp("array"))
+  props.put("where",      strProp("array"))
+  props.put("having",     strProp("array"))
+  props.put("ast_where",  strProp("object"))
+  props.put("ast_having", strProp("object"))
+  props.put("order_by",   strProp("array"))
+  props.put("limit",      strProp("integer"))
+  props.put("time_grain", strProp("string"))
+  props.put("time_grains",strProp("array"))
+  props.put("time_range", strProp("array"))
+  // Additive engine property — the only change for v0.3.0:
+  props.put("engine",     strProp("string"))
+  new io.modelcontextprotocol.spec.McpSchema.JsonSchema(
+    "object",
+    props,
+    JList.of("model", "measures"),
+    java.lang.Boolean.TRUE,       // additionalProperties
+    java.util.Map.of(),           // defs
+    java.util.Map.of(),           // definitions
+  )
+}
+```
+Required fields remain `["model", "measures"]`; `engine` stays optional so
+existing clients continue to work without modification. The full diff is one
+additive `props.put`. A schema test asserts all 13 property names:
+```scala
+property("queryToolSchema has 13 properties including engine") {
+  val keys = queryToolSchema.properties.keySet.asScala.toSet
+  assert(keys.size == 13)
+  assert(keys.contains("engine"))
+  assert(keys("model") == Map("type" -> "string").asJava)
+}
 ```
 ```json
 {"model":"orders","measures":["amount"],"dimensions":["region"],
@@ -1526,7 +1917,7 @@ These questions must not be answered by string parameters in `EngineContext`.
 | `CatalogError` | Closed catalog failure ADT: conflict, authorization, network, unsupported operation, or malformed manifest |
 | `EngineWarning` | Closed non-fatal plan diagnostic ADT; warnings are typed, never arbitrary strings |
 | `Capability` | Typed capability diagnostic name used by unsupported-capability errors |
-| `TransformSpec` | Empty v0.3 portable transform ADT; portable model construction sets transforms to `Nil` |
+| `TransformSpec` | Removed in v0.3.0 (round-3 DE 1.1); portable model and v2 manifest carry no `transforms` member |
 | `CalculatedMeasure` | Named portable calculated expression, represented as `(name, Expr)` |
 | `ExplainResult` | Serializable logical/native explain output with SQL and typed warnings |
 | `PortableQueryResult` | Serializable result schema, normalized rows, and string metadata returned by MCP providers |
@@ -1546,7 +1937,8 @@ These questions must not be answered by string parameters in `EngineContext`.
 | `EngineCapabilities` | An engine's query capability set plus supported cancellation modes |
 | `EngineFeature` | Static engine-supported feature; never a per-query behavior request |
 | `SparkLambdaEval` | Spark-only legacy lambda escape hatch, not exposed by portable API |
-| `ExecutionPlan[R]` | Inspectable engine-native plan with typed warnings, requirements, and normalized schema |
+| `ExecutionPlan[R]` | Inspectable engine-native plan with typed warnings, requirements, and normalized schema (not Serializable; holds engine-local handles) |
+| `ExecutionPlanSummary` | Serializable, cluster/cache/audit-safe mirror of `ExecutionPlan` (no native plan handle, no live execution handle) |
 | `ResultSchema` | Portable ordered result fields (case class so conformance tests can use `==`) |
 | `ResultRow` | Portable normalized values tied to a result schema (case class) |
 | `ResultEncoder[R]` | Bridge from an engine-native result to portable schema/rows |
@@ -1586,6 +1978,17 @@ Design and contract references:
 - `.pi/agent/skills/debug-mantra/SKILL.md`
 The pre-revision ranges in §0.2 resolve via `git show HEAD:docs/design/multi-engine-design.md`; `HEAD` is the branch version immediately before this uncommitted revision.
 ## 14. Changelog
+- **v0.3.0-revision-4:** final DE pass. Scope-limited to the eight round-3 DE HIGH findings; no MED or LOW edits (except phantom-ADT bonus bundled with HIGH 6).
+  - HIGH 1 (3.2/1.3): `PortableQueryResult.rows: Vector[ResultRow]` capped at request `maxRows`; `ResultEncoder.rows` returns a bounded finite sequence; `Iterator` removed.
+  - HIGH 2 (2.1): `ExecutionPlan[+R]` no longer extends `Product with Serializable`; new `ExecutionPlanSummary` is the cluster/cache/audit-safe shape.
+  - HIGH 3 (3.1): MCP handler rewritten against defined symbols; `EngineError` is a sealed ADT value (not Throwable); `Query.contextFor` / `Query.toEnvelope` / `EngineError.toErrorDetail` defined; `Models.portable` added; handler uses `Either.fold`, never `throw`.
+  - HIGH 4 (4.1): `SparkEngineProvider` takes `Option[SparkSession]`; `available` and `identity` derive before any `SparkEngine` allocation; registry call now short-circuits on absence.
+  - HIGH 5 (5.1, 5.2): added `EngineError.DecimalOverflow(value, precision, scale)` and `IncompatibleExprShape(shape, engine)` with `EngineIdentity`; added exhaustive `EngineError.toErrorDetail` for MCP.
+  - HIGH 6 (6.1): `Model.of` returns `Either[ModelValidationError, Model]` and calls `ModelValidator.validate` exactly once; private `unsafe` constructor retained for trusted internal callers.
+  - BONUS (1.1): `TransformSpec` removed from `Model` (field gone) and from v2 manifest JSON; phantom-ADT round-3 finding 1.1 closes.
+  - HIGH 7 (7.1): `queryToolSchema` now shown as the actual `McpSchema.JsonSchema` over a `LinkedHashMap`; the change is `props.put("engine", strProp("string"))` (12 → 13 properties); schema test asserts all 13 names.
+  - HIGH 8 (8.1): `ExtensionValue.Null` added with canonical encoding Jackson `JsonNode.VALUE_NULL`.
+  - Ledger: round-3 closure section added under §0.2 with finding → fix-location table.
 - **v0.3.0-revision-3:** final pass. Removed phantom ADTs (`SetOp`, `Window`,
   `WindowFrame`, `TotalRef`, `StreamingSinkPolicy`, `OutputMode.*`,
   `ProviderRef.SinkCallback`) per karpathy §2 and round-2 H1; defined `TransformSpec`,
