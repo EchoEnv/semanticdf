@@ -171,4 +171,125 @@ class PredicateConverterSpec extends AnyFunSuite with Matchers {
       originalHash shouldBe coreDirectHash
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Symmetric boundary: fromCore (the reverse direction)
+  // -------------------------------------------------------------------------
+
+  test("fromCore: Compare.Eq round-trips back to original") {
+    val core = CorePredicate.Compare.Eq("carrier", "AA")
+    PredicateConverter.fromCore(core) shouldBe Predicate.Compare.Eq("carrier", "AA")
+  }
+
+  test("fromCore: every Compare case class round-trips") {
+    val cores: Seq[CorePredicate.Compare] = Seq(
+      CorePredicate.Compare.Eq("x", 1),
+      CorePredicate.Compare.Ne("x", 1),
+      CorePredicate.Compare.Lt("x", 1),
+      CorePredicate.Compare.Le("x", 1),
+      CorePredicate.Compare.Gt("x", 1),
+      CorePredicate.Compare.Ge("x", 1),
+      CorePredicate.Compare.Contains("x", "y"),
+      CorePredicate.Compare.StartsWith("x", "y"),
+      CorePredicate.Compare.EndsWith("x", "y"),
+      CorePredicate.Compare.ArrayContains("x", "y"),
+    )
+    cores.foreach { c =>
+      PredicateConverter.fromCore(c) shouldBe a [Predicate.Compare]
+    }
+  }
+
+  test("fromCore: In / IsNull round-trip") {
+    PredicateConverter.fromCore(CorePredicate.In("c", Seq("AA"), negate = false)) shouldBe
+      Predicate.In("c", Seq("AA"), negate = false)
+    PredicateConverter.fromCore(CorePredicate.IsNull("c", negate = true)) shouldBe
+      Predicate.IsNull("c", negate = true)
+  }
+
+  test("fromCore: And / Or / Not round-trip with recursive children") {
+    val core = CorePredicate.And(
+      CorePredicate.Or(
+        CorePredicate.Compare.Eq("a", 1),
+        CorePredicate.Not(CorePredicate.Compare.Gt("b", 2)),
+      ),
+    )
+    PredicateConverter.fromCore(core) shouldBe Predicate.And(
+      Predicate.Or(
+        Predicate.Compare.Eq("a", 1),
+        Predicate.Not(Predicate.Compare.Gt("b", 2)),
+      ),
+    )
+  }
+
+  // -------------------------------------------------------------------------
+  // Boundary symmetry: toCore ∘ fromCore = id, fromCore ∘ toCore = id
+  // -------------------------------------------------------------------------
+
+  test("Symmetry: fromCore(toCore(x)) == x for all leaf and compound predicates") {
+    val originals: Seq[Predicate] = Seq(
+      Predicate.Compare.Eq("a", 1),
+      Predicate.Compare.Ne("a", "AA"),
+      Predicate.Compare.Lt("a", 1),
+      Predicate.Compare.Le("a", 1),
+      Predicate.Compare.Gt("a", 1),
+      Predicate.Compare.Ge("a", 1),
+      Predicate.Compare.Contains("a", "x"),
+      Predicate.Compare.StartsWith("a", "x"),
+      Predicate.Compare.EndsWith("a", "x"),
+      Predicate.Compare.ArrayContains("a", "x"),
+      Predicate.In("a", Seq(1, 2, 3)),
+      Predicate.In("a", Seq(1), negate = true),
+      Predicate.IsNull("a"),
+      Predicate.IsNull("a", negate = true),
+      Predicate.And(
+        Predicate.Compare.Eq("a", 1),
+        Predicate.Compare.Gt("b", 2),
+      ),
+      Predicate.Or(
+        Predicate.Compare.Eq("a", 1),
+        Predicate.IsNull("b"),
+      ),
+      Predicate.Not(Predicate.Compare.Eq("a", 1)),
+      Predicate.Not(Predicate.Not(Predicate.Not(Predicate.Compare.Eq("a", 1)))),
+    )
+    originals.foreach { original =>
+      val roundTripped = PredicateConverter.fromCore(PredicateConverter.toCore(original))
+      roundTripped shouldBe original
+    }
+  }
+
+  test("Symmetry: toCore(fromCore(c)) == c for all leaf and compound predicates") {
+    val cores: Seq[CorePredicate] = Seq(
+      CorePredicate.Compare.Eq("a", 1),
+      CorePredicate.Compare.Ne("a", "AA"),
+      CorePredicate.Compare.Contains("a", "x"),
+      CorePredicate.Compare.ArrayContains("a", "x"),
+      CorePredicate.In("a", Seq(1, 2, 3), negate = false),
+      CorePredicate.IsNull("a", negate = true),
+      CorePredicate.And(
+        CorePredicate.Compare.Eq("a", 1),
+        CorePredicate.Compare.Gt("b", 2),
+      ),
+      CorePredicate.Or(
+        CorePredicate.Compare.Eq("a", 1),
+        CorePredicate.IsNull("b", negate = false),
+      ),
+      CorePredicate.Not(CorePredicate.Not(CorePredicate.Compare.Eq("a", 1))),
+    )
+    cores.foreach { core =>
+      val roundTripped = PredicateConverter.toCore(PredicateConverter.fromCore(core))
+      roundTripped shouldBe core
+    }
+  }
+
+  test("fromCoreAll: bulk conversion of a Seq") {
+    val cores: Seq[CorePredicate] = Seq(
+      CorePredicate.Compare.Eq("a", 1),
+      CorePredicate.In("b", Seq(1, 2, 3), negate = false),
+    )
+    val originals = PredicateConverter.fromCoreAll(cores)
+    originals.size shouldBe 2
+    originals.head shouldBe Predicate.Compare.Eq("a", 1)
+    originals(1) shouldBe Predicate.In("b", Seq(1, 2, 3), negate = false)
+  }
 }

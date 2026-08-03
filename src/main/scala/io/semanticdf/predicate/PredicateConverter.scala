@@ -109,4 +109,70 @@ object PredicateConverter {
     val b2 = toCore(a)
     b == b2
   }
+
+  /** Convert `io.semanticdf.core.predicate.Predicate` →
+    * `io.semanticdf.predicate.Predicate`.
+    *
+    * Symmetric companion to [[toCore]]. Used when code that operates on
+    * the engine-portable core ADT (e.g. the audit/cache-key chain, JSON
+    * adapters, future wire-format encoders) needs to flow a `CorePredicate`
+    * back into the Spark-bearing original — for example, to hand off to
+    * the user-facing fluent API (`SemanticTable.query(where = ...)`)
+    * which is typed as the original.
+    *
+    * Exhaustively mirrors [[toCore]] over the same 15 case classes plus
+    * recursive And/Or/Not. If either ADT gains a case class without the
+    * other being updated, this match fails to compile — surfacing the
+    * asymmetry at the boundary, where it can be fixed.
+    *
+    * No data loss: the two ADTs have identical shape (same field types,
+    * same `final case class` structure), so `fromCore(toCore(p)) == p`
+    * and `toCore(fromCore(c)) == c` hold for all valid predicates. */
+  def fromCore(c: CorePredicate): io.semanticdf.predicate.Predicate = c match {
+    // -------------------------------------------------------------------------
+    // Compare family
+    // -------------------------------------------------------------------------
+    case CorePredicate.Compare.Eq(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Eq(field, value)
+    case CorePredicate.Compare.Ne(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Ne(field, value)
+    case CorePredicate.Compare.Lt(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Lt(field, value)
+    case CorePredicate.Compare.Le(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Le(field, value)
+    case CorePredicate.Compare.Gt(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Gt(field, value)
+    case CorePredicate.Compare.Ge(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Ge(field, value)
+    case CorePredicate.Compare.Contains(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.Contains(field, value)
+    case CorePredicate.Compare.StartsWith(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.StartsWith(field, value)
+    case CorePredicate.Compare.EndsWith(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.EndsWith(field, value)
+    case CorePredicate.Compare.ArrayContains(field, value) =>
+      io.semanticdf.predicate.Predicate.Compare.ArrayContains(field, value)
+
+    // -------------------------------------------------------------------------
+    // Non-compare leaves
+    // -------------------------------------------------------------------------
+    case CorePredicate.In(field, values, negate) =>
+      io.semanticdf.predicate.Predicate.In(field, values, negate)
+    case CorePredicate.IsNull(field, negate) =>
+      io.semanticdf.predicate.Predicate.IsNull(field, negate)
+
+    // -------------------------------------------------------------------------
+    // Compound (recursive)
+    // -------------------------------------------------------------------------
+    case CorePredicate.And(children @ _*) =>
+      io.semanticdf.predicate.Predicate.And(children.map(fromCore): _*)
+    case CorePredicate.Or(children @ _*) =>
+      io.semanticdf.predicate.Predicate.Or(children.map(fromCore): _*)
+    case CorePredicate.Not(predicate) =>
+      io.semanticdf.predicate.Predicate.Not(fromCore(predicate))
+  }
+
+  /** Bulk conversion for `Seq[CorePredicate]`. */
+  def fromCoreAll(cs: Seq[CorePredicate]): Seq[io.semanticdf.predicate.Predicate] =
+    cs.map(fromCore)
 }
