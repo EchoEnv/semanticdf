@@ -1,6 +1,6 @@
 package io.semanticdf.trino
 
-import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan}
 import io.semanticdf.core.model.Model
 
 /** First concrete `Engine` implementation — the Trino adapter.
@@ -101,10 +101,15 @@ class TrinoEngine extends Engine[Any] {
       release = "v0.5.0",
     ))
 
-  /** Execute a compiled plan against a Trino cluster. Deferred —
-    * requires the portable IR (`PortableExpr` / `RelOp`) and the
-    * Trino JDBC driver execution path. */
-  def execute(plan: Any, ctx: EngineContext): Either[EngineError, Any] =
+  /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.
+    * Deferred — requires the Model → Trino SQL pipeline (to
+    * produce the plan) and the Trino JDBC driver execution path.
+    *
+    * The `plan.engine` field identifies which engine compiled the
+    * plan (must be Trino — we don't execute plans from other
+    * engines). The `plan.native` field would carry the Trino SQL
+    * string + parameter bindings once compile() is implemented. */
+  def execute(plan: ExecutionPlan[Any], ctx: EngineContext): Either[EngineError, Any] =
     Left(EngineError.FeatureDeferred(
       feature = "trino.execute",
       release = "v0.5.0",
