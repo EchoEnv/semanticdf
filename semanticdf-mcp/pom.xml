@@ -30,7 +30,7 @@
         <!-- semanticdf library — installed locally via `mvn install` on the parent. -->
         <dependency>
             <groupId>io.semanticdf</groupId>
-            <artifactId>semanticdf_2.13</artifactId>
+            <artifactId>semanticdf-spark_2.13</artifactId>
             <version>${semanticdf.version}</version>
         </dependency>
 
