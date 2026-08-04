@@ -15,11 +15,13 @@
     Parent POM for the semanticdf multi-module build. Aggregates:
       - semanticdf-core (engine-portable ADTs, no Spark deps)
       - adapters/semanticdf-spark (Spark engine adapter — the library)
+      - adapters/semanticdf-trino (Phase 2: Trino engine adapter)
   </description>
 
   <modules>
     <module>semanticdf-core</module>
     <module>adapters/semanticdf-spark</module>
+    <module>adapters/semanticdf-trino</module>
   </modules>
 
   <properties>
