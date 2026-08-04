@@ -20,12 +20,16 @@ EXAMPLES := $(filter-out examples/dbt-reader/models,$(EXAMPLES))
 # okfgen-check depend on this so they work from a clean checkout.
 #
 # Phase 1 (multi-module): the library classes live in
-# `adapters/semanticdf-spark/`, not the project root. We compile that module
-# and run exec:java from its directory.
+# `adapters/semanticdf-spark/`, not the project root. The library
+# depends on `io.semanticdf:semanticdf-core:0.2.4`, which is NOT in Maven
+# Central — it's a sibling module. We use `mvn install` (NOT just
+# `compile`) to populate the local `~/.m2/repository/` so the semanticdf-spark
+# compile can resolve semanticdf-core. This mirrors what a CI runner needs:
+# a fresh container, no cached artifacts, must build everything from source.
 # ---------------------------------------------------------------------------
 .PHONY: okfgen-build
 okfgen-build:
-	@mvn -q -pl adapters/semanticdf-spark -am compile
+	@mvn -q install -DskipTests
 
 # ---------------------------------------------------------------------------
 # okfgen — regenerate the OKF reference bundle into docs/agents/reference/.
