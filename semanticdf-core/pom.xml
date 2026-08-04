@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-core — engine-portable data shapes for the semanticdf library.
+
+  This module contains ONLY the data-side types that compile without any
+  engine on the classpath:
+    - io.semanticdf.core.predicate.Predicate (sealed ADT, no compile method)
+    - io.semanticdf.core.field.SemanticField / SemanticDimension / SemanticMeasure
+    - io.semanticdf.core.field.FieldRef + FieldRefOps (typed references)
+    - (PredicateConverter lives in semanticdf-spark, since it bridges
+      both ADTs and the core ADT has no Spark dependency to drop)
+
+  What this module DOES NOT depend on:
+    - Spark (no `org.apache.spark.*` imports)
+    - Jackson (the data shapes are pure sealed ADTs)
+    - SnakeYAML (no YAML parsing in core)
+    - Any HTTP / DB / cache / distributed-system client
+
+  Consumers who want the engine-portable types only can depend on this
+  artifact without dragging Spark into their classpath. This is the
+  primary deliverable of Phase 1 of the multi-engine design.
+
+  Build verification: `grep -r 'org.apache.spark' src/` returns zero
+  matches. The pom has no spark dependencies.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.2.4</version>
+    <relativePath>../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-core_2.13</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-core</name>
+  <description>
+    Engine-portable data shapes for semanticdf — sealed ADTs that compile
+    without Spark, Jackson, or any engine on the classpath. Used by
+    semanticdf-spark, by future engine adapters (Trino, Databricks,
+    custom-platform), and by any consumer who needs the data shape
+    without the Spark dependency.
+  </description>
+
+  <properties>
+    <!-- Inherit everything from parent. None of core/ needs Spark. -->
+  </properties>
+
+  <dependencies>
+    <!-- Scala stdlib only. NO Spark, NO Jackson, NO SnakeYAML, NO HTTP. -->
+    <dependency>
+      <groupId>org.scala-lang</groupId>
+      <artifactId>scala-library</artifactId>
+    </dependency>
+
+    <!-- Test scope: scalatest for the 3 spec files. -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- Opt-in to the parent's pluginManagement declarations. Without this,
+         the Scala compiler never runs and the core jar ships empty. -->
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

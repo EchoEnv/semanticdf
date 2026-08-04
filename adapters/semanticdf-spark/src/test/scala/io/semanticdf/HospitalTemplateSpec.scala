@@ -16,7 +16,17 @@ class HospitalTemplateSpec extends AnyFunSuite with Matchers with SparkSessionFi
   /** Resolve a path under `<project_root>/examples/...` from the working dir. */
   private def examplesPath(parts: String*): String = {
     val cwd = System.getProperty("user.dir")
-    val candidates = Seq(cwd, new java.io.File(cwd).getParent).distinct
+    // Walk up to 5 levels: handles any module depth in the multi-module tree.
+    // At i=0 we use cwd; at i>=1 we go up i parent directories.
+    val candidates: Seq[String] = (0 to 5).map { i =>
+      var d: java.io.File = new java.io.File(cwd)
+      var j = 0
+      while (j < i && d.getParentFile != null) {
+        d = d.getParentFile
+        j += 1
+      }
+      d
+    }.map(_.getAbsolutePath).distinct
     candidates.iterator.map { c =>
       val p = new java.io.File(c, "examples/" + parts.mkString("/"))
       if (p.exists) p.getAbsolutePath else null
