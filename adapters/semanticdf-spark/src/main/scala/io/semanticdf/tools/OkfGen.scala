@@ -39,6 +39,11 @@ class OkfGen {
     require(inFile.exists(), s"Input path does not exist: $inPath")
     val out = new File(outDir)
     out.mkdirs()
+    // Cache the project root for the duration of this run — used by `absOrRel`
+    // to produce cwd-independent paths. The source path is in the project tree;
+    // the output path may be outside (e.g. /tmp during CI checks), so we
+    // detect from the source.
+    projectRootCache = Some(findRootPom(inFile.getAbsoluteFile).normalize())
 
     val models: Seq[(String, ModelEntry)] =
       if (inFile.isDirectory) {
@@ -310,14 +315,14 @@ class OkfGen {
   // Body rendering
   // -------------------------------------------------------------------------
 
-  private def renderBody(m: ModelEntry): String = {
+  private def renderBody(m: ModelEntry, outFile: File): String = {
     val sb = new StringBuilder
     sb.append(renderSchemaSection(m)).append("\n")
     if (m.filters.nonEmpty) sb.append(renderFiltersSection(m)).append("\n")
     if (m.joins.nonEmpty) sb.append(renderJoinsSection(m)).append("\n")
     if (m.calcMeasures.nonEmpty) sb.append(renderCalcSection(m)).append("\n")
     sb.append(renderExamplesSection(m)).append("\n")
-    sb.append(renderCitationsSection(m)).append("\n")
+    sb.append(renderCitationsSection(m, outFile)).append("\n")
     sb.toString.trim.stripSuffix("\n") + "\n"
   }
 
@@ -411,9 +416,9 @@ class OkfGen {
     sb.toString
   }
 
-  private def renderCitationsSection(m: ModelEntry): String = {
+  private def renderCitationsSection(m: ModelEntry, outFile: File): String = {
     val sb = new StringBuilder("# Citations\n\n")
-    sb.append(s"[1] [${escMd(m.sourcePath)}](file://${escMd(m.sourcePath)}) — the source schema this document references.\n")
+    sb.append(s"[1] [${escMd(m.sourcePath)}](${escMd(absOrRel(m.sourcePath, outFile))}) — the source schema this document references.\n")
     sb.toString
   }
 
@@ -427,14 +432,9 @@ class OkfGen {
     targetDir.mkdirs()
     val outFile = new File(targetDir, slug)
 
-    val resourcePath = if (relDir.isEmpty) {
-      // Source path is relative to project root; if absolute, keep absolute
-      absOrRel(m.sourcePath)
-    } else {
-      absOrRel(m.sourcePath)
-    }
+    val resourcePath = absOrRel(m.sourcePath, outFile)
     val frontmatter = renderFrontmatter(m, resourcePath)
-    val body        = renderBody(m)
+    val body        = renderBody(m, outFile)
     writeFile(outFile, frontmatter + "\n" + body)
   }
 
@@ -597,19 +597,74 @@ class OkfGen {
   private def escMd(s: String): String =
     s.replace("|", "\\|").replace("\n", " ").replace("[", "\\[").replace("]", "\\]")
 
-  /** Compute the path to write in `resource:` — absolute under project cwd,
+  /** Compute the path to write in `resource:` — relative to the project root.
     * Earlier versions emitted an absolute path, but the absolute path depends on
     * the runner's cwd (e.g. `/home/runner/work/...` on GitHub Actions vs
     * `/home/emilio/...` locally) — so the byte-stable bundle check fails whenever
     * the cwd differs. A repo-relative path avoids that drift.
-    */
-  private def absOrRel(p: String): String = {
-    val abs = new File(p).getAbsoluteFile.toPath.normalize
-    val cwd = new File(".").getAbsoluteFile.toPath.normalize
-    val rel = if (abs.startsWith(cwd)) cwd.relativize(abs).toString
-              else abs.toString  // fallback: outside cwd, use absolute
-    "file://" + rel
+    *
+    * The project root is detected by walking up from the output file looking
+    * for `pom.xml`. The input path is resolved against the project root, not
+    * the JVM cwd — because the input path was constructed with the project
+    * root as the intended base (e.g. `--path examples/starter`). */
+  private def absOrRel(p: String, outFile: File): String = {
+    // Use the cached project root detected from the source path at generate()
+    // start. Falls back to walking up from outFile if no cache (defensive).
+    val projectRoot: java.nio.file.Path = projectRootCache.getOrElse {
+      val fallback = findRootPom(outFile.getAbsoluteFile).normalize()
+      projectRootCache = Some(fallback)
+      fallback
+    }
+    // Resolve the input path against the project root.
+    val srcPath = if (java.nio.file.Paths.get(p).isAbsolute) {
+      java.nio.file.Paths.get(p).normalize
+    } else {
+      projectRoot.resolve(p).normalize
+    }
+    "file://" + projectRoot.relativize(srcPath).toString
   }
+
+  /** Walk up from `start` looking for a `pom.xml` with `<packaging>pom</packaging>`
+    * (the root pom). Child module poms have `<packaging>jar</packaging>` and are
+    * skipped. Returns the absolute Path of the root directory.
+    *
+    * Falls back to the JVM cwd if no root pom is found — needed for unit
+    * tests that pass temp file paths outside the project tree. The
+    * `absOrRel` will then produce cwd-relative paths (which may not be
+    * portable across machines, but tests don't diff against checked-in
+    * artifacts). */
+  private def findRootPom(start: java.io.File): java.nio.file.Path = {
+    var dir: java.io.File = start.getAbsoluteFile match {
+      case f if f.isFile => f.getParentFile
+      case f            => f
+    }
+    var found: java.io.File = null
+    while (dir != null && found == null) {
+      val pom = new java.io.File(dir, "pom.xml")
+      if (pom.isFile && isRootPom(pom)) found = dir
+      else dir = dir.getParentFile
+    }
+    if (found == null) {
+      // Fall back: project root is the JVM cwd. This is non-portable but
+      // lets unit tests with /tmp/ source paths work.
+      new java.io.File(".").getAbsoluteFile.toPath.normalize
+    } else {
+      found.toPath
+    }
+  }
+
+  /** A root pom.xml is identified by `<packaging>pom</packaging>`.
+    * Child module poms have `<packaging>jar</packaging>` and are skipped. */
+  private def isRootPom(pom: java.io.File): Boolean = {
+    val src = scala.io.Source.fromFile(pom)
+    try src.getLines().exists(_.contains("<packaging>pom</packaging>"))
+    finally src.close()
+  }
+
+  /** Cache of the project root detected at generate() start. Set once per run
+    * from the source path; used by `absOrRel` to produce cwd-independent
+    * resource paths. The cache avoids walking the tree for every OKF file. */
+  private var projectRootCache: Option[java.nio.file.Path] = None
 
   /** Compute the subdirectory of the bundle root that contains this model's concept doc,
     * relative to the input directory. Used for cross-links in the root index.

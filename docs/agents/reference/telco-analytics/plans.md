@@ -3,7 +3,7 @@ type: SemanticTable
 title: Plans
 description: "Service plans offered (Basic, Standard, Premium, Family)"
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/plans.yml
+resource: file://examples/telco-analytics/models/plans.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -38,4 +38,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/telco-analytics/models/plans.yml](file://../../examples/telco-analytics/models/plans.yml) — the source schema this document references.
+[1] [examples/telco-analytics/models/plans.yml](file://examples/telco-analytics/models/plans.yml) — the source schema this document references.

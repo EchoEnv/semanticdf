@@ -4,7 +4,7 @@ title: Carriers
 version: 1
 description: "Airline carrier reference data (lookup)"
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/starter/models/carriers.yml
+resource: file://examples/starter/models/carriers.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -45,4 +45,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/starter/models/carriers.yml](file://../../examples/starter/models/carriers.yml) — the source schema this document references.
+[1] [examples/starter/models/carriers.yml](file://examples/starter/models/carriers.yml) — the source schema this document references.

@@ -3,7 +3,7 @@ type: SemanticTable
 title: Usage
 description: "Per-customer usage events (calls, data, SMS) with plan + promotion context"
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/usage.yml
+resource: file://examples/telco-analytics/models/usage.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -52,4 +52,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/telco-analytics/models/usage.yml](file://../../examples/telco-analytics/models/usage.yml) — the source schema this document references.
+[1] [examples/telco-analytics/models/usage.yml](file://examples/telco-analytics/models/usage.yml) — the source schema this document references.

@@ -3,7 +3,7 @@ type: SemanticTable
 title: Customers
 description: Cleaned customer reference data
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/pipeline/models/customers.yml
+resource: file://examples/pipeline/models/customers.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [identifier, pii, semantic-table]
 ---
@@ -38,4 +38,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/pipeline/models/customers.yml](file://../../examples/pipeline/models/customers.yml) — the source schema this document references.
+[1] [examples/pipeline/models/customers.yml](file://examples/pipeline/models/customers.yml) — the source schema this document references.

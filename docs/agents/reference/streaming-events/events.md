@@ -3,7 +3,7 @@ type: SemanticTable
 title: Events
 description: "Real-time events arriving on the events topic, rolled up per 30-second window."
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/streaming-events/models/events.yml
+resource: file://examples/streaming-events/models/events.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [categorical, semantic-table]
 ---
@@ -45,4 +45,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/streaming-events/models/events.yml](file://../../examples/streaming-events/models/events.yml) — the source schema this document references.
+[1] [examples/streaming-events/models/events.yml](file://examples/streaming-events/models/events.yml) — the source schema this document references.

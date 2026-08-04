@@ -43,9 +43,8 @@ okfgen: okfgen-build
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
 	  echo "  okfgen: $$name"; \
-	  ( cd adapters/semanticdf-spark && \
-	    mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
-	      -Dexec.args="okfgen --path ../../$$d --out ../../docs/agents/reference/$$name" ); \
+	  mvn -q -pl adapters/semanticdf-spark exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	    -Dexec.args="okfgen --path $$d --out docs/agents/reference/$$name"; \
 	done
 	@echo "Bundle regenerated. Verify with: make okfgen-check"
 
@@ -68,9 +67,8 @@ okfgen-check: okfgen-build
 	@TMP=$$(mktemp -d) && DIFF=$$(mktemp) && trap "rm -rf $$TMP $$DIFF" EXIT && set -e; \
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
-	  ( cd adapters/semanticdf-spark && \
-	    mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
-	      -Dexec.args="okfgen --path ../../$$d --out $$TMP/$$name" ); \
+	  mvn -q -pl adapters/semanticdf-spark exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	    -Dexec.args="okfgen --path $$d --out $$TMP/$$name"; \
 	done; \
 	if diff -ru -I '^timestamp: ' -I '^## [0-9]' "$$TMP" docs/agents/reference/ > "$$DIFF" 2>&1; then \
 	  echo "okfgen-check: bundle is in sync (content; timestamps excluded)."; \

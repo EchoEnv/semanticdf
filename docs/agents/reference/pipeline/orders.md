@@ -3,7 +3,7 @@ type: SemanticTable
 title: Orders
 description: "Cleaned and enriched orders (silver layer from raw/orders_raw.csv)"
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/pipeline/models/orders.yml
+resource: file://examples/pipeline/models/orders.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [identifier, semantic-table]
 ---
@@ -52,4 +52,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/pipeline/models/orders.yml](file://../../examples/pipeline/models/orders.yml) — the source schema this document references.
+[1] [examples/pipeline/models/orders.yml](file://examples/pipeline/models/orders.yml) — the source schema this document references.

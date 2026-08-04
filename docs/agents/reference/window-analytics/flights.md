@@ -3,7 +3,7 @@ type: SemanticTable
 title: Flights
 description: "Flight facts: per-flight distance and passenger counts over 3 months"
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/window-analytics/models/flights.yml
+resource: file://examples/window-analytics/models/flights.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -39,4 +39,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/window-analytics/models/flights.yml](file://../../examples/window-analytics/models/flights.yml) — the source schema this document references.
+[1] [examples/window-analytics/models/flights.yml](file://examples/window-analytics/models/flights.yml) — the source schema this document references.

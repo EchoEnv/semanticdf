@@ -3,7 +3,7 @@ type: SemanticTable
 title: Customers
 description: Customer master data with signup dates and city
 status: published
-resource: file:///home/emilio/app/projects/semanticdf/examples/customer-analytics/models/customers.yml
+resource: file://examples/customer-analytics/models/customers.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -37,4 +37,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [../../examples/customer-analytics/models/customers.yml](file://../../examples/customer-analytics/models/customers.yml) — the source schema this document references.
+[1] [examples/customer-analytics/models/customers.yml](file://examples/customer-analytics/models/customers.yml) — the source schema this document references.
