@@ -100,9 +100,3 @@ trait Engine[+R] {
     * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`. */
   def explain(model: Any, ctx: EngineContext): Either[EngineError, String]
 }
-
-/** Placeholder for \`EngineContext\`. The full ADT (typed materialize,
-  * cache, audit, join, timeout, cancellation policies per the design
-  * doc) is added in a follow-up PR. For now, a marker so the trait
-  * compiles. */
-final case class EngineContext() extends Product with Serializable
