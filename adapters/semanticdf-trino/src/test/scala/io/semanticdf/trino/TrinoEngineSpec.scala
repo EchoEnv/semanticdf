@@ -3,7 +3,7 @@ package io.semanticdf.trino
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
-import io.semanticdf.core.engine.{Capability, EngineContext, EngineError}
+import io.semanticdf.core.engine.{Capability, EngineContext, EngineError, EngineIdentity, ExecutionPlan}
 import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelStatus, SourceRef}
 
 /** Phase 2 contract: prove `TrinoEngine` implements the `Engine[Any]`
@@ -103,7 +103,11 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
   }
 
   test("execute returns Left(EngineError.FeatureDeferred) for the placeholder path") {
-    val result = TrinoEngine.instance.execute("any-plan", EngineContext.defaultContext)
+    val plan: ExecutionPlan[Any] = ExecutionPlan[Any](
+      engine = EngineIdentity("trino", "0.286", "0.2.4"),
+      native = "SELECT * FROM orders",
+    )
+    val result = TrinoEngine.instance.execute(plan, EngineContext.defaultContext)
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
   }

@@ -65,7 +65,7 @@ import io.semanticdf.core.model.Model
   *     from the fluent API's \`SemanticOp\`)
   *   - Migrate \`SemanticTableCore\` to emit portable IR + \`Engine\` calls
   */
-trait Engine[+R] {
+trait Engine[R] {
 
   /** Wire-stable engine label surfaced in MCP \`describe_model\` and
     * OKF generation. Wire-stable string. Renaming is a breaking
@@ -92,13 +92,16 @@ trait Engine[+R] {
     * adapters can rely on its invariants. */
   def compile(model: Model, ctx: EngineContext): Either[EngineError, R]
 
-  /** Run a compiled plan and return a portable result. Returns
-    * \`Either[EngineError, R]\` — \`Left\` for any execute-time
-    * failure (connection failed, query timed out, source schema
-    * changed, etc.). The plan type is \`Any\` (a placeholder until the
-    * portable \`PortableExpr\` / \`RelOp\` IR is added in a follow-up
-    * PR). */
-  def execute(plan: Any, ctx: EngineContext): Either[EngineError, R]
+  /** Run a compiled [[ExecutionPlan]] and return a portable result.
+    * Returns \`Either[EngineError, R]\` — \`Left\` for any
+    * execute-time failure (connection failed, query timed out,
+    * source schema changed, etc.).
+    *
+    * The \`ExecutionPlan\` is the output of \`compile\`; its
+    * \`engine\` field identifies which engine compiled it (the
+    * executor verifies the identity matches its own). The \`native\`
+    * field is the engine-specific compiled result. */
+  def execute(plan: ExecutionPlan[R], ctx: EngineContext): Either[EngineError, R]
 
   /** Return a human-readable plan description (no execution).
     * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`.
