@@ -3,7 +3,7 @@ type: SemanticTable
 title: Promotions
 description: "Active promotional offers (signup discounts, loyalty bonuses, etc.)"
 status: published
-resource: file://examples/telco-analytics/models/promotions.yml
+resource: file:///home/emilio/app/projects/semanticdf/examples/telco-analytics/models/promotions.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -38,4 +38,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [examples/telco-analytics/models/promotions.yml](file://examples/telco-analytics/models/promotions.yml) — the source schema this document references.
+[1] [../../examples/telco-analytics/models/promotions.yml](file://../../examples/telco-analytics/models/promotions.yml) — the source schema this document references.

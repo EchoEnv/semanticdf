@@ -3,7 +3,7 @@ type: SemanticTable
 title: Orders
 description: Per-order line items with amount and order date
 status: published
-resource: file://examples/customer-analytics/models/orders.yml
+resource: file:///home/emilio/app/projects/semanticdf/examples/customer-analytics/models/orders.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -42,4 +42,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [examples/customer-analytics/models/orders.yml](file://examples/customer-analytics/models/orders.yml) — the source schema this document references.
+[1] [../../examples/customer-analytics/models/orders.yml](file://../../examples/customer-analytics/models/orders.yml) — the source schema this document references.

@@ -4,7 +4,7 @@ title: Clinical Encounters
 version: 1
 description: Patient encounters enriched with ICD-10 descriptions and categories
 status: published
-resource: file://examples/joined-manifest-e2e/models/clinical_encounters.yml
+resource: file:///home/emilio/app/projects/semanticdf/examples/joined-manifest-e2e/models/clinical_encounters.yml
 timestamp: 2026-07-24T09:14:46Z
 tags: [semantic-table]
 ---
@@ -52,4 +52,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [examples/joined-manifest-e2e/models/clinical_encounters.yml](file://examples/joined-manifest-e2e/models/clinical_encounters.yml) — the source schema this document references.
+[1] [../../examples/joined-manifest-e2e/models/clinical_encounters.yml](file://../../examples/joined-manifest-e2e/models/clinical_encounters.yml) — the source schema this document references.

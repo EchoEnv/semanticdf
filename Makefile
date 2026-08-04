@@ -18,10 +18,14 @@ EXAMPLES := $(filter-out examples/dbt-reader/models,$(EXAMPLES))
 # checkout, fresh CI runner), the goal fails with an opaque "An exception
 # occurred while executing the Java class" message. Both okfgen and
 # okfgen-check depend on this so they work from a clean checkout.
+#
+# Phase 1 (multi-module): the library classes live in
+# `adapters/semanticdf-spark/`, not the project root. We compile that module
+# and run exec:java from its directory.
 # ---------------------------------------------------------------------------
 .PHONY: okfgen-build
 okfgen-build:
-	@mvn -q compile
+	@mvn -q -pl adapters/semanticdf-spark -am compile
 
 # ---------------------------------------------------------------------------
 # okfgen — regenerate the OKF reference bundle into docs/agents/reference/.
@@ -35,8 +39,9 @@ okfgen: okfgen-build
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
 	  echo "  okfgen: $$name"; \
-	  mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
-	    -Dexec.args="okfgen --path $$d --out docs/agents/reference/$$name"; \
+	  ( cd adapters/semanticdf-spark && \
+	    mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	      -Dexec.args="okfgen --path ../../$$d --out ../../docs/agents/reference/$$name" ); \
 	done
 	@echo "Bundle regenerated. Verify with: make okfgen-check"
 
@@ -59,8 +64,9 @@ okfgen-check: okfgen-build
 	@TMP=$$(mktemp -d) && DIFF=$$(mktemp) && trap "rm -rf $$TMP $$DIFF" EXIT && set -e; \
 	for d in $(EXAMPLES); do \
 	  name=$$(basename $$(dirname "$$d")); \
-	  mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
-	    -Dexec.args="okfgen --path $$d --out $$TMP/$$name"; \
+	  ( cd adapters/semanticdf-spark && \
+	    mvn -q exec:java -Dexec.mainClass=io.semanticdf.tools.Main \
+	      -Dexec.args="okfgen --path ../../$$d --out $$TMP/$$name" ); \
 	done; \
 	if diff -ru -I '^timestamp: ' -I '^## [0-9]' "$$TMP" docs/agents/reference/ > "$$DIFF" 2>&1; then \
 	  echo "okfgen-check: bundle is in sync (content; timestamps excluded)."; \

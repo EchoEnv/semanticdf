@@ -4,7 +4,7 @@ title: Flights
 version: 1
 description: "Flight facts: per-flight distance and passenger counts"
 status: published
-resource: file://examples/joined-manifest/models/flights.yml
+resource: file:///home/emilio/app/projects/semanticdf/examples/joined-manifest/models/flights.yml
 timestamp: 2026-07-22T15:36:45Z
 tags: [airline, airport, identifier, semantic-table]
 ---
@@ -60,4 +60,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [examples/joined-manifest/models/flights.yml](file://examples/joined-manifest/models/flights.yml) — the source schema this document references.
+[1] [../../examples/joined-manifest/models/flights.yml](file://../../examples/joined-manifest/models/flights.yml) — the source schema this document references.

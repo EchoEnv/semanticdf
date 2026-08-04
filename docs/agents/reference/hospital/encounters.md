@@ -3,7 +3,7 @@ type: SemanticTable
 title: Encounters
 description: "Patient hospital encounters (admissions)"
 status: published
-resource: file://examples/hospital/models/encounters.yml
+resource: file:///home/emilio/app/projects/semanticdf/examples/hospital/models/encounters.yml
 timestamp: 2026-07-21T19:07:20Z
 tags: [semantic-table]
 ---
@@ -49,4 +49,4 @@ A consumer pointed at this catalog can run any of the following MCP `query` payl
 
 # Citations
 
-[1] [examples/hospital/models/encounters.yml](file://examples/hospital/models/encounters.yml) — the source schema this document references.
+[1] [../../examples/hospital/models/encounters.yml](file://../../examples/hospital/models/encounters.yml) — the source schema this document references.
