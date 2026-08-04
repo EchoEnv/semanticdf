@@ -1,6 +1,7 @@
 package io.semanticdf.trino
 
 import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError}
+import io.semanticdf.core.model.Model
 
 /** First concrete `Engine` implementation — the Trino adapter.
   *
@@ -88,24 +89,17 @@ class TrinoEngine extends Engine[Any] {
     // via `EngineError.UnsupportedCapability(Materialize, ...)`.
   )
 
-  /** Compile a portable model to a Trino-specific plan. Today's
-    * implementation accepts a `CorePredicate` and produces the
-    * Trino-compatible SQL WHERE clause for that predicate (via
-    * `SqlLowerer`). The full `PortableModel` → Trino plan lowering
-    * is future work; this is the minimum viable first piece. */
-  def compile(model: Any, ctx: EngineContext): Either[EngineError, Any] = {
-    model match {
-      case p: io.semanticdf.core.predicate.Predicate =>
-        Right(SqlLowerer.lower(p))
-      case _ =>
-        // For now, only `CorePredicate` is supported as a compile
-        // input. The full `PortableModel` lands in a follow-up PR.
-        Left(EngineError.FeatureDeferred(
-          feature = "trino.compile.full-model",
-          release = "v0.5.0",
-        ))
-    }
-  }
+  /** Compile a portable [[Model]] to a Trino-specific plan.
+    * Deferred until the full `Model` → Trino SQL pipeline is
+    * built (the Model → RelOp lowering + the RelOp → Trino SQL
+    * emit). The first piece (the SqlLowerer for predicates) is
+    * implemented and tested separately at `SqlLowerer.lower`; this
+    * method will call it once the Model-side lowering is built. */
+  def compile(model: Model, ctx: EngineContext): Either[EngineError, Any] =
+    Left(EngineError.FeatureDeferred(
+      feature = "trino.compile.full-model",
+      release = "v0.5.0",
+    ))
 
   /** Execute a compiled plan against a Trino cluster. Deferred —
     * requires the portable IR (`PortableExpr` / `RelOp`) and the
@@ -116,10 +110,10 @@ class TrinoEngine extends Engine[Any] {
       release = "v0.5.0",
     ))
 
-  /** Return a Trino `EXPLAIN` plan description. Deferred — requires
-    * the portable `PortableModel` for the input and Trino's explain
-    * syntax for the output. */
-  def explain(model: Any, ctx: EngineContext): Either[EngineError, String] =
+  /** Return a Trino `EXPLAIN` plan description for a portable
+    * [[Model]]. Deferred until the Model → Trino SQL pipeline is
+    * built (the explain output requires a real SQL query). */
+  def explain(model: Model, ctx: EngineContext): Either[EngineError, String] =
     Left(EngineError.FeatureDeferred(
       feature = "trino.explain",
       release = "v0.5.0",

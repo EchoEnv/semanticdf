@@ -1,5 +1,7 @@
 package io.semanticdf.core.engine
 
+import io.semanticdf.core.model.Model
+
 /** Engine-portable contract for query engines —
   * Phase 2 of the multi-engine design (docs/design/multi-engine-design.md §4).
   *
@@ -76,7 +78,7 @@ trait Engine[+R] {
     * adapters can pre-compute it once. */
   def capabilities: Set[Capability]
 
-  /** Compile a portable model to an engine-specific plan. Returns
+  /** Compile a portable [[Model]] to an engine-specific plan. Returns
     * \`Either[EngineError, R]\` — \`Left\` for any compile-time
     * failure (unsupported capability, decimal overflow, etc.).
     *
@@ -85,8 +87,10 @@ trait Engine[+R] {
     *   - Trino adapter: emits a Trino SQL string with parameter bindings
     *   - Databricks adapter: produces a Connect plan
     *
-    * Engine implementations override this. */
-  def compile(model: Any /* placeholder; full PortableModel in Phase 2 follow-up */, ctx: EngineContext): Either[EngineError, R]
+    * Engine implementations override this. The [[Model]] is the
+    * already-validated portable model (via \`Model.of\`); engine
+    * adapters can rely on its invariants. */
+  def compile(model: Model, ctx: EngineContext): Either[EngineError, R]
 
   /** Run a compiled plan and return a portable result. Returns
     * \`Either[EngineError, R]\` — \`Left\` for any execute-time
@@ -97,6 +101,7 @@ trait Engine[+R] {
   def execute(plan: Any, ctx: EngineContext): Either[EngineError, R]
 
   /** Return a human-readable plan description (no execution).
-    * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`. */
-  def explain(model: Any, ctx: EngineContext): Either[EngineError, String]
+    * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`.
+    * The [[Model]] is the already-validated portable model. */
+  def explain(model: Model, ctx: EngineContext): Either[EngineError, String]
 }
