@@ -88,14 +88,24 @@ class TrinoEngine extends Engine[Any] {
     // via `EngineError.UnsupportedCapability(Materialize, ...)`.
   )
 
-  /** Compile a portable model to a Trino-specific plan. Deferred
-    * to a follow-up PR — requires the portable `PortableModel` type
-    * (separate Phase 2 work per the design doc §7.2). */
-  def compile(model: Any, ctx: EngineContext): Either[EngineError, Any] =
-    Left(EngineError.FeatureDeferred(
-      feature = "trino.compile",
-      release = "v0.5.0",
-    ))
+  /** Compile a portable model to a Trino-specific plan. Today's
+    * implementation accepts a `CorePredicate` and produces the
+    * Trino-compatible SQL WHERE clause for that predicate (via
+    * `SqlLowerer`). The full `PortableModel` → Trino plan lowering
+    * is future work; this is the minimum viable first piece. */
+  def compile(model: Any, ctx: EngineContext): Either[EngineError, Any] = {
+    model match {
+      case p: io.semanticdf.core.predicate.Predicate =>
+        Right(SqlLowerer.lower(p))
+      case _ =>
+        // For now, only `CorePredicate` is supported as a compile
+        // input. The full `PortableModel` lands in a follow-up PR.
+        Left(EngineError.FeatureDeferred(
+          feature = "trino.compile.full-model",
+          release = "v0.5.0",
+        ))
+    }
+  }
 
   /** Execute a compiled plan against a Trino cluster. Deferred —
     * requires the portable IR (`PortableExpr` / `RelOp`) and the

@@ -102,6 +102,23 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     err.release should not be empty
   }
 
+  // -- compile on a CorePredicate (the minimum viable lowering) --
+
+  test("compile(CorePredicate) returns Right(SqlLowerer.lower(p)) for an Eq") {
+    val p = io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA")
+    TrinoEngine.instance.compile(p, EngineContext.defaultContext) shouldBe
+      Right("\"carrier\" = 'AA'")
+  }
+
+  test("compile(CorePredicate) returns Right(SqlLowerer.lower(p)) for an And") {
+    val p = io.semanticdf.core.predicate.Predicate.And(
+      io.semanticdf.core.predicate.Predicate.Compare.Eq("c", "AA"),
+      io.semanticdf.core.predicate.Predicate.Compare.Gt("d", 1),
+    )
+    TrinoEngine.instance.compile(p, EngineContext.defaultContext) shouldBe
+      Right("(\"c\" = 'AA' AND \"d\" > 1)")
+  }
+
   // -- boundary contract: zero Spark imports --
 
   test("TrinoEngine instance is an Engine[Any] (contract conformance)") {
