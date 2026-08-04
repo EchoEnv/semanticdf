@@ -78,3 +78,50 @@ jobs:
           cache: "maven"
       - name: Verify OKF bundle is in sync with YAMLs
         run: make okfgen-check
+
+  # ---------------------------------------------------------------------------
+  # Consumer POM build — verifies the 19 sibling Maven projects
+  # (semanticdf-mcp, semanticdf-platform, 17 examples) still compile after
+  # a library change. Without this, a regression in the library's public
+  # surface (or in any consumer POM) wouldn't be caught by the library
+  # tests alone — consumers are independent Maven projects, not modules of
+  # the reactor.
+  #
+  # Phase 1 follow-up: added after PR #346 (consumer POM artifact rename)
+  # because the rename \`semanticdf_2.13\` → \`semanticdf-spark_2.13\` only
+  # surfaced a build failure locally; CI had no way to catch it.
+  # ---------------------------------------------------------------------------
+  consumer-build:
+    name: Consumer POMs compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: "temurin"
+          cache: "maven"
+      - name: Install library into local m2 (so consumers can resolve it)
+        run: mvn install -DskipTests
+      - name: Verify every consumer POM compiles
+        # Uses `mvn compile` (main code only) rather than `mvn test-compile`
+        # because some consumer test files have pre-existing compile errors
+        # (tracked separately — e.g. semanticdf-mcp's AuditLogSpec references a
+        # 14-field AuditEvent case class with only 13 fields). Those test
+        # errors are out of scope for this CI step. The library interface
+        # is verified by `mvn compile`; the consumer interface is what
+        # would break under an artifact rename or a library API change.
+        run: |
+          set -e
+          CONSUMERS="semanticdf-mcp semanticdf-platform"
+          for d in examples/*/; do
+            # Skip cli-consumer: it's a pure HTTP client with no semanticdf dep
+            # (per its README), so it doesn't need to compile against the library.
+            if [ "$d" = "examples/cli-consumer/" ]; then continue; fi
+            CONSUMERS="$CONSUMERS $d"
+          done
+          for d in $CONSUMERS; do
+            echo "=== Compiling $d ==="
+            ( cd "$d" && mvn compile -q )
+          done
+          echo "All consumer POMs compile cleanly."
