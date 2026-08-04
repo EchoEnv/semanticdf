@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-trino — Trino engine adapter for the semanticdf library.
+
+  This module is the Phase 2 entry point per the multi-engine design
+  (docs/design/multi-engine-design.md §7.2). The actual SQL lowering +
+  source resolution + result decoding are DEFERRED — this PR establishes
+  the project structure only. The Trino decision gate (a real Trino
+  cluster running with the same data as the Spark tests) is the next
+  Phase 2 milestone; once that passes, the SQL lowering work begins.
+
+  ==Why this module exists==
+
+  The current `semanticdf-spark` adapter compiles a `SemanticTable` op
+  tree to a `DataFrame.queryExecution.executedPlan`. The Trino adapter
+  is the equivalent: it takes the same portable op tree (after
+  Phase 2 consolidation) and lowers it to a Trino SQL string, then
+  executes against a Trino cluster.
+
+  ==What this module will do (Phase 2 roadmap)==
+
+  1. `TrinoEngine` — implement the `Engine[R]` trait from
+     `io.semanticdf.core.engine.Engine` (defined in a follow-up PR).
+     Provides: `compile(model): PortableQueryResult`, `execute(model, ctx): R`,
+     `capabilities: Set[Capability]`, `identity: EngineIdentity`.
+  2. SQL lowering — walk the portable op tree, emit Trino SQL with
+     parameter binding.
+  3. JDBC/HTTP execution — `io.trino.jdbc.TrinoDriver` for ad-hoc
+     queries; `io.trino:trino-client` for advanced features.
+  4. Result decoding — Trino `ResultSet` → portable `ResultRow` /
+     `ResultSchema` (data types defined in follow-up PRs).
+  5. Tests against a Docker Trino cluster (the "Trino decision gate").
+
+  ==What this module DOES (this PR)==
+
+  - `pom.xml` declaring the dependency graph: depends on
+    `:semanticdf-core:0.2.4` (engine-portable types) and the Trino
+    JDBC driver.
+  - `TrinoEngine.scala` — a structural placeholder. The class
+    declaration uses only the existing core ADTs (Predicate, etc.) so
+    it compiles today; its methods are stubs that throw
+    `NotImplementedError` until the SQL lowering work lands.
+
+  ==Boundary contract==
+
+  This module's `pom.xml` has zero `org.apache.spark.*` deps. Verifiable by:
+  `grep -r 'org.apache.spark' adapters/semanticdf-trino/`
+
+  The Trino adapter consumes the engine-portable core ADTs (Predicate,
+  SemanticField, SortKey, AuditEvent, ModelStatus, etc.) — never the
+  Spark-bearing originals. The Spark adapter stays in
+  `adapters/semanticdf-spark/`.
+
+  ==Library version==
+
+  0.2.4 — same as the parent and core/spark. No bump in this PR (no
+  user-facing change).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.2.4</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-trino_2.13</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-trino</name>
+  <description>
+    Trino engine adapter for the semanticdf library. Phase 2 of the
+    multi-engine design (docs/design/multi-engine-design.md §7.2).
+    This module is currently structural — the SQL lowering + Trino
+    cluster integration land in follow-up PRs.
+  </description>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (no Spark in this dep) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_2.13</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- Trino JDBC driver — for ad-hoc query execution.
+         (Future: add io.trino:trino-client for advanced features.) -->
+    <dependency>
+      <groupId>io.trino</groupId>
+      <artifactId>trino-jdbc</artifactId>
+      <version>408</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <!-- Opt-in to parent's pluginManagement declarations. -->
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
