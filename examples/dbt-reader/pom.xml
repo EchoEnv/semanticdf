@@ -18,14 +18,14 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala.version>2.13.18</scala.version>
         <scala.binary.version>2.13</scala.binary.version>
-        <semanticdf.version>0.2.0</semanticdf.version>
+        <semanticdf.version>0.2.4</semanticdf.version>
         <spark.version>3.5.8</spark.version>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>io.semanticdf</groupId>
-            <artifactId>semanticdf_2.13</artifactId>
+            <artifactId>semanticdf-spark_2.13</artifactId>
             <version>${semanticdf.version}</version>
         </dependency>
         <dependency>
