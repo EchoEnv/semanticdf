@@ -1,71 +1,127 @@
 package io.semanticdf.trino
 
-import io.semanticdf.core.predicate.{Predicate => CorePredicate}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError}
 
-/** Phase 2 entry point — Trino engine adapter.
+/** First concrete `Engine` implementation — the Trino adapter.
   *
-  * This is a STRUCTURAL placeholder. The actual SQL lowering + source
-  * resolution + result decoding land in follow-up PRs (see the
-  * module README for the full roadmap). What this file establishes:
+  * Implements the `Engine[+R]` contract from `io.semanticdf.core.engine`
+  * (PR #352, #353). The result type is `Any` for now because the full
+  * portable `PortableExpr` / `RelOp` IR is separate Phase 2 work
+  * (per the design doc §7.2 budget: "core type/expression/relational
+  * nodes and validation (900-1,200 LoC)"). Once `PortableModel` and the
+  * portable IR land, `TrinoEngine[R]` will use the real result type.
   *
-  *   1. The class lives under `io.semanticdf.trino` — the package
-  *      boundary for engine adapters.
-  *   2. It imports from `io.semanticdf.core.predicate` (the
-  *      engine-portable ADT) — NEVER from `io.semanticdf.predicate`
-  *      (the Spark-bearing original) or `io.semanticdf` (the
-  *      fluent API). The boundary is enforced at the import level.
-  *   3. It compiles today (no methods to implement yet, just a
-  *      class declaration that takes the engine-portable `Predicate`
-  *      type and declares the production API).
+  * ==What this class does today==
   *
-  * ==Why a placeholder==
-  *
-  * The full `Engine[R]` trait (compile + execute + capabilities +
-  * identity) is Phase 2 design work that needs the design doc's
-  * `Engine` trait to exist first. The trait is the Phase 2 contract;
-  * the Trino adapter is the Phase 2 implementation.
-  *
-  * Per the multi-engine design (§7.1): "Trino decision gate (POC must
-  * work before committing to Phase 2)" — the decision gate requires
-  * a real Trino cluster. Setting up the project structure (this PR)
-  * is the prerequisite for any actual POC work.
+  *   - `identity = "trino"` — wire-stable engine label
+  *   - `capabilities` — the set of typed `Capability` features Trino
+  *     supports (e.g. NestedStructTypes, BroadcastJoin, SkewJoin)
+  *   - `compile` / `execute` / `explain` — currently throw
+  *     `EngineError.FeatureDeferred` with a roadmap pointer; the
+  *     actual SQL lowering + cluster integration land in follow-up
+  *     PRs (see `adapters/semanticdf-trino/README.md`).
   *
   * ==Boundary contract==
   *
-  * This file compiles with zero `org.apache.spark.*` imports. Verifiable by:
+  * Zero Spark imports. Verifiable by:
   * `grep -r 'org.apache.spark' adapters/semanticdf-trino/`
+  *
+  * The Trino adapter consumes ONLY the engine-portable `core` types
+  * (`Engine`, `EngineContext`, `Capability`, `EngineError`). NEVER the
+  * Spark-bearing originals (`io.semanticdf.predicate.Predicate`, etc.).
+  * If a future contributor accidentally adds a Spark import, the
+  * Trino artifact would carry a transitive Spark dependency — which
+  * defeats the purpose of having a Spark-free engine adapter.
   *
   * ==Data-driven mantra compliance==
   *
-  * No behavior methods yet — the class is purely structural. Future
-  * PRs will add SQL lowering (engine-specific behavior, lives in
-  * the engine adapter layer) and source resolution (engine-specific
-  * behavior). Per scala-data-driven-refactor, the data is already in
-  * core; this adapter will only consume it.
+  * `identity` and `capabilities` are pure data (the contract is data).
+  * `compile` / `execute` / `explain` are behavior — the engine-specific
+  * part. Per the data-driven mantra, behavior lives in the engine
+  * adapter layer, not in core. The full implementation of these
+  * methods is future Phase 2 work.
+  *
+  * ==Consolidation plan (NOT in this PR)==
+  *
+  * Once `PortableModel` and the portable IR land:
+  *   - Change `Engine[Any]` to `Engine[TrinoResult]` (concrete result type)
+  *   - Implement `compile(model, ctx)` — walk portable op tree, emit
+  *     Trino SQL with parameter binding
+  *   - Implement `execute(plan, ctx)` — JDBC/HTTP execution against
+  *     a real Trino cluster
+  *   - Implement `explain(model, ctx)` — return Trino's `EXPLAIN` output
+  *   - Add result decoding (Trino `ResultSet` → portable `ResultRow`)
+  *   - Add tests against a Docker Trino cluster (the decision gate)
   */
-class TrinoEngine {
+class TrinoEngine extends Engine[Any] {
 
-  /** Engine identity — wire-side label surfaced in MCP `describe_model`
-    * and OKF generation. Wire-stable string ("trino"). Renaming is
-    * a breaking change to MCP clients. */
+  /** Wire-stable engine label. Renaming is a breaking change to
+    * MCP clients (`describe_model`, OKF generation, `audit_log`). */
   val identity: String = "trino"
 
-  /** The Trino engine takes a portable `Predicate` (from core) and
-    * will eventually lower it to Trino SQL. This method signature is
-    * a placeholder for the future SQL lowering step.
+  /** The set of typed capabilities this Trino engine supports.
     *
-    * The actual lowering algorithm:
-    *   1. Walk the `CorePredicate` tree (Compare, In, IsNull, And, Or, Not).
-    *   2. Emit the equivalent Trino SQL: `field = value`,
-    *      `field IN (v1, v2)`, `field IS NULL`, `AND`/`OR`/`NOT`.
-    *   3. Return the SQL string + parameter bindings.
+    * These are the features Trino has natively — the Engine contract
+    * uses them to:
+    *   - Validate at compile time: a request that needs an
+    *     unsupported capability returns `EngineError.UnsupportedCapability`
+    *   - Surface to consumers (MCP `list_models` lists supported
+    *     features per engine)
+    *   - Adapt policies (e.g. `JoinHints.preferredStrategy = Broadcast`
+    *     maps to Trino's `BROADCAST` join distribution)
     *
-    * For now this just proves the API shape. A follow-up PR adds
-    * the lowering implementation. */
-  def lower(predicate: CorePredicate): String = {
-    throw new NotImplementedError(
-      "Trino SQL lowering is Phase 2 work — see " +
-      "adapters/semanticdf-trino/README.md for the roadmap."
-    )
-  }
+    * This is a closed `Set` (not a stream / future) so the adapter can
+    * pre-compute it once at construction.
+    *
+    * Note: the closed enumeration is a deliberate starting point.
+    * Capabilities not in the closed set can be added as needed
+    * (e.g. `Capability.Named("trino-array-distinct")` for a Trino
+    * extension that doesn't have a canonical case object). */
+  val capabilities: Set[Capability] = Set(
+    Capability.NestedStructTypes,
+    Capability.BroadcastJoin,
+    Capability.SkewJoin,
+    Capability.WindowRanking,
+    Capability.LateBinding,
+    // Note: `Materialize` is NOT in the set — Trino doesn't have a
+    // native persist() equivalent; the adapter rejects this policy
+    // via `EngineError.UnsupportedCapability(Materialize, ...)`.
+  )
+
+  /** Compile a portable model to a Trino-specific plan. Deferred
+    * to a follow-up PR — requires the portable `PortableModel` type
+    * (separate Phase 2 work per the design doc §7.2). */
+  def compile(model: Any, ctx: EngineContext): Either[EngineError, Any] =
+    Left(EngineError.FeatureDeferred(
+      feature = "trino.compile",
+      release = "v0.5.0",
+    ))
+
+  /** Execute a compiled plan against a Trino cluster. Deferred —
+    * requires the portable IR (`PortableExpr` / `RelOp`) and the
+    * Trino JDBC driver execution path. */
+  def execute(plan: Any, ctx: EngineContext): Either[EngineError, Any] =
+    Left(EngineError.FeatureDeferred(
+      feature = "trino.execute",
+      release = "v0.5.0",
+    ))
+
+  /** Return a Trino `EXPLAIN` plan description. Deferred — requires
+    * the portable `PortableModel` for the input and Trino's explain
+    * syntax for the output. */
+  def explain(model: Any, ctx: EngineContext): Either[EngineError, String] =
+    Left(EngineError.FeatureDeferred(
+      feature = "trino.explain",
+      release = "v0.5.0",
+    ))
+}
+
+object TrinoEngine {
+
+  /** Singleton instance — the canonical Trino engine. Used by the
+    * MCP `MCPEngineRegistry` (a future Phase 2 component) to register
+    * the Trino adapter by name. The singleton is the simplest viable
+    * pattern; future multi-instance needs (per-tenant configs, etc.)
+    * would replace this with a factory. */
+  val instance: TrinoEngine = new TrinoEngine
 }
