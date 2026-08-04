@@ -4,6 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 import io.semanticdf.core.engine.{Capability, EngineContext, EngineError}
+import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelStatus, SourceRef}
 
 /** Phase 2 contract: prove `TrinoEngine` implements the `Engine[Any]`
   * contract from `io.semanticdf.core.engine`. The first concrete
@@ -26,6 +27,23 @@ import io.semanticdf.core.engine.{Capability, EngineContext, EngineError}
   *   - Validates zero Spark imports (the multi-engine boundary)
   */
 class TrinoEngineSpec extends AnyFunSuite with Matchers {
+
+  // -- fixtures --
+
+  /** A minimal valid `Model` for testing `compile` / `explain`.
+    * Uses `Model.of` (the smart constructor) so the model passes
+    * validation. */
+  private val sampleModel: Model = Model.of(
+    name     = "orders",
+    source   = SourceRef.ByName(catalog = None, namespace = Some("public"), table = "orders"),
+    dimensions = Nil,
+    measures   = Nil,
+    defaultPolicies = ModelPolicyDefaults.none,
+    status = ModelStatus.Draft,
+  ).fold(
+    err => fail(s"sampleModel failed validation: $err"),
+    identity,
+  )
 
   // -- instance shape --
 
@@ -78,7 +96,8 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
   // -- compile / execute / explain — deferred --
 
   test("compile returns Left(EngineError.FeatureDeferred) for the placeholder path") {
-    val result = TrinoEngine.instance.compile("any-model", EngineContext.defaultContext)
+    val m = sampleModel
+    val result = TrinoEngine.instance.compile(m, EngineContext.defaultContext)
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
   }
@@ -90,33 +109,17 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
   }
 
   test("explain returns Left(EngineError.FeatureDeferred) for the placeholder path") {
-    val result = TrinoEngine.instance.explain("any-model", EngineContext.defaultContext)
+    val m = sampleModel
+    val result = TrinoEngine.instance.explain(m, EngineContext.defaultContext)
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
   }
 
   test("compile result includes a roadmap pointer in the FeatureDeferred error") {
-    val result = TrinoEngine.instance.compile("any-model", EngineContext.defaultContext)
+    val result = TrinoEngine.instance.compile(sampleModel, EngineContext.defaultContext)
     val err = result.left.toOption.get.asInstanceOf[EngineError.FeatureDeferred]
     err.feature should include ("trino")
     err.release should not be empty
-  }
-
-  // -- compile on a CorePredicate (the minimum viable lowering) --
-
-  test("compile(CorePredicate) returns Right(SqlLowerer.lower(p)) for an Eq") {
-    val p = io.semanticdf.core.predicate.Predicate.Compare.Eq("carrier", "AA")
-    TrinoEngine.instance.compile(p, EngineContext.defaultContext) shouldBe
-      Right("\"carrier\" = 'AA'")
-  }
-
-  test("compile(CorePredicate) returns Right(SqlLowerer.lower(p)) for an And") {
-    val p = io.semanticdf.core.predicate.Predicate.And(
-      io.semanticdf.core.predicate.Predicate.Compare.Eq("c", "AA"),
-      io.semanticdf.core.predicate.Predicate.Compare.Gt("d", 1),
-    )
-    TrinoEngine.instance.compile(p, EngineContext.defaultContext) shouldBe
-      Right("(\"c\" = 'AA' AND \"d\" > 1)")
   }
 
   // -- boundary contract: zero Spark imports --
