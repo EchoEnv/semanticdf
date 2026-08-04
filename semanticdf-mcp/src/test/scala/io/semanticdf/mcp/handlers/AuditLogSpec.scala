@@ -37,6 +37,7 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
         rowCount = i.toLong,
         elapsedMs = i.toLong,
         status = "ok",
+        dedupHash = AuditEvent.dedupHashOf(s"m$i", 0, Seq(s"meas_$i"), Seq(s"dim_$i"), Some(f"hash_$i%016x"), None),
       ))
     }
     s
@@ -112,6 +113,7 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
       rowCount   = 3L,
       elapsedMs  = 42L,
       status     = "ok",
+      dedupHash  = AuditEvent.dedupHashOf("flights", 0, Seq("flight_count"), Seq("carrier"), Some("abc123"), None),
     ))
     val h = new AuditLog(sink)
     val data = h.handle(AuditLogRequest()).data.asInstanceOf[AuditLog.Data]
@@ -149,6 +151,7 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
       rowCount   = 3L,
       elapsedMs  = 5L,
       status     = "ok",
+      dedupHash  = AuditEvent.dedupHashOf("flights", 7, Seq("flight_count"), Seq("carrier"), None, None),
     ))
     val e = new AuditLog(sink).handle(AuditLogRequest())
       .data.asInstanceOf[AuditLog.Data].events.head
@@ -165,6 +168,7 @@ class AuditLogSpec extends AnyFunSuite with SparkFixture {
       rowCount = 0L, elapsedMs = 5L,
       status = "error",
       error = Some("IllegalArgumentException: nope"),
+      dedupHash = AuditEvent.dedupHashOf("flights", 0, Nil, Nil, None, None),
     ))
     val data = new AuditLog(sink).handle(AuditLogRequest()).data.asInstanceOf[AuditLog.Data]
     val e = data.events.head

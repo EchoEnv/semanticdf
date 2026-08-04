@@ -103,14 +103,14 @@ jobs:
           cache: "maven"
       - name: Install library into local m2 (so consumers can resolve it)
         run: mvn install -DskipTests
-      - name: Verify every consumer POM compiles
-        # Uses `mvn compile` (main code only) rather than `mvn test-compile`
-        # because some consumer test files have pre-existing compile errors
-        # (tracked separately — e.g. semanticdf-mcp's AuditLogSpec references a
-        # 14-field AuditEvent case class with only 13 fields). Those test
-        # errors are out of scope for this CI step. The library interface
-        # is verified by `mvn compile`; the consumer interface is what
-        # would break under an artifact rename or a library API change.
+      - name: Verify every consumer POM compiles (main + test)
+        # Uses `mvn test-compile` (main + test) — any test-source compile
+        # error in a consumer that consumes the library would be caught
+        # here. Pre-fix (PR #347), this step used `mvn compile` only,
+        # because some consumer test files had pre-existing errors
+        # (the `AuditLogSpec` issue fixed in the same PR series as this
+        # step). Now that the AuditLogSpec is fixed, test-compile is
+        # safe to enable.
         run: |
           set -e
           CONSUMERS="semanticdf-mcp semanticdf-platform"
@@ -122,6 +122,6 @@ jobs:
           done
           for d in $CONSUMERS; do
             echo "=== Compiling $d ==="
-            ( cd "$d" && mvn compile -q )
+            ( cd "$d" && mvn test-compile -q )
           done
-          echo "All consumer POMs compile cleanly."
+          echo "All consumer POMs compile cleanly (main + test)."
