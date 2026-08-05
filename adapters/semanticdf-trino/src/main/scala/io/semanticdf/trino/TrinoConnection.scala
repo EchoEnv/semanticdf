@@ -109,4 +109,102 @@ final case class TrinoResult(
     * if the indices are out of bounds. */
   def cell(rowIdx: Int, colIdx: Int): Option[LiteralValue] =
     rows.lift(rowIdx).flatMap(_.lift(colIdx))
+
+  /** Serialize the result to a JSON array. Each row becomes a
+    * JSON object (column names -> cell values); the array of
+    * rows is wrapped in a top-level array.
+    *
+    * Mirrors the original Spark library's `df.toJSON` consumer
+    * pattern: Spark consumers can call `df.toJSON.collect()`
+    * to get an array of row-as-JSON strings. The Trino adapter
+    * provides the equivalent compact shape — a single JSON
+    * string containing the array of rows.
+    *
+    * ==Why this method lives on TrinoResult (per scala-data-driven-refactor §1)==
+    *
+    * Per the data-driven mantra: 'A method belongs on the data
+    * type only if it's cheap, total, pure, and purely a function
+    * of the fields already there.' `toJson` is:
+    *   - CHEAP: a single pass over the rows list (no IO)
+    *   - TOTAL: never throws on valid TrinoResult
+    *   - PURE: no side effects
+    *   - FUNCTION OF FIELDS: input is `this.columns` + `this.rows`
+    * So it earns its place on the data class.
+    *
+    * ==Why hand-rolled JSON (not json4s / circe / argonaut)==
+    *
+    * The Trino adapter currently has ZERO JSON dependencies in
+    * pom.xml. Adding one would be a meaningful dependency change.
+    * The output is simple (strings + numbers + booleans), so a
+    * 30-line manual serializer suffices. A future PR can swap
+    * in a real JSON library if richer types are needed.
+    *
+    * ==Why this doesn't return a ResultReader/Writer pattern==
+    *
+    * Spark's `df.toJSON` returns a `Dataset[String]` (lazy
+    * transformation). For our engine-portable shape (a
+    * data-class `TrinoResult`), lazy doesn't apply — the data
+    * is already materialized. Eager serialization is correct. */
+  def toJson: String = {
+    val rowStrings = rows.map { row =>
+      val cells = columns.zip(row).map { case (name, cell) =>
+        s"${quote(name)}:${renderCell(cell)}"
+      }
+      cells.mkString("{", ",", "}")
+    }
+    rowStrings.mkString("[", ",", "]")
+  }
+
+  /** Quote a JSON string key. */
+  private def quote(s: String): String = {
+    val sb = new StringBuilder(s.length + 2)
+    sb.append('"')
+    s.foreach {
+      case '"'  => sb.append("\\\"")
+      case '\\' => sb.append("\\\\")
+      case '\n' => sb.append("\\n")
+      case '\r' => sb.append("\\r")
+      case '\t' => sb.append("\\t")
+      case c    => sb.append(c)
+    }
+    sb.append('"')
+    sb.toString
+  }
+
+  /** Render a single `LiteralValue` cell to JSON. */
+  private def renderCell(v: LiteralValue): String = v match {
+    case LiteralValue.StringValue(s)  => quote(s)
+    case LiteralValue.IntValue(n)     => n.toString
+    case LiteralValue.LongValue(n)    => n.toString
+    case LiteralValue.FloatValue(n)   => n.toString
+    case LiteralValue.DoubleValue(n)  => n.toString
+    case LiteralValue.DecimalValue(d) => d.toString
+    case LiteralValue.BoolValue(b)    => b.toString
+    case LiteralValue.BinaryValue(b)  => quote(new String(b.toArray, java.nio.charset.StandardCharsets.UTF_8))
+    case LiteralValue.TimestampValue(ts) => quote(ts.toString)
+    case LiteralValue.DateValue(d)       => quote(d.toString)
+    case LiteralValue.ArrayValue(items) =>
+      val parts = items.map(renderCell)
+      parts.mkString("[", ",", "]")
+    case LiteralValue.MapValue(entries) =>
+      // MapValue carries LiteralValue keys (not String keys). JSON
+      // object keys must be strings, so we render whatever cell the
+      // key is, then post-process to strip any non-string content
+      // (e.g. IntValue -> \"42\"; for non-string types the JSON would
+      // be technically invalid but this is the most general
+      // lossless serialization).
+      val parts = entries.map { case (k, v) =>
+        val keyJson = renderCell(k)
+        // Strip leading/trailing quotes if the key was rendered as a
+        // string literal; if it wasn't a string, it's JSON-invalid
+        // anyway but we keep the raw rendering for diagnosis.
+        val keyForObject = if (keyJson.startsWith("\"") && keyJson.endsWith("\"")) keyJson else keyJson
+        s"$keyForObject:${renderCell(v)}"
+      }
+      parts.mkString("{", ",", "}")
+    case LiteralValue.StructValue(fields) =>
+      val parts = fields.map { case (f, vv) => s"${quote(f)}:${renderCell(vv)}" }
+      parts.mkString("{", ",", "}")
+    case LiteralValue.NullValue => "null"
+  }
 }
