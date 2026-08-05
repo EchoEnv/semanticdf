@@ -79,6 +79,33 @@ class TrinoEngine extends Engine[Any] {
     Capability.LateBinding,
   )
 
+  /** A description of each capability, in the Trino-specific
+    * form. Useful for MCP `describe_model` output (the MCP
+    * server surfaces "what does each capability mean for THIS
+    * engine?" so consumers can pick the right engine for their
+    * workload).
+    *
+    * Per scala-data-driven-refactor §1 ("data is data, behavior
+    * lives elsewhere"): the descriptions are pure data (string
+    * constants keyed by `Capability`). The interpretation lives
+    * elsewhere (the MCP server's `describe_model` handler).
+    *
+    * Per the Engine trait contract: every capability in
+    * `capabilities` MUST have an entry here. Future PRs that
+    * add a new capability must update both sets. */
+  val describeCapabilities: Map[Capability, String] = Map(
+    Capability.NestedStructTypes ->
+      "Trino supports nested ROW types in queries and result sets",
+    Capability.BroadcastJoin ->
+      "Trino supports BROADCAST join distribution for small-side optimization",
+    Capability.SkewJoin ->
+      "Trino supports skew-aware join optimization for hot key detection",
+    Capability.WindowRanking ->
+      "Trino supports window functions (ROW_NUMBER, RANK, DENSE_RANK, etc.)",
+    Capability.LateBinding ->
+      "Trino supports late-binding table functions via DESCRIBE at query time",
+  )
+
   /** The connection factory. None means "no Trino cluster
     * configured" — the engine returns `EngineError.ConnectionFailed`
     * from `execute()` in that case. */

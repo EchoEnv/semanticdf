@@ -93,6 +93,27 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     TrinoEngine.instance.capabilities should not contain (Capability.Materialize)
   }
 
+  // -- describeCapabilities (typed descriptions per capability) --
+
+  test("describeCapabilities has a non-empty description map") {
+    TrinoEngine.instance.describeCapabilities should not be empty
+  }
+
+  test("describeCapabilities has an entry for every capability in `capabilities`") {
+    val caps = TrinoEngine.instance.capabilities
+    val descs = TrinoEngine.instance.describeCapabilities
+    caps.foreach { cap =>
+      descs should contain key cap
+    }
+  }
+
+  test("describeCapabilities entries are non-empty strings") {
+    val descs = TrinoEngine.instance.describeCapabilities
+    descs.values.foreach { desc =>
+      desc should not be empty
+    }
+  }
+
   // -- compile / execute / explain — deferred --
 
   test("compile returns Right(ExecutionPlan) with a ParameterizedSql") {
