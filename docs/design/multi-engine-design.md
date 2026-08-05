@@ -1253,6 +1253,98 @@ Identity name/version/implHash enter both canonical hashes, fixing
 invalidates all old cache entries; no legacy fallback can return Spark rows for Trino.
 Old audit events read as `EngineIdentity("spark","legacy","legacy")`; new writers always
 emit identity.
+
+### 4.6 Layer separation: engines vs catalogs
+
+The portable design recognizes **two distinct layers**, each with its own contract. The
+two layers do not overlap: a system that executes queries is an engine; a system that
+serves table metadata is a catalog. Some platforms span both layers and ship both
+adapters; a pure catalog is one adapter only.
+
+| Layer | Contract (in core) | Adapter pattern (in engine adapter) |
+|---|---|---|
+| **Engine** (executes queries) | `Engine[R]` (§4.5.1) | `TrinoEngine`, `SparkEngine`, `DuckDBEngine`, ... |
+| **Catalog** (serves metadata) | `SourceResolver` (§4.3.2) | `UnityCatalogSourceResolver`, `HiveMetastoreSourceResolver`, ... |
+
+The two contracts are **transport-agnostic**. They can wrap JDBC, REST, Thrift, gRPC,
+in-process libraries, or native clients. The transport choice is per-adapter, not
+per-design. The same `Engine[R]` trait serves both an embedded DuckDB and a remote
+BigQuery; the same `SourceResolver` trait serves both a local Hive Metastore (Thrift)
+and a remote Unity Catalog (REST).
+
+#### 4.6.1 What goes in each layer
+
+**Engine layer** — systems that execute queries and return result rows:
+
+| System | Transport | `Engine[R]` impl |
+|---|---|---|
+| Spark (DataFrame) | in-process + Connect | `SparkEngine extends Engine[DataFrame]` |
+| Trino | JDBC | `TrinoEngine extends Engine[Any]` |
+| DuckDB | in-process + JDBC | `DuckDBEngine extends Engine[Any]` |
+| Dremio Sonar | Arrow Flight / JDBC | `DremioEngine extends Engine[Any]` |
+| Snowflake | JDBC / SQL REST API | `SnowflakeEngine extends Engine[Any]` |
+| BigQuery | REST | `BigQueryEngine extends Engine[Any]` |
+| ClickHouse | HTTP / native | `ClickHouseEngine extends Engine[Any]` |
+| PrestoDB | JDBC | `PrestoDBEngine extends Engine[Any]` |
+| Apache Pinot | REST | `PinotEngine extends Engine[Any]` |
+
+**Catalog layer** — systems that serve table metadata:
+
+| System | Transport | `SourceResolver` impl |
+|---|---|---|
+| Unity Catalog | REST | `UnityCatalogSourceResolver` |
+| Hive Metastore | Thrift | `HiveMetastoreSourceResolver` |
+| AWS Glue Data Catalog | REST | `GlueSourceResolver` |
+| Iceberg REST Catalog | REST | `IcebergRestSourceResolver` |
+| Nessie | REST | `NessieSourceResolver` |
+| Apache Polaris | REST | `PolarisSourceResolver` |
+| LakeFS | REST | `LakeFSSourceResolver` |
+| Databricks Catalog | REST (Unity under the hood) | `DatabricksCatalogSourceResolver` |
+
+#### 4.6.2 Dual-layer platforms
+
+Some platforms span both layers and ship both adapters. The two adapters share
+connection configuration (URL, credentials) but serve different contracts:
+
+| Platform | Catalog adapter (`SourceResolver`) | Engine adapter (`Engine[R]`) |
+|---|---|---|
+| Databricks | Unity Catalog over REST | Databricks SQL over REST / Connect |
+| Dremio | Dremio catalog over REST | Dremio Sonar over Arrow Flight / JDBC |
+| Snowflake | Account catalog over REST | Snowflake SQL over JDBC / REST |
+
+A platform that is *only* a catalog ships only a `SourceResolver`. A platform that is
+*only* an engine ships only an `Engine[R]`. The two contracts are independent and a
+deployment may combine any catalog with any engine (a Trino engine over Unity Catalog
+metadata, a Spark engine over Glue metadata, etc.) without coupling.
+
+#### 4.6.3 Adapter shape
+
+For an engine adapter:
+- `Engine[R]` impl: `compile`, `execute`, `explain`, `schema`, plus `preview`, `count`,
+  `executeAsRows`, `previewAsRows` mirrors.
+- Optionally a paired `SourceResolver` impl for the engine's own metadata discovery
+  (e.g. `TrinoSourceResolver` calling `DESCRIBE <table>`).
+
+For a pure catalog adapter:
+- Only a `SourceResolver` impl: `resolve(sourceRef) → ResolvedSource.Scan` (with
+  schema, columns, location, optional stats).
+
+For a dual adapter (one platform, both layers):
+- Both contracts, separately testable. They share connection config but no state.
+
+#### 4.6.4 Why two contracts, not one
+
+A single combined contract (e.g. `EngineAndCatalog` with both `execute` and `resolve`)
+would force every catalog-only system to ship a stub engine implementation and vice
+versa. Two contracts keep the layers independent:
+- A pure catalog (Hive Metastore) doesn't need engine semantics.
+- A pure engine (DuckDB in-process) doesn't need a remote catalog protocol.
+- A dual platform (Databricks) ships both, each independent, each independently
+  testable.
+
+The cost of two contracts is two trait declarations and a registry that holds them
+separately. The benefit is that every adapter ships only what its system actually does.
+
 ## 5. Backend implementations
 ### 5.1 Maven graph, scopes, and Spark-free core proof
 The current single JAR has Spark `provided` (`pom.xml:1-98`); the parent becomes an
