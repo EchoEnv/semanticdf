@@ -300,4 +300,131 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
   }
+
+  // -- count (engine-specific behavior, mirrors original Spark library's df.count()) --
+
+  test("count returns the row count as a Long") {
+    val m   = sampleModel  // empty model uses base source only
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = s"""SELECT COUNT(*) AS "row_count" FROM (${compiled.sql}) AS "_count_subq""""
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("row_count"),
+        rows    = List(List(io.semanticdf.core.expr.LiteralValue.LongValue(42L))),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.count(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe 42L
+  }
+
+  test("count for empty source returns 0 (a valid count, not an error)") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = s"""SELECT COUNT(*) AS "row_count" FROM (${compiled.sql}) AS "_count_subq""""
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("row_count"),
+        rows    = List(List(io.semanticdf.core.expr.LiteralValue.LongValue(0L))),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.count(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe 0L
+  }
+
+  test("count handles IntValue result type (narrowing compat)") {
+    // Some Trino JDBC configurations return COUNT(*) as Int. The
+    // decoder -> LiteralValue.IntValue. The engine must accept
+    // both LongValue and IntValue and return a Long either way.
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = s"""SELECT COUNT(*) AS "row_count" FROM (${compiled.sql}) AS "_count_subq""""
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("row_count"),
+        rows    = List(List(io.semanticdf.core.expr.LiteralValue.IntValue(7))),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.count(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe 7L
+  }
+
+  test("count returns Left(EngineError.ConnectionFailed) when COUNT returns 2+ rows") {
+    // Some malformed scenarios could return >1 row. The engine
+    // must error rather than silently picking one.
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = s"""SELECT COUNT(*) AS "row_count" FROM (${compiled.sql}) AS "_count_subq""""
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("row_count"),
+        rows    = List(
+          List(io.semanticdf.core.expr.LiteralValue.LongValue(1L)),
+          List(io.semanticdf.core.expr.LiteralValue.LongValue(2L)),
+        ),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.count(m, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err shouldBe a [EngineError.ConnectionFailed]
+    err.toString should include ("COUNT(*) must return 1 row")
+  }
+
+  test("count returns Left(EngineError.ConnectionFailed) for unexpected cell type") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = s"""SELECT COUNT(*) AS "row_count" FROM (${compiled.sql}) AS "_count_subq""""
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("row_count"),
+        rows    = List(List(io.semanticdf.core.expr.LiteralValue.StringValue("not a count"))),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.count(m, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err shouldBe a [EngineError.ConnectionFailed]
+    err.toString should include ("unexpected cell")
+  }
+
+  test("count with no connection factory returns Left(EngineError.ConnectionFailed)") {
+    val engine = new TrinoEngine()  // no factory
+    val result = engine.count(sampleModel, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
+  }
 }

@@ -295,6 +295,75 @@ class TrinoEngine extends Engine[Any] {
     * `R = Any` actually carries a `TrinoResult`. */
   private def asTrinoResult(x: Any): TrinoResult =
     x.asInstanceOf[TrinoResult]
+
+  /** Return the row count of executing `model`. Mirrors the
+    * original Spark library's `df.count()` pattern (e.g.
+    * `SemanticTable.count()` would call `dataset.count()` on
+    * the compiled DataFrame).
+    *
+    * ==Why this exists (per user constraint: behavior must mirror
+    * the original Spark library)==
+    *
+    * Spark consumers write `df.count()` to get a Long. The Trino
+    * equivalent is `SELECT COUNT(*) FROM (<compiled_query>)`. This
+    * method provides that — the engine-level "how many rows?"
+    * operation. The implementation wraps the compiled SQL in a
+    * `COUNT(*)` subquery (Trino fully supports subqueries).
+    *
+    * ==Why not on the Engine trait==
+    *
+    * Per scala-data-driven-refactor §1 + karpathy §3:
+    * `count()` is engine-specific behavior. The Engine trait
+    * stays narrow (compile / execute / explain only); count is
+    * adapter-internal. Spark's `count()` would call
+    * `compile + dataset.count()`.
+    *
+    * ==Why a typed return (Long, not Int)==
+    *
+    * Spark's `DataFrame.count()` returns `Long` to handle large
+    * tables (an Int overflows at ~2.1B rows). We mirror that
+    * precision. Trino's `COUNT(*)` returns BIGINT which the
+    * `TrinoResultDecoder` maps to `LiteralValue.LongValue`.
+    *
+    * ==Why SQL wrapper (not in-memory count)==
+    *
+    * Counting in-memory by executing the full query and calling
+    * `result.rows.size` would work for small results but be
+    * disastrous for large fact tables (the engine fetches
+    * everything to count). The wrapper pushes the count to Trino
+    * (where it can use statistics / pruning). */
+  def count(
+      model: Model,
+      ctx:   EngineContext,
+  ): Either[EngineError, Long] = {
+    compile(model, ctx).flatMap { plan =>
+      val psql = plan.native.asInstanceOf[ParameterizedSql]
+      val countSql = ParameterizedSql(
+        sql = s"""SELECT COUNT(*) AS "row_count" FROM (${psql.sql}) AS "_count_subq"""",
+        parameters = psql.parameters,
+      )
+      execute(
+        ExecutionPlan(engine = plan.engine, native = countSql),
+        ctx,
+      ).flatMap { raw =>
+        val result = asTrinoResult(raw)
+        if (result.rowCount != 1) {
+          Left(EngineError.ConnectionFailed(
+            reason = s"COUNT(*) must return 1 row, got ${result.rowCount}",
+          ))
+        } else {
+          result.cell(0, 0) match {
+            case Some(io.semanticdf.core.expr.LiteralValue.LongValue(n)) => Right(n)
+            case Some(io.semanticdf.core.expr.LiteralValue.IntValue(n))  => Right(n.toLong)
+            case other =>
+              Left(EngineError.ConnectionFailed(
+                reason = s"COUNT(*) returned unexpected cell: $other",
+              ))
+          }
+        }
+      }
+    }
+  }
 }
 
 object TrinoEngine {
