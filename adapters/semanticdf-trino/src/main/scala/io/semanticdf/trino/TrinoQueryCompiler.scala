@@ -2,6 +2,7 @@ package io.semanticdf.trino
 
 import java.time.Instant
 
+import io.semanticdf.core.engine.ParameterizedSql
 import io.semanticdf.core.expr.{Expr, LiteralValue}
 import io.semanticdf.core.model.{Model, RollupFreshnessSpec, RollupSpec, SourceRef}
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
@@ -58,7 +59,14 @@ import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
   */
 class TrinoQueryCompiler {
 
-  /** Compile a portable [[Model]] to a Trino SQL string.
+  /** Compile a portable [[Model]] to a parameterized Trino SQL.
+    *
+    * The output is a [[ParameterizedSql]]: the SQL string with
+    * positional `?` placeholders for literal values + the
+    * ordered list of `LiteralValue` parameters. The caller
+    * (the engine's `execute` step) binds the parameters via
+    * Trino's `PreparedStatement`-style mechanism — this
+    * prevents SQL injection.
     *
     * The output is a single SQL statement composed of:
     *   - SELECT clause (dimensions + measures + calculated measures)
@@ -67,10 +75,14 @@ class TrinoQueryCompiler {
     *   - WHERE clause (filters composed with AND)
     *   - GROUP BY clause (all dimensions, if there are any aggregates)
     *
-    * Returns SQL with all values INLINED (no parameter binding).
-    * Field names are double-quoted (Trino's standard identifier
-    * delimiter). String values are single-quoted; embedded single
-    * quotes are escaped by doubling.
+    * ==Why `ParameterizedSql` (vs. `String`)==
+    *
+    * Per the design's risk #11: "SQL injection via filter string
+    * composition" — the engine MUST NOT inline user-provided
+    * values into the SQL string. Parameterized binding via the
+    * engine's `PreparedStatement` is the safe path. The compiler
+    * emits `?` placeholders + the parameter list; the engine
+    * binds at execute time.
     *
     * ==Why `modelSources` is a parameter (vs. a class field)==
     *
@@ -108,14 +120,20 @@ class TrinoQueryCompiler {
     *                         empty map makes `Track` rollups stale
     * @param now              the current time (for the freshness
     *                         comparison); defaults to `Instant.now()`
-    * @return Trino-compatible SQL string */
+    * @return [[ParameterizedSql]] with `?`-placeholder SQL + ordered
+    *         parameters list */
   def compile(
       model:            Model,
       modelSources:     Map[String, SourceRef]   = Map.empty,
       rollupSources:    Map[String, SourceRef]   = Map.empty,
       rollupWatermarks: Map[String, Instant]     = Map.empty,
       now:              Instant                  = Instant.now(),
-  ): String = {
+  ): ParameterizedSql = {
+    // Accumulates the parameter values in the order they appear in
+    // the SQL. The mutable state is local to this method (a `var`),
+    // not on the class — the compiler instance itself is pure.
+    val params = scala.collection.mutable.ListBuffer.empty[LiteralValue]
+
     val selectedRollup = selectRollup(model, rollupSources, rollupWatermarks, now)
     val (effectiveSource, rollupComment) = selectedRollup match {
       case Some((rollup, rollupSource)) =>
@@ -123,10 +141,10 @@ class TrinoQueryCompiler {
       case None =>
         (model.source, None)
     }
-    val selectCols = renderSelectColumns(model)
+    val selectCols = renderSelectColumns(model, params)
     val fromClause = renderFromFromSource(model, effectiveSource, modelSources)
-    val whereClause = renderWhere(model.filters)
-    val groupByClause = renderGroupBy(model)
+    val whereClause = renderWhere(model.filters, params)
+    val groupByClause = renderGroupBy(model, params)
 
     val parts = List(
       rollupComment,
@@ -136,7 +154,10 @@ class TrinoQueryCompiler {
       groupByClause.map(g => s"GROUP BY $g"),
     ).flatten
 
-    parts.mkString(" ")
+    ParameterizedSql(
+      sql        = parts.mkString(" "),
+      parameters = params.toList,
+    )
   }
 
   // -- SELECT clause --
@@ -153,16 +174,22 @@ class TrinoQueryCompiler {
     *
     * Per debug-mantra §3 (falsify): calc-measure references go to
     * BASE measurements only (not to other calc measures) — the
-    * calc DAG is acyclic per `ModelValidator` (calc DAG check #4). */
-  private def renderSelectColumns(model: Model): List[String] = {
+    * calc DAG is acyclic per `ModelValidator` (calc DAG check #4).
+    *
+    * The `params` buffer accumulates literal values for binding
+    * — see `compile()`. */
+  private def renderSelectColumns(
+      model:  Model,
+      params: scala.collection.mutable.ListBuffer[LiteralValue],
+  ): List[String] = {
     val dimCols = model.dimensions.map { d =>
-      s"${renderExpr(d.expr)} AS ${quoteName(d.name)}"
+      s"${renderExpr(d.expr, params)} AS ${quoteName(d.name)}"
     }
     val measureCols = model.measures.map { m =>
-      s"${renderAggregateCall(m.expr)} AS ${quoteName(m.name)}"
+      s"${renderAggregateCall(m.expr, params)} AS ${quoteName(m.name)}"
     }
     val calcCols = model.calculatedMeasures.map { cm =>
-      s"${renderExpr(cm.expr)} AS ${quoteName(cm.name)}"
+      s"${renderExpr(cm.expr, params)} AS ${quoteName(cm.name)}"
     }
     dimCols ++ measureCols ++ calcCols
   }
@@ -321,11 +348,16 @@ class TrinoQueryCompiler {
 
   /** Render the WHERE clause from the model's filters. All
     * filters are composed with `AND`. An empty filter list
-    * returns `None` (no WHERE clause at all). */
-  private def renderWhere(filters: List[io.semanticdf.core.model.FilterSpec]): Option[String] =
+    * returns `None` (no WHERE clause at all).
+    *
+    * The `params` buffer accumulates literal values for binding. */
+  private def renderWhere(
+      filters: List[io.semanticdf.core.model.FilterSpec],
+      params:  scala.collection.mutable.ListBuffer[LiteralValue],
+  ): Option[String] =
     if (filters.isEmpty) None
     else {
-      val rendered = filters.map(f => s"(${renderExpr(f.predicate)})")
+      val rendered = filters.map(f => s"(${renderExpr(f.predicate, params)})")
       Some(rendered.mkString(" AND "))
     }
 
@@ -337,12 +369,15 @@ class TrinoQueryCompiler {
     * Calculated measures don't trigger GROUP BY (they ARE
     * expressions over the aggregated columns, not aggregation
     * functions themselves). The dimensions are the GROUP BY columns. */
-  private def renderGroupBy(model: Model): Option[String] = {
+  private def renderGroupBy(
+      model:  Model,
+      params: scala.collection.mutable.ListBuffer[LiteralValue],
+  ): Option[String] = {
     val hasAggregates = model.measures.nonEmpty
     if (!hasAggregates) None
     else if (model.dimensions.isEmpty) None  // no dims, no GROUP BY
     else {
-      val groups = model.dimensions.map(d => renderExpr(d.expr))
+      val groups = model.dimensions.map(d => renderExpr(d.expr, params))
       Some(groups.mkString(", "))
     }
   }
@@ -357,8 +392,13 @@ class TrinoQueryCompiler {
     *
     * Per scala-data-driven-refactor §3 (sealed ADT over Map):
     * the 16 `AggregateFn` cases are exhaustively matched —
-    * adding a new case would require a compile error here. */
-  private def renderAggregateCall(call: AggregateCall): String = {
+    * adding a new case would require a compile error here.
+    *
+    * The `params` buffer accumulates literal values for binding. */
+  private def renderAggregateCall(
+      call:   AggregateCall,
+      params: scala.collection.mutable.ListBuffer[LiteralValue],
+  ): String = {
     val fnName = call.fn match {
       case AggregateFn.Sum                  => "SUM"
       case AggregateFn.Count                => "COUNT"
@@ -379,11 +419,11 @@ class TrinoQueryCompiler {
     }
     val distinct = if (call.distinct) "DISTINCT " else ""
     val input = call.input match {
-      case Some(e) => s"$distinct${renderExpr(e)}"
+      case Some(e) => s"$distinct${renderExpr(e, params)}"
       case None    => if (call.distinct) "" else "*"  // COUNT(*) for no-input
     }
     val arguments = if (call.arguments.nonEmpty) {
-      s", ${call.arguments.map(renderLiteral).mkString(", ")}"
+      s", ${call.arguments.map(v => renderLiteral(v, params)).mkString(", ")}"
     } else ""
     s"$fnName($input$arguments)"
   }
@@ -391,79 +431,105 @@ class TrinoQueryCompiler {
   // -- Expression rendering --
 
   /** Render a portable `Expr` as a Trino SQL expression.
-    * Handles all 21 `Expr` cases (per PR #359). */
-  private def renderExpr(e: Expr): String = e match {
-    case Expr.Literal(value, _) => renderLiteral(value)
+    * Handles all 21 `Expr` cases (per PR #359).
+    *
+    * The `params` buffer accumulates literal values for binding.
+    * When a `Literal` is encountered, a `?` placeholder is
+    * emitted in the SQL and the value is appended to `params`. */
+  private def renderExpr(
+      e:      Expr,
+      params: scala.collection.mutable.ListBuffer[LiteralValue],
+  ): String = e match {
+    case Expr.Literal(value, _) => renderLiteral(value, params)
 
     case Expr.FieldRef(name)    => quoteName(name)
     case Expr.MeasureRef(name)  => quoteName(name)  // ref to a base-measure alias
 
     // Arithmetic
-    case Expr.Add(l, r)      => s"(${renderExpr(l)} + ${renderExpr(r)})"
-    case Expr.Subtract(l, r) => s"(${renderExpr(l)} - ${renderExpr(r)})"
-    case Expr.Multiply(l, r) => s"(${renderExpr(l)} * ${renderExpr(r)})"
-    case Expr.Divide(l, r)   => s"(${renderExpr(l)} / ${renderExpr(r)})"
-    case Expr.Modulo(l, r)   => s"(${renderExpr(l)} % ${renderExpr(r)})"
+    case Expr.Add(l, r)      => s"(${renderExpr(l, params)} + ${renderExpr(r, params)})"
+    case Expr.Subtract(l, r) => s"(${renderExpr(l, params)} - ${renderExpr(r, params)})"
+    case Expr.Multiply(l, r) => s"(${renderExpr(l, params)} * ${renderExpr(r, params)})"
+    case Expr.Divide(l, r)   => s"(${renderExpr(l, params)} / ${renderExpr(r, params)})"
+    case Expr.Modulo(l, r)   => s"(${renderExpr(l, params)} % ${renderExpr(r, params)})"
 
     // Comparison
-    case Expr.Equal(l, r)           => s"(${renderExpr(l)} = ${renderExpr(r)})"
-    case Expr.NotEqual(l, r)        => s"(${renderExpr(l)} <> ${renderExpr(r)})"
-    case Expr.LessThan(l, r)        => s"(${renderExpr(l)} < ${renderExpr(r)})"
-    case Expr.LessOrEqual(l, r)     => s"(${renderExpr(l)} <= ${renderExpr(r)})"
-    case Expr.GreaterThan(l, r)     => s"(${renderExpr(l)} > ${renderExpr(r)})"
-    case Expr.GreaterOrEqual(l, r)  => s"(${renderExpr(l)} >= ${renderExpr(r)})"
+    case Expr.Equal(l, r)           => s"(${renderExpr(l, params)} = ${renderExpr(r, params)})"
+    case Expr.NotEqual(l, r)        => s"(${renderExpr(l, params)} <> ${renderExpr(r, params)})"
+    case Expr.LessThan(l, r)        => s"(${renderExpr(l, params)} < ${renderExpr(r, params)})"
+    case Expr.LessOrEqual(l, r)     => s"(${renderExpr(l, params)} <= ${renderExpr(r, params)})"
+    case Expr.GreaterThan(l, r)     => s"(${renderExpr(l, params)} > ${renderExpr(r, params)})"
+    case Expr.GreaterOrEqual(l, r)  => s"(${renderExpr(l, params)} >= ${renderExpr(r, params)})"
 
     // Boolean
-    case Expr.And(l, r) => s"(${renderExpr(l)} AND ${renderExpr(r)})"
-    case Expr.Or(l, r)  => s"(${renderExpr(l)} OR ${renderExpr(r)})"
-    case Expr.Not(inner) => s"(NOT ${renderExpr(inner)})"
+    case Expr.And(l, r) => s"(${renderExpr(l, params)} AND ${renderExpr(r, params)})"
+    case Expr.Or(l, r)  => s"(${renderExpr(l, params)} OR ${renderExpr(r, params)})"
+    case Expr.Not(inner) => s"(NOT ${renderExpr(inner, params)})"
 
     // Null checks
-    case Expr.IsNull(inner)    => s"(${renderExpr(inner)} IS NULL)"
-    case Expr.IsNotNull(inner) => s"(${renderExpr(inner)} IS NOT NULL)"
+    case Expr.IsNull(inner)    => s"(${renderExpr(inner, params)} IS NULL)"
+    case Expr.IsNotNull(inner) => s"(${renderExpr(inner, params)} IS NOT NULL)"
 
     // Cast (target type is engine-portable; render as Trino type name)
-    case Expr.Cast(inner, targetType) => s"CAST(${renderExpr(inner)} AS ${renderType(targetType)})"
+    case Expr.Cast(inner, targetType) => s"CAST(${renderExpr(inner, params)} AS ${renderType(targetType)})"
 
     // Function call
     case Expr.FunctionCall(name, args) =>
-      s"${quoteName(name)}(${args.map(renderExpr).mkString(", ")})"
+      s"${quoteName(name)}(${args.map(a => renderExpr(a, params)).mkString(", ")})"
   }
 
-  /** Render a portable `LiteralValue` as a Trino SQL literal.
-    * String values are single-quoted; embedded single quotes are
-    * escaped by doubling (Trino's standard escape). Numeric values
-    * are inlined. Timestamps are `TIMESTAMP '...'`. Dates are
-    * `DATE '...'`. Booleans are `TRUE` / `FALSE`. Null is `NULL`. */
-  private def renderLiteral(v: LiteralValue): String = v match {
-    case LiteralValue.IntValue(n)        => n.toString
-    case LiteralValue.ByteValue(n)       => n.toString
-    case LiteralValue.ShortValue(n)      => n.toString
-    case LiteralValue.LongValue(n)       => n.toString
-    case LiteralValue.FloatValue(n)      => n.toString
-    case LiteralValue.DoubleValue(n)     => n.toString
-    case LiteralValue.DecimalValue(n)    => n.toString
-    case LiteralValue.StringValue(s)     => s"'${s.replace("'", "''")}'"
-    case LiteralValue.BoolValue(b)       => if (b) "TRUE" else "FALSE"
-    case LiteralValue.BinaryValue(bytes) =>
-      s"X'${bytes.iterator.map(b => f"${b & 0xff}%02x").mkString}'"
-    case LiteralValue.TimestampValue(instant) =>
-      s"TIMESTAMP '${instant.toString}'"
-    case LiteralValue.DateValue(date) =>
-      s"DATE '${date.toString}'"
+  /** Render a portable `LiteralValue` as a `?` placeholder + add
+    * the value to the `params` buffer for later binding.
+    *
+    * ==Why `?` (vs. inlining the value)==
+    *
+    * Per the design's risk #11: "SQL injection via filter string
+    * composition" — user-provided values must NEVER be inlined
+    * into the SQL string. Trino's `PreparedStatement` binds them
+    * safely. The engine adapter (not the compiler) performs the
+    * binding; the compiler just emits `?` + preserves the value
+    * for later binding.
+    *
+    * ==Why `NullValue` stays inline==
+    *
+    * SQL `NULL` is a literal token in the SQL grammar; it's not a
+    * value to bind. The compiler emits `NULL` (no parameter).
+    * Same for the structure-only `ArrayValue`/`MapValue`/`StructValue`
+    * wrappers — their element VALUES are bound; the array/map/struct
+    * wrappers themselves are inline syntax.
+    *
+    * ==Why aggregate function arguments ARE bound==
+    *
+    * `ApproxPercentile(x, 0.95)` has a literal argument `0.95`.
+    * Binding it as a parameter preserves precision + security. */
+  private def renderLiteral(
+      v:      LiteralValue,
+      params: scala.collection.mutable.ListBuffer[LiteralValue],
+  ): String = v match {
+    case LiteralValue.IntValue(_)        => params += v; "?"
+    case LiteralValue.ByteValue(_)       => params += v; "?"
+    case LiteralValue.ShortValue(_)      => params += v; "?"
+    case LiteralValue.LongValue(_)       => params += v; "?"
+    case LiteralValue.FloatValue(_)      => params += v; "?"
+    case LiteralValue.DoubleValue(_)     => params += v; "?"
+    case LiteralValue.DecimalValue(_)    => params += v; "?"
+    case LiteralValue.StringValue(_)     => params += v; "?"
+    case LiteralValue.BoolValue(_)       => params += v; "?"
+    case LiteralValue.BinaryValue(_)     => params += v; "?"
+    case LiteralValue.TimestampValue(_)  => params += v; "?"
+    case LiteralValue.DateValue(_)       => params += v; "?"
     case LiteralValue.ArrayValue(values) =>
-      s"ARRAY[${values.map(renderLiteral).mkString(", ")}]"
+      s"ARRAY[${values.map(vv => renderLiteral(vv, params)).mkString(", ")}]"
     case LiteralValue.MapValue(entries) =>
       val rendered = entries.map { case (k, v) =>
-        s"${renderLiteral(k)} => ${renderLiteral(v)}"
+        s"${renderLiteral(k, params)} => ${renderLiteral(v, params)}"
       }
-      s"MAP(ARRAY[${entries.map(_._1).map(renderLiteral).mkString(", ")}], ARRAY[${entries.map(_._2).map(renderLiteral).mkString(", ")}])"
+      s"MAP(ARRAY[${entries.map(_._1).map(k => renderLiteral(k, params)).mkString(", ")}], ARRAY[${entries.map(_._2).map(vv => renderLiteral(vv, params)).mkString(", ")}])"
     case LiteralValue.StructValue(fields) =>
       val rendered = fields.map { case (n, v) =>
-        s"${quoteName(n)} => ${renderLiteral(v)}"
+        s"${quoteName(n)} => ${renderLiteral(v, params)}"
       }
       s"ROW(${rendered.mkString(", ")})"
-    case LiteralValue.NullValue => "NULL"
+    case LiteralValue.NullValue => "NULL"  // not a parameter — SQL NULL is a token
   }
 
   /** Render a portable `SealedDataType` as a Trino SQL type name.
