@@ -119,4 +119,26 @@ class TrinoResultSpec extends AnyFunSuite with Matchers {
     // inside the JSON key
     r.toJson shouldBe """[{"a\"b":1}]"""
   }
+
+  // -- isEmpty (mirrors df.isEmpty; scala-data-driven-refactor §1 canonical example) --
+
+  test("isEmpty returns true for an empty result") {
+    val r = TrinoResult(columns = List("a", "b"), rows = Nil)
+    r.isEmpty shouldBe true
+  }
+
+  test("isEmpty returns false for a non-empty result") {
+    val r = TrinoResult(
+      columns = List("region"),
+      rows    = List(List(LiteralValue.StringValue("AA"))),
+    )
+    r.isEmpty shouldBe false
+  }
+
+  test("isEmpty is consistent with rowCount == 0") {
+    val empty  = TrinoResult(Nil, Nil)
+    val nonEmpty = TrinoResult(List("x"), List(List(LiteralValue.IntValue(1))))
+    empty.isEmpty   shouldBe (empty.rowCount == 0)
+    nonEmpty.isEmpty shouldBe (nonEmpty.rowCount == 0)
+  }
 }
