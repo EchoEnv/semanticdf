@@ -116,16 +116,37 @@ The adapter also mirrors common Spark `DataFrame` terminal operations:
 
 The remaining work is **performance + infrastructure**:
 
-| # | Item | Blocked on |
+| # | Item | Status |
 |---|---|---|
-| 1 | **Real Trino cluster integration test** (the *decision gate*) | Docker / CI infra |
+| 1 | **Real Trino cluster integration test** (the *decision gate*) | ✅ Available via Docker (PR #384) |
 | 2 | **Connection pooling** (HikariCP / Apache DBCP / Trino's pool) | Real cluster |
 | 3 | **Real JDBC Trino driver** — `JdbcTrinoConnection` impl using `TrinoResultDecoder` | Real cluster |
 | 4 | **Full Trino `EXPLAIN (FORMAT JSON)`** — cost estimates + partition pruning | Real cluster |
 | 5 | **`executeSql(sql, params, ctx)`** — raw-SQL escape hatch (parked) | Discussion |
 
-Items 1-4 require a real Trino cluster (typically Docker). Item 5 is a
-small follow-up PR — parked at the user's request.
+### Decision gate (item #1, AVAILABLE)
+
+A real Trino cluster with strict memory caps is available under
+`docker/`:
+
+```bash
+cd adapters/semanticdf-trino/docker
+docker compose up -d                         # 1.5GiB cap, -Xmx768m JVM
+# Wait ~30s for `docker ps --filter "name=semanticdf-trino"` to show healthy.
+cd ..
+mvn -Ddocker.tests=true -pl . test \
+    -Dtest='io.semanticdf.trino.integration.TrinoIntegrationSpec'
+docker compose -f docker/docker-compose.yml down -v
+```
+
+The test exercises the **full `compile → execute → result`** flow
+against a live Trino cluster using the `tpch.tiny.region` table
+(5 rows, 2 columns — *built into Trino*, no bootstrap needed).
+Memory caps + JVM heap + per-query caps are designed per the user's
+*"do not explode server"* constraint.
+
+Items 2-4 require the real cluster (now available). Item 5 is a small
+follow-up PR — parked at the user's request.
 
 ## Boundary contract (enforced by `pom.xml`)
 

@@ -1,0 +1,78 @@
+# Local Trino cluster for the semanticdf Trino adapter's
+# decision-gate integration test.
+#
+# Usage (from this directory):
+#   docker compose up -d
+#   # wait ~30s for healthy check
+#   ../mvnw -Ddocker.tests=true -pl . test \
+#       -Dtest='io.semanticdf.trino.integration.*'
+#   docker compose down -v
+#
+# ==Why a single-node cluster (not coordinator + worker)==
+#
+# Per the multi-engine design's Phase 2 decision-gate intent, the
+# *only* goal is to validate that the engine-portable Model
+# compiles + executes against a real Trino cluster. We don't need
+# distributed query — we need *a real Trino*. A single-node
+# (coordinator+worker on one JVM) is the smallest config that:
+#   - exercises the real Trino SQL planner
+#   - exercises the real Trino JDBC driver
+#   - runs under tight memory caps (the user's hard requirement)
+#
+# ==Why these memory limits==
+#
+# Per user constraint: 'monitor memory, disk while running, to not
+# explode server.' These caps (1.5GB hard, 0 swap) mean OOM-kill
+# before the container can starve the host. The JVM heap cap
+# (config/jvm.config) is independent: -Xmx768m means the JVM
+# itself never asks for more than 768MB from the kernel.
+#
+# ==Why a healthcheck==
+#
+# The integration test polls /v1/info before issuing queries.
+# Without compose-level healthcheck, the test races the cluster
+# startup. The healthcheck gates subsequent `docker compose` ops
+# to start_after 'service_healthy'.
+
+services:
+  trino:
+    image: trinodb/trino:435
+    container_name: semanticdf-trino-test
+    hostname: trino
+    # Single-node: coordinator runs on the same node as workers
+    environment:
+      TRINO_ENVIRONMENT: development
+    ports:
+      # Avoiding :8080 (commonly used by other services / existing Trino)
+      - "8088:8080"
+    volumes:
+      # Server config (read-only)
+      - ./config/config.properties:/etc/trino/config.properties:ro
+      - ./config/jvm.config:/etc/trino/jvm.config:ro
+      - ./config/catalog:/etc/trino/catalog:ro
+      # Memory-catalog data dir (host bind-mount for cleanup)
+      - ./data:/var/trino/data:rw
+    # Memory caps — the user's hard requirement. Without these,
+    # the JVM heap would not be bounded and could explode.
+    deploy:
+      resources:
+        limits:
+          memory: 1536M         # 1.5GB hard cap → OOM-kill beyond
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+          cpus: "0.5"
+    # /v1/info is the official cluster liveness probe. We poll
+    # every 5s, allow 30s for startup, and fail (compose) after
+    # 12 retries = 90s. That's our integration-test budget.
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -fsS
+        - http://localhost:8080/v1/info
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 30s
+    restart: "no"

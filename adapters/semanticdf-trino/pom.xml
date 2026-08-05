@@ -120,5 +120,26 @@
         <artifactId>scalatest-maven-plugin</artifactId>
       </plugin>
     </plugins>
+
+    <!--
+      Forward integration-test gates to the forked test JVM.
+      scalatest-maven-plugin runs tests in a child JVM that does NOT
+      inherit the maven `-Ddocker.tests=...` flags. Without this
+      wiring, integration tests can never see the gate and stay
+      perpetually cancelled.
+    -->
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.scalatest</groupId>
+          <artifactId>scalatest-maven-plugin</artifactId>
+          <configuration>
+            <systemProperties>
+              <docker.tests>${docker.tests}</docker.tests>
+            </systemProperties>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
   </build>
 </project>
