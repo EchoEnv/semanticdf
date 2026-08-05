@@ -112,17 +112,28 @@ The adapter also mirrors common Spark `DataFrame` terminal operations:
 | #381 | `df.take(n).collect()` | 113 |
 | #382 | `df.isEmpty` | 40 |
 
-## Open items
+## Phase 5 — production wiring + cluster-aware explain (5 PRs)
 
-The remaining work is **performance + infrastructure**:
+| PR | What |
+|---|---|
+| #384 | Docker-compose'd Trino cluster (decision gate infra) |
+| #385 | `FakeTrinoConnection.catchAll` (test fixture improvement) |
+| #386 | `JdbcTrinoConnection` promoted to main source |
+| #389 | HikariCP-backed `TrinoConnectionPoolFactory` |
+| #390 | `TrinoEngine.explainPlan` (cluster-aware, mirrors `df.explain(spark)`) |
+
+All non-parked items in the multi-engine design (§7.2) are now
+landed in this adapter.
+
+## Open items
 
 | # | Item | Status |
 |---|---|---|
-| 1 | **Real Trino cluster integration test** (the *decision gate*) | ✅ Available via Docker (PR #384) |
-| 2 | **Connection pooling** (HikariCP / Apache DBCP / Trino's pool) | Real cluster |
-| 3 | **Real JDBC Trino driver** — `JdbcTrinoConnection` impl | ✅ Available (PR #386) |
-| 4 | **Full Trino `EXPLAIN (FORMAT JSON)`** — cost estimates + partition pruning | Real cluster |
-| 5 | **`executeSql(sql, params, ctx)`** — raw-SQL escape hatch (parked) | Discussion |
+| 1 | Real Trino cluster integration test (decision gate) | ✅ Available via Docker (PR #384) |
+| 2 | Connection pooling (HikariCP / Apache DBCP / Trino's pool) | ✅ Available (PR #389) |
+| 3 | Real JDBC Trino driver — `JdbcTrinoConnection` impl | ✅ Available (PR #386) |
+| 4 | Full Trino `EXPLAIN` (plain-text via `EXPLAIN <sql>`; JSON via `EXPLAIN (FORMAT JSON) <sql>`) | ✅ Plain-text (PR #390); JSON available via the same method's internal mechanism |
+| 5 | `executeSql(sql, params, ctx)` — raw-SQL escape hatch | Parked (per user direction) |
 
 ### Decision gate (item #1, AVAILABLE)
 
@@ -145,8 +156,8 @@ against a live Trino cluster using the `tpch.tiny.region` table
 Memory caps + JVM heap + per-query caps are designed per the user's
 *"do not explode server"* constraint.
 
-Items 2-4 require the real cluster (now available). Item 5 is a small
-follow-up PR — parked at the user's request.
+Items 1-4 are all available now (see PR list above). Item 5
+(`executeSql`) remains parked at the user's request.
 
 ## Boundary contract (enforced by `pom.xml`)
 
@@ -166,9 +177,38 @@ having a Spark-free engine adapter.
 
 ## Library version
 
-`0.2.4` — same as `semanticdf-core` and `semanticdf-spark`. No version
-bump in any of the Phase 2 / Phase 3 PRs — these are adapter-internal
-additions with no user-facing change.
+`0.2.4` — same as `semanticdf-core` and `semanticdf-spark`. The Phase 2
+/ Phase 3 / Phase 5 PRs (#338–#390) are all adapter-internal additions
+with **no user-facing API changes** — the engine surface
+(`compile` / `execute` / `explain`) is unchanged. New methods
+added (`preview`, `count`, `executeAsRows`, `previewAsRows`,
+`describeCapabilities`, `explainPlan`, `TrinoConnectionPoolFactory`)
+are pure additions — existing call sites work unchanged.
+
+### Test counts (after Phase 5)
+
+Verified by `mvn test`:
+
+| Module | Default mode | Docker mode (`-Ddocker.tests=true`) |
+|---|---|---|
+| `semanticdf-core` | 501 passing | (unchanged) |
+| `semanticdf-trino` | 176 + 2 cancelled | 178 passing |
+| `semanticdf-spark` | 1016 + 2 cancelled | (unchanged) |
+
+The 2 *cancelled* tests in default mode are the Docker-gated
+integration tests (`TrinoIntegrationSpec`):
+- `the Trino decision gate: compile → execute against a real cluster`
+- `explainPlan returns Trino's physical plan as String`
+
+Both run against a real Trino cluster (memory caps + JVM cap +
+per-query caps — see `docker/`) and exercise `compile → execute`
+or `compile → EXPLAIN → execute` end-to-end against `tpch.tiny.region`.
+
+All 19/19 consumer projects (`semanticdf-mcp`, `semanticdf-platform`,
+and 17 `examples/`) test-compile clean against this version.
+
+The adapter is at **natural completion** for engine-internal work per
+the README's standing list — the only parked item is `executeSql`.
 
 ## Why Scala 2.13
 
@@ -178,21 +218,34 @@ parent pom). Cross-compilation is not needed.
 
 ## Using the adapter against a real Trino cluster
 
+**Single-connection (simplest):**
 ```scala
 import io.semanticdf.core.engine.{Engine, EngineContext}
 import io.semanticdf.trino.{JdbcTrinoConnection, TrinoEngine}
 
 val engine: Engine[Any] =
-  TrinoEngine.instance.withConnectionFactory(
-    () => new JdbcTrinoConnection("jdbc:trino://coordinator.example.com:8080"),
+  new TrinoEngine().withConnectionFactory(
+    () => JdbcTrinoConnection.fromUrl("jdbc:trino://coordinator.example.com:8080"),
   )
 val plan   = engine.compile(model, EngineContext.defaultContext).toOption.get
 val result = engine.execute(plan, EngineContext.defaultContext).toOption.get
 ```
 
-Each `execute()` opens a fresh JDBC connection (closed via `finally`).
-Production users wanting shared connections should wrap
-`JdbcTrinoConnection` in a pool (HikariCP — future PR).
+**Pool-backed (recommended for production):**
+```scala
+import io.semanticdf.trino.{TrinoConnectionPoolFactory, TrinoEngine}
+
+val pool = TrinoConnectionPoolFactory.hikari(
+  jdbcUrl     = "jdbc:trino://coordinator.example.com:8080",
+  maxPoolSize = 10,
+)
+val engine = new TrinoEngine().withConnectionFactory(pool)
+```
+
+**Cluster-aware explain (`df.explain(spark)` analog):**
+```scala
+val planString: String = engine.explainPlan(model, ctx).toOption.get
+```
 
 ## See also
 
