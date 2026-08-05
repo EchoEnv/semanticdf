@@ -250,6 +250,79 @@ class TrinoEngine extends Engine[Any] {
     }
   }
 
+  /** Return the **Trino `EXPLAIN` plan** (the optimized physical
+    * plan with cost estimates) as a String. Mirrors the original
+    * semanticdf Spark adapter's `SemanticTable.explain(spark)`
+    * behavior: calls the engine, returns the plan as text.
+    *
+    * ==Why this mirrors the semanticdf original==
+    *
+    * Per user constraint *"behavior must mirror our semanticdf
+    * original"*: the original Spark adapter has two explain
+    * methods (`explain()` for pure op-tree, `explain(spark)` for
+    * Spark's physical plan). Both return `String`. This method
+    * is the Trino equivalent of `explain(spark)` — it goes through
+    * the real Trino cluster's planner to get the
+    * optimizer-aware plan.
+    *
+    * ==Why `EXPLAIN` (default FORMAT TEXT) not `(FORMAT JSON)`==
+    *
+    * The original semanticdf library returns plain-text plan
+    * output (via Spark's `ExplainMode.fromString("simple")`).
+    * Trino's default `EXPLAIN` format is plain-text — same
+    * shape as Spark's simple mode. `EXPLAIN (FORMAT JSON)` would
+    * return a structured JSON for programmatic parsing — but
+    * the user constraint is "mirror original", which is plain
+    * text. JSON is available via separate methods in future PRs.
+    *
+    * ==Why a NEW method (not modifying `explain`)==
+    *
+    * Per karpathy §3 ("don't change what isn't asked"): the
+    * existing `explain(model, ctx)` stays a pure compile-time
+    * operation (no IO, no connection needed — used for the MCP
+    * "list_models" / "describe_model" flow that doesn't actually
+    * need a cluster). `explainPlan` is the *cluster-aware*
+    * variant. Splitting them keeps each path simple.
+    *
+    * ==Per scala-data-driven-refactor==
+    *
+    * - **TYPED**: returns `Either[EngineError, String]` — errors
+    *   are explicit (no `try`/`catch` leaks).
+    * - **DATA-DRIVEN**: same input (model + ctx) → same output
+    *   string (deterministic).
+    * - **DATA-ORIENTED**: the engine's `compile` produces the
+    *   input; this method consumes it. No shared mutable state.
+    *
+    * ==Requires a connection factory==
+    *
+    * Like `execute`, this method calls `connectionFactory()` to
+    * borrow a JDBC connection. Configure `withConnectionFactory`
+    * (or `TrinoConnectionPoolFactory.hikari(...)`) before calling. */
+  def explainPlan(model: Model, ctx: EngineContext): Either[EngineError, String] = {
+    compile(model, ctx).flatMap { plan =>
+      val psql = plan.native.asInstanceOf[ParameterizedSql]
+      // Trino's default EXPLAIN format is plain-text (analogous to
+      // Spark's ExplainMode.simple). We append the prefix and let
+      // Trino return rows whose first column is the plan text.
+      val explainSql = ParameterizedSql(
+        sql        = s"EXPLAIN ${psql.sql}",
+        parameters = psql.parameters,
+      )
+      execute(
+        ExecutionPlan(engine = plan.engine, native = explainSql),
+        ctx,
+      ).map { raw =>
+        val result = asTrinoResult(raw)
+        // EXPLAIN returns rows where column[0] is a VARCHAR
+        // containing one line of the plan; concatenate into
+        // a single String (matching Spark's behavior).
+        result.rows.map(_.head).collect {
+          case io.semanticdf.core.expr.LiteralValue.StringValue(line) => line
+        }.mkString("\n")
+      }
+    }
+  }
+
   /** Return up to `n` rows from executing `model`. Mirrors the
     * original Spark library's `SemanticTable.preview(n)` behavior:
     * `compile(model) -> append "LIMIT n" -> execute`.
