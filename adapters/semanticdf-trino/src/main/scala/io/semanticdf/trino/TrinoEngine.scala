@@ -90,16 +90,27 @@ class TrinoEngine extends Engine[Any] {
   )
 
   /** Compile a portable [[Model]] to a Trino-specific plan.
-    * Deferred until the full `Model` → Trino SQL pipeline is
-    * built (the Model → RelOp lowering + the RelOp → Trino SQL
-    * emit). The first piece (the SqlLowerer for predicates) is
-    * implemented and tested separately at `SqlLowerer.lower`; this
-    * method will call it once the Model-side lowering is built. */
-  def compile(model: Model, ctx: EngineContext): Either[EngineError, Any] =
-    Left(EngineError.FeatureDeferred(
-      feature = "trino.compile.full-model",
-      release = "v0.5.0",
+    * Delegates to `TrinoQueryCompiler.compile`, which walks the
+    * model and emits Trino SQL. The returned plan is an
+    * `ExecutionPlan[Any]` where the `native` field is the SQL
+    * string.
+    *
+    * The compiler is engine-portable behavior: it does not
+    * connect to Trino, does not execute the query. It just
+    * produces a SQL string from the model's declarative shape.
+    * Connection + execution is the execute() step (still
+    * FeatureDeferred). */
+  def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
+    val sql = TrinoQueryCompiler.instance.compile(model)
+    Right(ExecutionPlan(
+      engine = EngineIdentity(
+        name                 = identity,
+        nativeVersion        = "0.286",
+        engineAdapterVersion = "0.2.4",
+      ),
+      native = sql,
     ))
+  }
 
   /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.
     * Deferred — requires the Model → Trino SQL pipeline (to

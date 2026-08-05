@@ -95,11 +95,21 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
 
   // -- compile / execute / explain — deferred --
 
-  test("compile returns Left(EngineError.FeatureDeferred) for the placeholder path") {
+  test("compile returns Right(ExecutionPlan) with a SQL string") {
     val m = sampleModel
     val result = TrinoEngine.instance.compile(m, EngineContext.defaultContext)
-    result.isLeft shouldBe true
-    result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
+    result.isRight shouldBe true
+    val plan = result.toOption.get
+    plan shouldBe a [ExecutionPlan[?]]
+    plan.native shouldBe a [String]
+  }
+
+  test("compile result includes the source table in the FROM clause") {
+    val m = sampleModel  // source = SourceRef.ByName(None, Some("public"), "orders")
+    val result = TrinoEngine.instance.compile(m, EngineContext.defaultContext)
+    val plan = result.toOption.get
+    val sql = plan.native.asInstanceOf[String]
+    sql should include ("""FROM "public"."orders"""")
   }
 
   test("execute returns Left(EngineError.FeatureDeferred) for the placeholder path") {
@@ -117,13 +127,6 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     val result = TrinoEngine.instance.explain(m, EngineContext.defaultContext)
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
-  }
-
-  test("compile result includes a roadmap pointer in the FeatureDeferred error") {
-    val result = TrinoEngine.instance.compile(sampleModel, EngineContext.defaultContext)
-    val err = result.left.toOption.get.asInstanceOf[EngineError.FeatureDeferred]
-    err.feature should include ("trino")
-    err.release should not be empty
   }
 
   // -- boundary contract: zero Spark imports --
