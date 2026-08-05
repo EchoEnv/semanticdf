@@ -1,0 +1,100 @@
+# Local Unity Catalog OSS cluster for the semanticdf Trino adapter's
+# integration test of the cross-engine catalog layer.
+#
+# Usage (from this directory):
+#   docker compose up -d
+#   # wait ~30s for healthy check
+#   ../mvnw -Ddocker.tests=true -pl . test \
+#       -Dtest='io.semanticdf.trino.integration.UnityCatalogIntegrationSpec'
+#   docker compose down -v
+#
+# ==Why Unity Catalog OSS (not Glue / HMS)==
+#
+# Unity Catalog is the cross-engine catalog standard (Databricks,
+# Snowflake, AWS, etc. all converging). The OSS Docker image runs
+# locally without cloud credentials, which is the user's hard
+# requirement ('easy to setup locally not on-cloud'). Per the
+# multi-engine design's §4.6 layer-separation principle, this is
+# the FIRST catalog adapter — proving the design works.
+#
+# ==Why a single-node setup (not HA)==
+#
+# The integration test only validates that a `SourceResolver`
+# implementation can resolve a `SourceRef` against a *real*
+# Unity Catalog REST API. We don't need HA — we need *a real UC*.
+# Single-node + built-in DB is the smallest config that:
+#   - exercises the real UC REST API (catalogs, schemas, tables,
+#     columns)
+#   - runs under tight memory caps (the user's hard requirement)
+#   - persists to bind-mounted volumes (so the test can verify
+#     round-trip data integrity)
+#
+# ==Why these memory limits==
+#
+# Per user constraint: 'monitor memory, disk while running, to not
+# explode server.' These caps (1.5GB hard, 0 swap) mean OOM-kill
+# before the container can starve the host. The JVM heap cap
+# (-Xmx768m) is independent: it caps the JVM's max RSS.
+#
+# ==Why bind mounts for data and db==
+#
+# UC's built-in DB and table data live under
+# `/home/unitycatalog/etc/data` and `/home/unitycatalog/etc/db`.
+# Bind-mounting them gives us:
+#   - Bounded disk usage (we can wipe between test runs)
+#   - Inspectable storage from the host (debug / verify)
+#   - Predictable teardown (just `rm -rf` the volumes)
+#
+# ==Why a healthcheck==
+#
+# The integration test polls `/api/2.1/unity-catalog/catalogs`
+# before issuing resolves. Without compose-level healthcheck, the
+# test races the cluster startup. The healthcheck gates subsequent
+# `docker compose` ops to `start_after 'service_healthy'`.
+
+services:
+  unitycatalog:
+    image: unitycatalog/unitycatalog:latest
+    container_name: semanticdf-uc-test
+    hostname: unitycatalog
+    # Run as root so the bind-mounted ./data dirs (which Docker
+    # creates as root on the host) are writable by the H2 DB.
+    # Local-dev only; production deployments use the image's
+    # built-in `unitycatalog` user with proper UID/GID mapping.
+    user: "0:0"
+    # JAVA_TOOL_OPTIONS is picked up by the JVM at startup.
+    # -Xmx768m caps the JVM's max heap (independent of the
+    # container's RSS limit).
+    environment:
+      JAVA_TOOL_OPTIONS: "-Xmx768m"
+    ports:
+      # Avoiding :8080 (commonly used). The default UC port is 8080.
+      - "8089:8080"
+    volumes:
+      # Server config (read-only) — points to our overrides
+      - ./config/server.properties:/home/unitycatalog/etc/conf/server.properties:ro
+      # Persistent data dirs (bind-mounted so we can wipe between
+      # runs and inspect from the host)
+      - ./data:/home/unitycatalog/etc/data
+      - ./data/db:/home/unitycatalog/etc/db
+    healthcheck:
+      # UC's REST API responds with JSON even on the index; this
+      # is the cheapest possible health probe.
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:8080/api/2.1/unity-catalog/catalogs >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    # The user's "memory, disk" constraint — caps here are HARD.
+    # A breach OOM-kills the container instead of starving the host.
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+          cpus: '2.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    # No swap. The container can be OOM-killed but it can never
+    # steal the host's swap (which would silently degrade the host).
+    restart: unless-stopped

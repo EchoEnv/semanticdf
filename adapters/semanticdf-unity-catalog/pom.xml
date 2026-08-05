@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-unity-catalog — Unity Catalog adapter for the
+  semanticdf library.
+
+  This module is the FIRST pure catalog adapter per the
+  multi-engine design's §4.6 layer-separation principle. It
+  implements the engine-portable `SourceResolver` contract
+  against Unity Catalog's REST API. ANY engine adapter
+  (semanticdf-trino, semanticdf-spark, semanticdf-duckdb, ...)
+  can depend on this module to consume Unity Catalog
+  metadata.
+
+  ==Why this module is separate from any engine adapter==
+
+  Per the design doc §4.6.3 ("For a pure catalog adapter:
+  Only a SourceResolver impl"): a pure catalog adapter
+  ships ONE artifact — a `SourceResolver` impl. It does NOT
+  ship an engine, a JDBC driver, or any query-execution
+  capability. Colocating catalog adapters with engine
+  adapters would force every engine adapter that adopts the
+  catalog to take on the catalog's transport dependencies
+  (e.g. UC's REST client) even if they don't use them.
+
+  ==Why no Trino JDBC / no HikariCP==
+
+  This module's job is metadata, not query execution.
+  The JDK's `java.net.http.HttpClient` is sufficient for
+  Unity Catalog's read-only REST API. We deliberately keep
+  this module's dependency footprint minimal so future
+  engine adapters can `depend on` it cheaply.
+
+  ==What this module DOES==
+
+  - `UnityCatalogClient` trait (boundary for UC REST calls)
+  - `HttpUnityCatalogClient` (concrete impl via JDK HttpClient)
+  - `UnityCatalogSourceResolver` (SourceResolver impl using UC)
+  - Unit tests (`UnityCatalogSourceResolverSpec`)
+  - Test fixture (`FakeUnityCatalogClient`)
+
+  ==What this module does NOT do==
+
+  - No engine. No query execution. No JDBC.
+  - No MCP registry integration (the consuming engine does that).
+  - No Spark / Trino / DuckDB dependency. Pure catalog.
+
+  ==Boundary contract==
+
+  This module's `pom.xml` has zero `org.apache.spark.*` deps.
+  Verifiable by:
+  `grep -r 'org.apache.spark' adapters/semanticdf-unity-catalog/`
+
+  ==Library version==
+
+  0.2.4 — same as the parent and core/spark. No bump in this
+  PR (no user-facing change; pure relocation + new module).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.2.4</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-unity-catalog_2.13</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-unity-catalog</name>
+  <description>
+    Unity Catalog adapter for the semanticdf library. The
+    FIRST pure catalog adapter per the multi-engine design's
+    §4.6 layer-separation principle. Implements the engine-
+    portable SourceResolver contract against Unity Catalog's
+    REST API. Any engine adapter can depend on this module
+    to consume Unity Catalog metadata.
+  </description>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (SourceResolver, ResolvedSource, etc.) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_2.13</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
