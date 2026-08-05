@@ -120,7 +120,7 @@ The remaining work is **performance + infrastructure**:
 |---|---|---|
 | 1 | **Real Trino cluster integration test** (the *decision gate*) | ✅ Available via Docker (PR #384) |
 | 2 | **Connection pooling** (HikariCP / Apache DBCP / Trino's pool) | Real cluster |
-| 3 | **Real JDBC Trino driver** — `JdbcTrinoConnection` impl using `TrinoResultDecoder` | Real cluster |
+| 3 | **Real JDBC Trino driver** — `JdbcTrinoConnection` impl | ✅ Available (PR #386) |
 | 4 | **Full Trino `EXPLAIN (FORMAT JSON)`** — cost estimates + partition pruning | Real cluster |
 | 5 | **`executeSql(sql, params, ctx)`** — raw-SQL escape hatch (parked) | Discussion |
 
@@ -175,6 +175,24 @@ additions with no user-facing change.
 The Trino JDBC driver is Java-only; the Scala binding uses Scala 2.13 to
 match the rest of the project (per `scala.version=2.13.18` in the
 parent pom). Cross-compilation is not needed.
+
+## Using the adapter against a real Trino cluster
+
+```scala
+import io.semanticdf.core.engine.{Engine, EngineContext}
+import io.semanticdf.trino.{JdbcTrinoConnection, TrinoEngine}
+
+val engine: Engine[Any] =
+  TrinoEngine.instance.withConnectionFactory(
+    () => new JdbcTrinoConnection("jdbc:trino://coordinator.example.com:8080"),
+  )
+val plan   = engine.compile(model, EngineContext.defaultContext).toOption.get
+val result = engine.execute(plan, EngineContext.defaultContext).toOption.get
+```
+
+Each `execute()` opens a fresh JDBC connection (closed via `finally`).
+Production users wanting shared connections should wrap
+`JdbcTrinoConnection` in a pool (HikariCP — future PR).
 
 ## See also
 
