@@ -88,6 +88,17 @@
       <version>${project.parent.version}</version>
     </dependency>
 
+    <!-- Unity Catalog adapter (pure catalog layer) — for the
+         cross-engine integration test that composes TrinoEngine
+         with UnityCatalogSourceResolver. See design doc §4.6
+         layer-separation principle. -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-unity-catalog_2.13</artifactId>
+      <version>${project.parent.version}</version>
+      <scope>test</scope>
+    </dependency>
+
     <!-- Trino JDBC driver — for ad-hoc query execution.
          (Future: add io.trino:trino-client for advanced features.) -->
     <dependency>
