@@ -1,7 +1,9 @@
 package io.semanticdf.trino
 
+import java.time.Instant
+
 import io.semanticdf.core.expr.{Expr, LiteralValue}
-import io.semanticdf.core.model.{Model, SourceRef}
+import io.semanticdf.core.model.{Model, RollupFreshnessSpec, RollupSpec, SourceRef}
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
 
 /** Engine-specific Trino SQL compiler — Phase 2 first end-to-end
@@ -60,7 +62,8 @@ class TrinoQueryCompiler {
     *
     * The output is a single SQL statement composed of:
     *   - SELECT clause (dimensions + measures + calculated measures)
-    *   - FROM clause (source from `model.source` + chained JOINs)
+    *   - FROM clause (source from `model.source` + chained JOINs,
+    *     possibly substituted by a rollup source)
     *   - WHERE clause (filters composed with AND)
     *   - GROUP BY clause (all dimensions, if there are any aggregates)
     *
@@ -85,18 +88,48 @@ class TrinoQueryCompiler {
     * declarative record of that join; the compiler receives the
     * lookup map at compile time.
     *
-    * @param model        the portable model to compile
-    * @param modelSources the resolution of right-model names to
-    *                     source refs; empty map skips JOIN emission
-    *                     for unresolvable joins
+    * ==Why `rollupSources` and `rollupWatermarks` are parameters==
+    *
+    * `RollupSpec` is a per-model declaration that "this rollup
+    * covers these dimensions + measures". The compiler needs the
+    * rollup's `SourceRef` (the rollup's table) and the watermark
+    * (when it was last refreshed) to honor the `RollupFreshnessSpec`
+    * policy. The caller passes these via the two maps at compile
+    * time. The engine doesn't hold a rollup registry yet — that
+    * lands in a future PR.
+    *
+    * @param model            the portable model to compile
+    * @param modelSources     the resolution of right-model names to
+    *                         source refs; empty map skips JOIN emission
+    *                         for unresolvable joins
+    * @param rollupSources    rollup name → rollup table's SourceRef;
+    *                         empty map disables rollup selection
+    * @param rollupWatermarks rollup name → last-refresh Instant;
+    *                         empty map makes `Track` rollups stale
+    * @param now              the current time (for the freshness
+    *                         comparison); defaults to `Instant.now()`
     * @return Trino-compatible SQL string */
-  def compile(model: Model, modelSources: Map[String, SourceRef] = Map.empty): String = {
+  def compile(
+      model:            Model,
+      modelSources:     Map[String, SourceRef]   = Map.empty,
+      rollupSources:    Map[String, SourceRef]   = Map.empty,
+      rollupWatermarks: Map[String, Instant]     = Map.empty,
+      now:              Instant                  = Instant.now(),
+  ): String = {
+    val selectedRollup = selectRollup(model, rollupSources, rollupWatermarks, now)
+    val (effectiveSource, rollupComment) = selectedRollup match {
+      case Some((rollup, rollupSource)) =>
+        (rollupSource, Some(s"-- using rollup '${rollup.name}'"))
+      case None =>
+        (model.source, None)
+    }
     val selectCols = renderSelectColumns(model)
-    val fromClause = renderFrom(model, modelSources)
+    val fromClause = renderFromFromSource(model, effectiveSource, modelSources)
     val whereClause = renderWhere(model.filters)
     val groupByClause = renderGroupBy(model)
 
     val parts = List(
+      rollupComment,
       Some(s"SELECT ${selectCols.mkString(", ")}"),
       Some(s"FROM $fromClause"),
       whereClause.map(w => s"WHERE $w"),
@@ -184,8 +217,19 @@ class TrinoQueryCompiler {
     * compiler should never have them in the main source. We emit
     * placeholders defensively for unmatched cases. */
   private def renderFrom(model: Model, modelSources: Map[String, SourceRef]): String = {
-    val mainSource = renderSource(model.source)
-    val mainAlias = aliasFor(model.source)
+    val effectiveSource = model.source  // no rollup selection at this path
+    renderFromFromSource(model, effectiveSource, modelSources)
+  }
+
+  /** Render the FROM clause from an explicit source (used when
+    * a rollup substitutes the model's base source). */
+  private def renderFromFromSource(
+      model:        Model,
+      source:       SourceRef,
+      modelSources: Map[String, SourceRef],
+  ): String = {
+    val mainSource = renderSource(source)
+    val mainAlias = aliasFor(source)
 
     val joins = model.joins.map { js =>
       modelSources.get(js.rightModel) match {
@@ -443,6 +487,72 @@ class TrinoQueryCompiler {
     * double quotes are escaped by doubling. */
   private def quoteName(name: String): String =
     s""""${name.replace("\"", "\"\"")}""""
+
+  // -- Rollup selection --
+
+  /** Select a rollup that covers the model's query and is fresh
+    * per its `RollupFreshnessSpec`.
+    *
+    * Selection rules:
+    *   1. The rollup's `dimensions` must include every model
+    *      dimension NAME (the rollup is at least as coarse as the
+    *      query).
+    *   2. The rollup's `measures` must include every model
+    *      measure NAME (the rollup can answer the query's
+    *      aggregates).
+    *   3. The rollup's `freshness` must permit use:
+    *      - `NoTracking` → always fresh
+    *      - `Track(maxStaleness, onStale)` → fresh iff
+    *        `now - maxStaleness <= watermark[rollup.name]`.
+    *        If stale, follow `onStale` (FallBackToBase → skip
+    *        this rollup; Error → skip and emit a placeholder
+    *        at compile time).
+    *
+    * @return `Some((rollup, source))` for the first covering
+    *         fresh rollup; `None` if no rollup covers the query
+    *         or all covering rollups are stale. */
+  private def selectRollup(
+      model:            Model,
+      rollupSources:    Map[String, SourceRef],
+      rollupWatermarks: Map[String, Instant],
+      now:              Instant,
+  ): Option[(RollupSpec, SourceRef)] = {
+    val queryDimNames  = model.dimensions.map(_.name).toSet
+    val queryMeasNames = model.measures.map(_.name).toSet
+
+    model.rollups.iterator.flatMap { rollup =>
+      // coverage checks
+      val coversDims  = queryDimNames.forall(rollup.dimensions.contains)
+      val coversMeas  = queryMeasNames.forall(m => rollup.measures.exists(_.name == m))
+      if (!coversDims || !coversMeas) None
+      else if (isFresh(rollup, rollupWatermarks, now))
+        rollupSources.get(rollup.name).map(source => (rollup, source))
+      else None
+    }.toList.headOption
+  }
+
+  /** Check if a rollup is fresh per its `RollupFreshnessSpec`.
+    *
+    * - `NoTracking` → always fresh
+    * - `Track(maxStaleness, onStale)` → fresh iff the watermark
+    *   is within `maxStaleness` of `now`. If the watermark is
+    *   missing or stale, the rollup is NOT considered fresh
+    *   (the caller can fall back to the base source per `onStale`).
+    *
+    * Per scala-data-driven-refactor §3 (sealed ADT over Map):
+    * the 2 `RollupFreshnessSpec` cases are exhaustively matched. */
+  private def isFresh(
+      rollup:           RollupSpec,
+      rollupWatermarks: Map[String, Instant],
+      now:              Instant,
+  ): Boolean = rollup.freshness match {
+    case RollupFreshnessSpec.NoTracking => true
+    case RollupFreshnessSpec.Track(maxStaleness, _) =>
+      rollupWatermarks.get(rollup.name) match {
+        case Some(watermark) => watermark.isAfter(now.minus(maxStaleness))
+        case None            => false  // no watermark → can't verify freshness → stale
+      }
+  }
 }
 
 object TrinoQueryCompiler {
