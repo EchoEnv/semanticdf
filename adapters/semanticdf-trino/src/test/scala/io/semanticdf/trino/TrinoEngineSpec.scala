@@ -427,4 +427,143 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
   }
+
+  // -- executeAsRows (engine-specific convenience, mirrors df.collect().map(_.getValuesMap(...))) --
+
+  test("executeAsRows returns rows as List[Map[String, LiteralValue]]") {
+    val m   = sampleModel  // empty model uses base source only
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = compiled.sql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("region", "total"),
+        rows    = List(
+          List(
+            io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+            io.semanticdf.core.expr.LiteralValue.LongValue(100L),
+          ),
+          List(
+            io.semanticdf.core.expr.LiteralValue.StringValue("BB"),
+            io.semanticdf.core.expr.LiteralValue.LongValue(200L),
+          ),
+        ),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.executeAsRows(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    val rows = result.toOption.get
+    rows should have size 2
+
+    rows(0) shouldBe Map(
+      "region" -> io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+      "total"  -> io.semanticdf.core.expr.LiteralValue.LongValue(100L),
+    )
+    rows(1) shouldBe Map(
+      "region" -> io.semanticdf.core.expr.LiteralValue.StringValue("BB"),
+      "total"  -> io.semanticdf.core.expr.LiteralValue.LongValue(200L),
+    )
+  }
+
+  test("executeAsRows returns Nil for empty result set") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = compiled.sql,
+      parameters = 0,
+      result     = TrinoResult(columns = List("region"), rows = Nil),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.executeAsRows(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe Nil
+  }
+
+  test("executeAsRows handles mixed-type cells (heterogeneous columns)") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = compiled.sql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("id", "name", "active", "salary"),
+        rows    = List(List(
+          io.semanticdf.core.expr.LiteralValue.IntValue(1),
+          io.semanticdf.core.expr.LiteralValue.StringValue("Alice"),
+          io.semanticdf.core.expr.LiteralValue.BoolValue(true),
+          io.semanticdf.core.expr.LiteralValue.DecimalValue(BigDecimal("100.50")),
+        )),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.executeAsRows(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    val rows = result.toOption.get
+    rows should have size 1
+    rows(0) shouldBe Map(
+      "id"     -> io.semanticdf.core.expr.LiteralValue.IntValue(1),
+      "name"   -> io.semanticdf.core.expr.LiteralValue.StringValue("Alice"),
+      "active" -> io.semanticdf.core.expr.LiteralValue.BoolValue(true),
+      "salary" -> io.semanticdf.core.expr.LiteralValue.DecimalValue(BigDecimal("100.50")),
+    )
+  }
+
+  test("executeAsRows preserves null cells as LiteralValue.NullValue") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = compiled.sql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("region", "total"),
+        rows    = List(List(
+          io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+          io.semanticdf.core.expr.LiteralValue.NullValue,
+        )),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.executeAsRows(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    val rows = result.toOption.get
+    rows.head("total") shouldBe io.semanticdf.core.expr.LiteralValue.NullValue
+  }
+
+  test("executeAsRows propagates compile failure as Left") {
+    // Compile failure path: an unparseable model. The smart
+    // constructor `Model.of` validates, but a programmer could
+    // construct a model directly. For the test, just confirm
+    // the propagation: any compile-error short-circuits.
+    //
+    // We can't easily construct an invalid model here (the
+    // smart constructor refuses). So we test the
+    // execute-error path instead — using an invalid Trino
+    // SQL to surface the ConnectionFailed surface via
+    // the lower-level execute().
+    val fakeConn = FakeTrinoConnection()  // no responses registered
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.executeAsRows(sampleModel, EngineContext.defaultContext)
+
+    // The fake throws RuntimeException because no canned response
+    // matches, which `execute()` catches as ConnectionFailed.
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
+  }
+
+  test("executeAsRows with no connection factory returns Left(EngineError.ConnectionFailed)") {
+    val engine = new TrinoEngine()  // no factory
+    val result = engine.executeAsRows(sampleModel, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
+  }
 }

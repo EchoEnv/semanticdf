@@ -364,6 +364,51 @@ class TrinoEngine extends Engine[Any] {
       }
     }
   }
+
+  /** Compile + execute `model` and return rows as
+    * `List[Map[String, LiteralValue]]` — a consumer-friendly shape
+    * that mirrors Spark's `df.collect().map(_.getValuesMap(...))`
+    * pattern.
+    *
+    * ==Why this exists (per user constraint)==
+    *
+    * User constraint: 'behavior must mirror original Spark library.'
+    * Spark consumers typically iterate `df.collect()` rows as
+    * `Map[String, Any]` for JSON serialization, MCP responses,
+    * or simple logging. The Trino equivalent is the same shape
+    * but with `LiteralValue` cells (portable, type-tagged).
+    *
+    * ==Why not on the Engine trait==
+    *
+    * Per scala-data-driven-refactor §1 + karpathy §3: this is
+    * engine-specific consumer convenience. Spark's equivalent
+    * would be `execute + collect + map(_.getValuesMap)`.
+    *
+    * ==Why short-circuits on compile/execute failures==
+    *
+    * If `compile` returns `Left`, no execution happens. If
+    * `execute` returns `Left`, no transformation happens. The
+    * `Either` chain preserves both error types without losing
+    * detail.
+    *
+    * ==Why per-row map (not just TrinoResult)==
+    *
+    * `TrinoResult` is a column-oriented result (columns list +
+    * parallel row lists). The `List[Map]` shape is
+    * row-oriented — each row carries its own column names. This
+    * matters for consumers that iterate rows in isolation (e.g.
+    * transforming each row to JSON independently). */
+  def executeAsRows(
+      model: Model,
+      ctx:   EngineContext,
+  ): Either[EngineError, List[Map[String, io.semanticdf.core.expr.LiteralValue]]] = {
+    compile(model, ctx).flatMap { plan =>
+      execute(plan, ctx).map { raw =>
+        val result = asTrinoResult(raw)
+        result.rows.map(row => result.columns.zip(row).toMap)
+      }
+    }
+  }
 }
 
 object TrinoEngine {
