@@ -101,7 +101,12 @@ class TrinoEngine extends Engine[Any] {
     * Connection + execution is the execute() step (still
     * FeatureDeferred). */
   def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
-    val sql = TrinoQueryCompiler.instance.compile(model)
+    // For v1: the engine doesn't yet hold a model registry, so
+    // joins are NOT resolved at the engine level. The caller can
+    // call `TrinoQueryCompiler.instance.compile(model, registry)`
+    // directly to provide a model registry. A future PR will add
+    // a `modelRegistry` field to the engine.
+    val sql = TrinoQueryCompiler.instance.compile(model, Map.empty)
     Right(ExecutionPlan(
       engine = EngineIdentity(
         name                 = identity,

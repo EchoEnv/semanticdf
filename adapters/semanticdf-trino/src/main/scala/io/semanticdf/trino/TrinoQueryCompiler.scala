@@ -60,7 +60,7 @@ class TrinoQueryCompiler {
     *
     * The output is a single SQL statement composed of:
     *   - SELECT clause (dimensions + measures + calculated measures)
-    *   - FROM clause (source from `model.source`)
+    *   - FROM clause (source from `model.source` + chained JOINs)
     *   - WHERE clause (filters composed with AND)
     *   - GROUP BY clause (all dimensions, if there are any aggregates)
     *
@@ -69,11 +69,30 @@ class TrinoQueryCompiler {
     * delimiter). String values are single-quoted; embedded single
     * quotes are escaped by doubling.
     *
-    * @param model the portable model to compile
+    * ==Why `modelSources` is a parameter (vs. a class field)==
+    *
+    * `JoinSpec.rightModel: String` references another model by name.
+    * The compiler needs `SourceRef`s for the right side of each
+    * join to emit the JOIN clause. The caller passes these via
+    * `modelSources` at compile time. For v1, the engine passes an
+    * empty map (no joins resolved at the engine level — the caller
+    * is expected to resolve them). This sets up the next-step
+    * Phase 2 PR: a model registry that the engine can hold.
+    *
+    * Mirrors the original Spark API pattern: `join_one(other, on)`,
+    * `join_many(other, on)`, `join_cross(other)` — the user provides
+    * the OTHER model up front. The portable `JoinSpec` is the
+    * declarative record of that join; the compiler receives the
+    * lookup map at compile time.
+    *
+    * @param model        the portable model to compile
+    * @param modelSources the resolution of right-model names to
+    *                     source refs; empty map skips JOIN emission
+    *                     for unresolvable joins
     * @return Trino-compatible SQL string */
-  def compile(model: Model): String = {
+  def compile(model: Model, modelSources: Map[String, SourceRef] = Map.empty): String = {
     val selectCols = renderSelectColumns(model)
-    val fromClause = renderFrom(model.source)
+    val fromClause = renderFrom(model, modelSources)
     val whereClause = renderWhere(model.filters)
     val groupByClause = renderGroupBy(model)
 
@@ -117,29 +136,142 @@ class TrinoQueryCompiler {
 
   // -- FROM clause --
 
-  /** Render the FROM clause from the model's source reference.
-    * Currently handles `SourceRef.ByName` only — `ByPath` and
-    * `ByProvider` are rejected by `TrinoSourceResolver` (PR #367),
-    * so a model reaching this compiler should never have them.
-    * (The `ModelValidator` doesn't validate the source shape; the
-    * resolver does.) Defensive runtime: emit a placeholder that
-    * surfaces the issue in the SQL rather than a typed error here. */
-  private def renderFrom(source: SourceRef): String = source match {
+  /** Render the FROM clause from the model's source reference,
+    * chained with any `JoinSpec`s declared on the model.
+    *
+    * The main source is rendered as `FROM <source> AS <alias>`.
+    * Each join's right side is rendered as `<kind> JOIN <right> AS
+    * <alias> ON <condition>`. The aliases are derived from the
+    * table name (the last component of the dotted name) for
+    * readability; column references in the JOIN ON clause use
+    * these aliases to disambiguate.
+    *
+    * Join keys are pairs of (leftKey, rightKey) — the left key
+    * is a column name on the MAIN source (or on the previous join's
+    * right side in a chain, but for v1 we only support single-level
+    * joins), the right key is a column name on the joined-to
+    * source. Multi-key joins are emitted as
+    * `<leftKey1> = <rightKey1> AND <leftKey2> = <rightKey2>`.
+    *
+    * ==Why render the alias==
+    *
+    * For unqualified column names in the JOIN ON clause, the SQL
+    * is ambiguous when both sides have a column with the same
+    * name. The alias-qualified form (`orders"."id" = "customers"."id"`)
+    * is unambiguous and survives multi-table joins.
+    *
+    * ==Why `modelSources` is a parameter (vs. a class field)==
+    *
+    * `JoinSpec.rightModel: String` references another model by name.
+    * The compiler needs `SourceRef`s for the right side of each
+    * join to emit the JOIN clause. The caller passes these via
+    * `modelSources` at compile time. For v1, the engine passes an
+    * empty map (no joins resolved at the engine level — the caller
+    * is expected to resolve them).
+    *
+    * ==Why a placeholder for unresolvable joins==
+    *
+    * If a join's `rightModel` isn't in `modelSources`, the
+    * compiler emits a placeholder that surfaces the issue in the
+    * SQL rather than a typed error here. This is consistent with
+    * the existing `ByPath` / `ByProvider` behavior: the compiler
+    * surfaces incompatibilities in the SQL output.
+    *
+    * ==Why `ByPath` / `ByProvider` defensive placeholders==
+    *
+    * `SourceRef.ByPath` and `SourceRef.ByProvider` are rejected
+    * by `TrinoSourceResolver` (PR #367), so a model reaching this
+    * compiler should never have them in the main source. We emit
+    * placeholders defensively for unmatched cases. */
+  private def renderFrom(model: Model, modelSources: Map[String, SourceRef]): String = {
+    val mainSource = renderSource(model.source)
+    val mainAlias = aliasFor(model.source)
+
+    val joins = model.joins.map { js =>
+      modelSources.get(js.rightModel) match {
+        case Some(rightSource) =>
+          val rightIdent = renderSource(rightSource)
+          val rightAlias = aliasFor(rightSource)
+          val joinKindSql = renderJoinKind(js.kind)
+          val onClause = renderJoinKeys(js, mainAlias, rightAlias)
+          // Cross join has no ON clause (per SQL standard).
+          // Emitting `ON` would be a syntax error.
+          val onSuffix = if (js.kind == io.semanticdf.core.rel.JoinKind.Cross || onClause.isEmpty) ""
+                         else s" ON $onClause"
+          s"$joinKindSql $rightIdent AS ${quoteName(rightAlias)}$onSuffix"
+        case None =>
+          // Unresolvable rightModel — emit a placeholder so the
+          // resulting SQL makes the issue visible rather than a
+          // generic "table not found" downstream.
+          s"<unresolved-join: rightModel='${js.rightModel}' not in modelSources>"
+      }
+    }
+
+    val main = s"$mainSource AS ${quoteName(mainAlias)}"
+    if (joins.isEmpty) main
+    else main + " " + joins.mkString(" ")
+  }
+
+  /** Render a single source reference (independent of join context).
+    * Returns the dotted table name for `ByName`, or a placeholder
+    * for incompatible shapes. */
+  private def renderSource(source: SourceRef): String = source match {
     case SourceRef.ByName(catalog, namespace, table) =>
       val parts = List(catalog, namespace, Some(table)).flatten
       parts.map(quoteName).mkString(".")
     case SourceRef.ByPath(format, path, _) =>
-      // Should never reach here — the resolver rejects ByPath.
-      // Emit a placeholder that surfaces the error in the SQL.
       s"<error: path-based source not supported by Trino: format=$format, path=$path>"
     case SourceRef.ByProvider(provider) =>
-      // Should never reach here — the resolver rejects ByProvider.
       val providerName = provider match {
         case io.semanticdf.core.model.ProviderRef.DataFrameSource(name, _) => name
         case io.semanticdf.core.model.ProviderRef.TableResolver(name)       => name
       }
       s"<error: ProviderRef not supported by Trino: provider=$providerName>"
   }
+
+  /** Derive a SQL alias for a source. For `ByName`, returns the
+    * table name (the last component). For `ByPath` / `ByProvider`,
+    * returns a placeholder token. The alias is used to qualify
+    * column references in the JOIN ON clause. */
+  private def aliasFor(source: SourceRef): String = source match {
+    case SourceRef.ByName(_, _, table) => table
+    case SourceRef.ByPath(_, path, _)  => path.split('/').lastOption.getOrElse("path")
+    case SourceRef.ByProvider(provider) => provider match {
+      case io.semanticdf.core.model.ProviderRef.DataFrameSource(name, _) => name
+      case io.semanticdf.core.model.ProviderRef.TableResolver(name)       => name
+    }
+  }
+
+  /** Render the join kind as a SQL keyword. The 5 cases mirror the
+    * original Spark API:
+    *   - Inner / one-to-one → `INNER JOIN`
+    *   - Left / one-to-many → `LEFT JOIN`
+    *   - Right / symmetric → `RIGHT JOIN`
+    *   - Full → `FULL JOIN`
+    *   - Cross → `CROSS JOIN`
+    *
+    * Per scala-data-driven-refactor §3 (sealed ADT over Map):
+    * the 5 `JoinKind` cases are exhaustively matched. Adding a
+    * new case would require a compile error here. */
+  private def renderJoinKind(kind: io.semanticdf.core.rel.JoinKind): String = kind match {
+    case io.semanticdf.core.rel.JoinKind.Inner => "INNER JOIN"
+    case io.semanticdf.core.rel.JoinKind.Left  => "LEFT JOIN"
+    case io.semanticdf.core.rel.JoinKind.Right => "RIGHT JOIN"
+    case io.semanticdf.core.rel.JoinKind.Full  => "FULL JOIN"
+    case io.semanticdf.core.rel.JoinKind.Cross => "CROSS JOIN"
+  }
+
+  /** Render the JOIN ON clause from a `JoinSpec.keys: List[(String, String)]`.
+    * Multi-key joins are emitted with AND between each pair.
+    * Each key is qualified with the alias (left key with the
+    * main alias, right key with the right alias). */
+  private def renderJoinKeys(
+      js:        io.semanticdf.core.model.JoinSpec,
+      leftAlias: String,
+      rightAlias: String,
+  ): String = js.keys.map { case (lk, rk) =>
+    s"""${quoteName(leftAlias)}.${quoteName(lk)} = ${quoteName(rightAlias)}.${quoteName(rk)}"""
+  }.mkString(" AND ")
 
   // -- WHERE clause --
 

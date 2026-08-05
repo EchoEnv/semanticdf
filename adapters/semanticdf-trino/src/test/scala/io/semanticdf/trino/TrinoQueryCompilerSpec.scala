@@ -4,8 +4,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 import io.semanticdf.core.expr.{Expr, LiteralValue}
-import io.semanticdf.core.model.{Dimension, FilterSpec, Measure, Model, SourceRef}
-import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
+import io.semanticdf.core.model.{Dimension, FilterSpec, JoinSpec, Measure, Model, SourceRef}
+import io.semanticdf.core.rel.{AggregateCall, AggregateFn, JoinKind}
 import io.semanticdf.core.schema.SealedDataType
 
 /** Phase 2 contract: prove `TrinoQueryCompiler` walks a portable
@@ -28,6 +28,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       dimensions: List[Dimension] = Nil,
       measures:   List[Measure]   = Nil,
       filters:    List[FilterSpec] = Nil,
+      joins:      List[JoinSpec]  = Nil,
   ): Model = {
     val attempt = Model.of(
       name       = "test_model",
@@ -35,6 +36,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       dimensions = dimensions,
       measures   = measures,
       filters    = filters,
+      joins      = joins,
     )
     attempt.fold(err => fail(s"Model.of failed: $err"), identity)
   }
@@ -55,7 +57,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
     )
     val sql = compiler.compile(m)
-    sql shouldBe """SELECT "region" AS "region" FROM "hive"."silver"."orders""""
+    sql shouldBe """SELECT "region" AS "region" FROM "hive"."silver"."orders" AS "orders""""
   }
 
   // -- model with measure (triggers GROUP BY) --
@@ -69,7 +71,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       ),
     )
     val sql = compiler.compile(m)
-    sql shouldBe """SELECT "region" AS "region", SUM("amount") AS "total" FROM "hive"."silver"."orders" GROUP BY "region""""
+    sql shouldBe """SELECT "region" AS "region", SUM("amount") AS "total" FROM "hive"."silver"."orders" AS "orders" GROUP BY "region""""
   }
 
   // -- model with filter (WHERE clause) --
@@ -153,7 +155,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
     val sql = compiler.compile(m)
-    sql shouldBe """SELECT "id" AS "id" FROM "my_table""""
+    sql shouldBe """SELECT "id" AS "id" FROM "my_table" AS "my_table""""
   }
 
   test("compile handles source with only catalog and table (no namespace)") {
@@ -165,7 +167,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
     val sql = compiler.compile(m)
-    sql shouldBe """SELECT "id" AS "id" FROM "hive"."orders""""
+    sql shouldBe """SELECT "id" AS "id" FROM "hive"."orders" AS "orders""""
   }
 
   // -- expression rendering --
@@ -250,6 +252,175 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
     )
     val sql = compiler.compile(m)
     sql should include ("<error: ProviderRef not supported by Trino")
+  }
+
+  // -- JOIN compilation (JoinSpec → SQL JOIN) --
+
+  // customer source for joins
+  private val customersSource: SourceRef.ByName =
+    SourceRef.ByName(
+      catalog   = Some("hive"),
+      namespace = Some("silver"),
+      table     = "customers",
+    )
+
+  // -- Inner join (mirrors original Spark `join_one`) --
+
+  test("compile(model with Inner join) emits INNER JOIN clause") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      measures = List(
+        Measure.aggregate("total", AggregateFn.Sum, Expr.FieldRef("amount")),
+      ),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Inner,
+        keys       = List("id" -> "id"),
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include ("""INNER JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
+  }
+
+  // -- Left join (mirrors original Spark `join_many`) --
+
+  test("compile(model with Left join) emits LEFT JOIN clause") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      measures = List(
+        Measure.aggregate("total", AggregateFn.Sum, Expr.FieldRef("amount")),
+      ),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Left,
+        keys       = List("customer_id" -> "id"),
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include ("""LEFT JOIN "hive"."silver"."customers" AS "customers" ON "orders"."customer_id" = "customers"."id"""")
+  }
+
+  // -- Cross join (mirrors original Spark `join_cross`) --
+
+  test("compile(model with Cross join) emits CROSS JOIN without ON clause") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Cross,
+        keys       = Nil,
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include ("""CROSS JOIN "hive"."silver"."customers" AS "customers"""")
+    sql should not include ("ON")
+  }
+
+  // -- Right join --
+
+  test("compile(model with Right join) emits RIGHT JOIN") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Right,
+        keys       = List("id" -> "id"),
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include ("""RIGHT JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
+  }
+
+  // -- Full outer join --
+
+  test("compile(model with Full join) emits FULL JOIN") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Full,
+        keys       = List("id" -> "id"),
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include ("""FULL JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
+  }
+
+  // -- Multi-key join --
+
+  test("compile(model with multi-key join) emits AND-joined conditions") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "customers",
+        kind       = JoinKind.Inner,
+        keys       = List("id" -> "id", "tenant" -> "tenant"),
+      )),
+    )
+    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    sql should include (""""orders"."id" = "customers"."id" AND "orders"."tenant" = "customers"."tenant"""")
+  }
+
+  // -- Multiple joins (chained) --
+
+  test("compile(model with multiple joins) chains JOIN clauses") {
+    val itemsSource = SourceRef.ByName(
+      catalog = Some("hive"), namespace = Some("silver"), table = "items",
+    )
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(
+        JoinSpec("join1", "customers", JoinKind.Inner, List("id" -> "id")),
+        JoinSpec("join2", "items",     JoinKind.Left,  List("id" -> "order_id")),
+      ),
+    )
+    val sql = compiler.compile(m, Map(
+      "customers" -> customersSource,
+      "items"     -> itemsSource,
+    ))
+    sql should include ("""INNER JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
+    sql should include ("""LEFT JOIN "hive"."silver"."items" AS "items" ON "orders"."id" = "items"."order_id"""")
+  }
+
+  // -- Unresolvable join (modelSources missing) --
+
+  test("compile(model with unresolvable join) emits placeholder") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      joins = List(JoinSpec(
+        name       = "join1",
+        rightModel = "missing_model",
+        kind       = JoinKind.Inner,
+        keys       = List("id" -> "id"),
+      )),
+    )
+    val sql = compiler.compile(m, Map.empty)  // empty modelSources
+    sql should include ("""<unresolved-join: rightModel='missing_model' not in modelSources>""")
+  }
+
+  // -- No joins (regression — back to baseline FROM) --
+
+  test("compile(model with no joins) emits bare FROM without JOIN") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+    )
+    val sql = compiler.compile(m)
+    sql shouldBe """SELECT "region" AS "region" FROM "hive"."silver"."orders" AS "orders""""
   }
 
   // -- boundary contract --
