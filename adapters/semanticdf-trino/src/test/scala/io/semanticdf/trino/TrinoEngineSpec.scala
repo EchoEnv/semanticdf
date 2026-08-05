@@ -95,21 +95,21 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
 
   // -- compile / execute / explain — deferred --
 
-  test("compile returns Right(ExecutionPlan) with a SQL string") {
+  test("compile returns Right(ExecutionPlan) with a ParameterizedSql") {
     val m = sampleModel
     val result = TrinoEngine.instance.compile(m, EngineContext.defaultContext)
     result.isRight shouldBe true
     val plan = result.toOption.get
     plan shouldBe a [ExecutionPlan[?]]
-    plan.native shouldBe a [String]
+    plan.native shouldBe a [io.semanticdf.core.engine.ParameterizedSql]
   }
 
   test("compile result includes the source table in the FROM clause") {
     val m = sampleModel  // source = SourceRef.ByName(None, Some("public"), "orders")
     val result = TrinoEngine.instance.compile(m, EngineContext.defaultContext)
     val plan = result.toOption.get
-    val sql = plan.native.asInstanceOf[String]
-    sql should include ("""FROM "public"."orders"""")
+    val psql = plan.native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    psql.sql should include ("""FROM "public"."orders"""")
   }
 
   test("execute returns Left(EngineError.FeatureDeferred) for the placeholder path") {

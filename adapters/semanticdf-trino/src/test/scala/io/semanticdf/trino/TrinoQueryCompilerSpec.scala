@@ -58,7 +58,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = byName,
       dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql shouldBe """SELECT "region" AS "region" FROM "hive"."silver"."orders" AS "orders""""
   }
 
@@ -72,7 +72,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Measure.aggregate("total", AggregateFn.Sum, Expr.FieldRef("amount")),
       ),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql shouldBe """SELECT "region" AS "region", SUM("amount") AS "total" FROM "hive"."silver"."orders" AS "orders" GROUP BY "region""""
   }
 
@@ -92,10 +92,10 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         )),
       )),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include (""""region" AS "region"""")
     sql should include ("""SUM("amount") AS "total"""")
-    sql should include ("""WHERE (("amount" > 0))""")
+    sql should include ("""WHERE (("amount" > ?))""")
     sql should include ("""GROUP BY "region"""")
   }
 
@@ -111,7 +111,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Measure.aggregate("max_amt", AggregateFn.Max, Expr.FieldRef("amount")),
       ),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("""AVG("amount") AS "avg_amt"""")
     sql should include ("""MIN("amount") AS "min_amt"""")
     sql should include ("""MAX("amount") AS "max_amt"""")
@@ -127,7 +127,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         )),
       ),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("""COUNT(*) AS "row_count"""")
   }
 
@@ -142,7 +142,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         )),
       ),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("""COUNT(DISTINCT "customer_id") AS "uniq_customers"""")
   }
 
@@ -156,7 +156,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = source,
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql shouldBe """SELECT "id" AS "id" FROM "my_table" AS "my_table""""
   }
 
@@ -168,7 +168,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = source,
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql shouldBe """SELECT "id" AS "id" FROM "hive"."orders" AS "orders""""
   }
 
@@ -186,8 +186,8 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         FilterSpec("not_null", Expr.IsNotNull(Expr.FieldRef("customer_id"))),
       ),
     )
-    val sql = compiler.compile(m)
-    sql should include ("""WHERE (("amount" > 0)) AND (("customer_id" IS NOT NULL))""")
+    val sql = compiler.compile(m).sql
+    sql should include ("""WHERE (("amount" > ?)) AND (("customer_id" IS NOT NULL))""")
   }
 
   test("compile emits string literal with single-quote escaping") {
@@ -199,8 +199,8 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
       ))),
     )
-    val sql = compiler.compile(m)
-    sql should include ("""WHERE (("carrier" = 'AA'))""")
+    val sql = compiler.compile(m).sql
+    sql should include ("""WHERE (("carrier" = ?))""")
   }
 
   test("compile handles string literal with embedded single quote") {
@@ -212,8 +212,8 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Expr.Literal(LiteralValue.StringValue("O'Brien"), SealedDataType.Varchar),
       ))),
     )
-    val sql = compiler.compile(m)
-    sql should include ("""WHERE (("region" = 'O''Brien'))""")
+    val sql = compiler.compile(m).sql
+    sql should include ("""WHERE (("region" = ?))""")
   }
 
   // -- aggregate function reference (varargs / unique coverage) --
@@ -227,7 +227,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Measure.aggregate("last_id",  AggregateFn.Last,  Expr.FieldRef("id")),
       ),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("""FIRST_VALUE("id") AS "first_id"""")
     sql should include ("""LAST_VALUE("id") AS "last_id"""")
   }
@@ -240,7 +240,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = source,
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("<error: path-based source not supported by Trino")
   }
 
@@ -252,7 +252,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = source,
       dimensions = List(Dimension.field("id", SealedDataType.BigInt)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql should include ("<error: ProviderRef not supported by Trino")
   }
 
@@ -282,7 +282,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("id" -> "id"),
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include ("""INNER JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
   }
 
@@ -302,7 +302,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("customer_id" -> "id"),
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include ("""LEFT JOIN "hive"."silver"."customers" AS "customers" ON "orders"."customer_id" = "customers"."id"""")
   }
 
@@ -319,7 +319,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = Nil,
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include ("""CROSS JOIN "hive"."silver"."customers" AS "customers"""")
     sql should not include ("ON")
   }
@@ -337,7 +337,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("id" -> "id"),
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include ("""RIGHT JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
   }
 
@@ -354,7 +354,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("id" -> "id"),
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include ("""FULL JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
   }
 
@@ -371,7 +371,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("id" -> "id", "tenant" -> "tenant"),
       )),
     )
-    val sql = compiler.compile(m, Map("customers" -> customersSource))
+    val sql = compiler.compile(m, Map("customers" -> customersSource)).sql
     sql should include (""""orders"."id" = "customers"."id" AND "orders"."tenant" = "customers"."tenant"""")
   }
 
@@ -392,7 +392,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
     val sql = compiler.compile(m, Map(
       "customers" -> customersSource,
       "items"     -> itemsSource,
-    ))
+    )).sql
     sql should include ("""INNER JOIN "hive"."silver"."customers" AS "customers" ON "orders"."id" = "customers"."id"""")
     sql should include ("""LEFT JOIN "hive"."silver"."items" AS "items" ON "orders"."id" = "items"."order_id"""")
   }
@@ -410,7 +410,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         keys       = List("id" -> "id"),
       )),
     )
-    val sql = compiler.compile(m, Map.empty)  // empty modelSources
+    val sql = compiler.compile(m, Map.empty).sql  // empty modelSources
     sql should include ("""<unresolved-join: rightModel='missing_model' not in modelSources>""")
   }
 
@@ -421,7 +421,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       source = byName,
       dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
     )
-    val sql = compiler.compile(m)
+    val sql = compiler.compile(m).sql
     sql shouldBe """SELECT "region" AS "region" FROM "hive"."silver"."orders" AS "orders""""
   }
 
@@ -481,7 +481,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       rollupSources = Map("r1" -> rollupSource),
       rollupWatermarks = Map.empty,
       now = fixedNow,
-    )
+    ).sql
     sql should include ("""FROM "hive"."silver"."orders_rollup_region"""")
     sql should not include "orders\".\" AS \"orders\""  // base not used
   }
@@ -495,7 +495,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       model = m,
       rollupSources = Map("r1" -> rollupSource),
       now = fixedNow,
-    )
+    ).sql
     sql should include ("-- using rollup 'r1'")
   }
 
@@ -515,7 +515,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       rollupSources = Map("r1" -> rollupSource),
       rollupWatermarks = Map("r1" -> freshWatermark),
       now = fixedNow,
-    )
+    ).sql
     sql should include ("""FROM "hive"."silver"."orders_rollup_region"""")
   }
 
@@ -535,7 +535,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       rollupSources = Map("r1" -> rollupSource),
       rollupWatermarks = Map("r1" -> staleWatermark),
       now = fixedNow,
-    )
+    ).sql
     // Falls back to base table
     sql should include ("""FROM "hive"."silver"."orders" AS "orders"""")
     // No rollup comment
@@ -557,7 +557,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       rollupSources = Map("r1" -> rollupSource),
       rollupWatermarks = Map.empty,  // no watermark
       now = fixedNow,
-    )
+    ).sql
     // Falls back to base table (no watermark = stale)
     sql should include ("""FROM "hive"."silver"."orders" AS "orders"""")
   }
@@ -584,7 +584,7 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
       model = m,
       rollupSources = Map("r1" -> rollupSource),
       now = fixedNow,
-    )
+    ).sql
     // No rollup substitution (the model measures include "total" which the
     // rollup covers, so this actually selects the rollup — adjust the test)
     sql should include ("""FROM "hive"."silver"."orders_rollup_region"""")
@@ -600,9 +600,114 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         Measure.aggregate("total", AggregateFn.Sum, Expr.FieldRef("amount")),
       ),
     )
-    val sql = compiler.compile(m, now = fixedNow)
+    val sql = compiler.compile(m, now = fixedNow).sql
     sql should include ("""FROM "hive"."silver"."orders" AS "orders"""")
     sql should not include "using rollup"
+  }
+
+  // -- PARAMETER BINDING --
+
+  test("compile returns ParameterizedSql (not String) for models with literals") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      filters = List(FilterSpec(
+        name      = "specific",
+        predicate = Expr.Equal(
+          Expr.FieldRef("region"),
+          Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
+        ),
+      )),
+    )
+    val psql = compiler.compile(m)
+    psql shouldBe a [io.semanticdf.core.engine.ParameterizedSql]
+  }
+
+  test("compile emits ? placeholder for string literal in WHERE clause") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      filters = List(FilterSpec(
+        name      = "specific",
+        predicate = Expr.Equal(
+          Expr.FieldRef("region"),
+          Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
+        ),
+      )),
+    )
+    val psql = compiler.compile(m)
+    psql.sql should include ("?")
+    psql.sql should not include ("'AA'")  // value NOT inlined
+  }
+
+  test("compile populates parameters list with literal values") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      filters = List(FilterSpec(
+        name      = "specific",
+        predicate = Expr.Equal(
+          Expr.FieldRef("region"),
+          Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
+        ),
+      )),
+    )
+    val psql = compiler.compile(m)
+    psql.parameters should have size 1
+    psql.parameters.head shouldBe LiteralValue.StringValue("AA")
+  }
+
+  test("compile populates parameters list with multiple literals in order") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      filters = List(
+        FilterSpec("active", Expr.GreaterThan(
+          Expr.FieldRef("amount"),
+          Expr.Literal(LiteralValue.IntValue(0), SealedDataType.Int),
+        )),
+        FilterSpec("region_eq", Expr.Equal(
+          Expr.FieldRef("region"),
+          Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
+        )),
+      ),
+    )
+    val psql = compiler.compile(m)
+    psql.parameters should have size 2
+    psql.parameters(0) shouldBe LiteralValue.IntValue(0)
+    psql.parameters(1) shouldBe LiteralValue.StringValue("AA")
+  }
+
+  test("compile parameter count matches ? placeholders in SQL") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      filters = List(
+        FilterSpec("a", Expr.Equal(
+          Expr.FieldRef("region"),
+          Expr.Literal(LiteralValue.StringValue("AA"), SealedDataType.Varchar),
+        )),
+        FilterSpec("b", Expr.GreaterThan(
+          Expr.FieldRef("amount"),
+          Expr.Literal(LiteralValue.IntValue(0), SealedDataType.Int),
+        )),
+      ),
+    )
+    val psql = compiler.compile(m)
+    val placeholderCount = psql.sql.count(_ == '?')
+    placeholderCount shouldBe psql.parameterCount
+  }
+
+  test("compile emits no parameters for models with no literals") {
+    val m = model(
+      source = byName,
+      dimensions = List(Dimension.field("region", SealedDataType.Varchar)),
+      measures = List(
+        Measure.aggregate("total", AggregateFn.Sum, Expr.FieldRef("amount")),
+      ),
+    )
+    val psql = compiler.compile(m)
+    psql.parameters shouldBe Nil
   }
 
   // -- boundary contract --
