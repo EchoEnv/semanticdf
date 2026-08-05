@@ -1,6 +1,6 @@
 package io.semanticdf.trino
 
-import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql}
 import io.semanticdf.core.model.Model
 
 /** First concrete `Engine` implementation — the Trino adapter.
@@ -228,6 +228,73 @@ class TrinoEngine extends Engine[Any] {
       ))
     }
   }
+
+  /** Return up to `n` rows from executing `model`. Mirrors the
+    * original Spark library's `SemanticTable.preview(n)` behavior:
+    * `compile(model) -> append "LIMIT n" -> execute`.
+    *
+    * ==Why this exists (per user constraint: behavior must mirror
+    * the original Spark library)==
+    *
+    * The original library exposes `preview(n)` so consumers can
+    * "test a query" before committing to a full execute. This
+    * method is the Trino adapter's equivalent — `compile + LIMIT n
+    * + execute`. The LIMIT is appended to the parameterized SQL
+    * (not parameterized as `? n`) so n is part of the SQL, not
+    * a bind parameter. n is a row-count cap, not user data;
+    * parameterizing it would be over-engineering.
+    *
+    * ==Why not on the Engine trait==
+    *
+    * Per scala-data-driven-refactor §1 + karpathy §3:
+    * `preview()` is engine-specific behavior. The Engine trait
+    * stays narrow (compile / execute / explain only); preview is
+    * adapter-internal. Future adapters (Spark, Databricks, ...)
+    * each implement their own. Spark's preview would call
+    * `compile + dataset.limit(n)`.
+    *
+    * ==Why a private cast helper==
+    *
+    * The Engine trait's `R` parameter is `Any` for Trino (the
+    * plan's `native` carries a `ParameterizedSql`, not a
+    * `TrinoResult`). The trait has `execute(...): Either[..., R]`,
+    * so the engine returns `Any`. For preview to return a typed
+    * `TrinoResult`, we narrow at the boundary. The cast is the
+    * known design wart documented in PR #372. */
+  def preview(
+      model: Model,
+      n:     Int,
+      ctx:   EngineContext,
+  ): Either[EngineError, TrinoResult] = {
+    if (n < 0) {
+      Left(EngineError.ConnectionFailed(
+        reason = s"preview n must be >= 0, got $n",
+      ))
+    } else {
+      compile(model, ctx).flatMap { plan =>
+        val psql    = plan.native.asInstanceOf[ParameterizedSql]
+        val limited = ParameterizedSql(
+          sql        = psql.sql + s" LIMIT $n",
+          parameters = psql.parameters,
+        )
+        execute(
+          ExecutionPlan(engine = plan.engine, native = limited),
+          ctx,
+        ).map(asTrinoResult)
+      }
+    }
+  }
+
+  /** Cast helper: narrows the trait's `R = Any` to the engine's
+    * `TrinoResult` after a successful execute. Centralizes the
+    * cast in one place so it's documented (vs. scattered `.asInstanceOf`
+    * calls in tests).
+    *
+    * Per scala-data-driven-refactor §1: behavior (not data).
+    * Private to TrinoEngine — only the engine knows that its
+    * `R = Any` actually carries a `TrinoResult`. */
+  private def asTrinoResult(x: Any): TrinoResult =
+    x.asInstanceOf[TrinoResult]
 }
 
 object TrinoEngine {
