@@ -20,10 +20,12 @@ JDBC driver). See [Open items](#open-items) below.
 | `compile(model, ctx)` | `model.compile()` |
 | `execute(plan, ctx)` | `model.run()` (returns `Dataset[T]` analog) |
 | `explain(model, ctx)` | `df.explain()` (returns SQL string; full Trino EXPLAIN needs a real cluster — see Open items) |
+| `explainPlan(model, ctx)` | `df.explain(spark)` (cluster-aware physical plan) |
 | `preview(model, n, ctx)` | `df.limit(n)` |
 | `previewAsRows(model, n, ctx)` | `df.take(n).collect()` |
 | `count(model, ctx)` | `df.count()` |
 | `executeAsRows(model, ctx)` | `df.collect().map(_.getValuesMap(...))` |
+| `schema(model, ctx)` | `df.schema` (engine-portable `SchemaSummary`) |
 | `describeCapabilities` | engine introspection (MCP `describe_model`) |
 
 ### Implemented (data shape)
@@ -112,7 +114,7 @@ The adapter also mirrors common Spark `DataFrame` terminal operations:
 | #381 | `df.take(n).collect()` | 113 |
 | #382 | `df.isEmpty` | 40 |
 
-## Phase 5 — production wiring + cluster-aware explain (5 PRs)
+## Phase 5 — production wiring + cluster-aware explain + schema mirror (6 PRs)
 
 | PR | What |
 |---|---|
@@ -121,6 +123,7 @@ The adapter also mirrors common Spark `DataFrame` terminal operations:
 | #386 | `JdbcTrinoConnection` promoted to main source |
 | #389 | HikariCP-backed `TrinoConnectionPoolFactory` |
 | #390 | `TrinoEngine.explainPlan` (cluster-aware, mirrors `df.explain(spark)`) |
+| #392 | `TrinoEngine.schema` + engine-portable `SchemaSummary` (mirrors `df.schema`) |
 
 All non-parked items in the multi-engine design (§7.2) are now
 landed in this adapter.

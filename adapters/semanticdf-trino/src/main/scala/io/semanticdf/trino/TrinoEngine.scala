@@ -2,6 +2,7 @@ package io.semanticdf.trino
 
 import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql}
 import io.semanticdf.core.model.Model
+import io.semanticdf.core.schema.{SchemaField, SchemaFieldKind, SchemaSummary}
 
 /** First concrete `Engine` implementation — the Trino adapter.
   *
@@ -321,6 +322,105 @@ class TrinoEngine extends Engine[Any] {
         }.mkString("\n")
       }
     }
+  }
+
+  /** Return a schema summary for `model` — a typed projection of
+    * the model's field metadata. Mirrors the original Spark
+    * library's `SemanticTableCore.schema` behavior: walk the model
+    * and return one entry per field, with field name, kind, and
+    * declared data type.
+    *
+    * ==Why `SchemaSummary` (not a DataFrame)==
+    *
+    * The original Spark library returns a 12-column `DataFrame`
+    * describing each field. Several of those columns (`is_entity`,
+    * `is_time_dimension`, `smallest_grain`) are derived from the
+    * Spark op tree — they don't translate to engine-portable
+    * types because the op tree is Spark-specific. The Trino
+    * adapter (and every other engine adapter) instead returns the
+    * engine-portable [[SchemaSummary]] — the fields derivable from
+    * the [[Model]] itself. Engine-specific enrichments live in the
+    * engine adapter, not in core.
+    *
+    * ==Why pure (no cluster round-trip)==
+    *
+    * Like `explain()`, this method needs no Trino cluster. It
+    * walks `model.dimensions`, `model.measures`,
+    * `model.calculatedMeasures`, and `model.joins` directly. The
+    * result is a deterministic projection of the model — the same
+    * model always produces the same `SchemaSummary`. Used by MCP
+    * `describe_model` to surface field metadata without a query.
+    *
+    * ==Why not on the `Engine` trait==
+    *
+    * Per scala-data-driven-refacer §1 + karpathy §3: `schema()`
+    * is engine-specific behavior. The Engine trait stays narrow
+    * (`compile` / `execute` / `explain`); `schema` is adapter-
+    * internal. Future adapters (Spark, Databricks, ...) each
+    * implement their own. The Spark adapter would walk the op
+    * tree (with is_entity / is_time_dimension enrichments) and
+    * produce a richer `SchemaSummary` — the schema CONTRACT is
+    * in core, the schema BEHAVIOR is in each adapter.
+    *
+    * ==Why `Either[EngineError, SchemaSummary]` (not `SchemaSummary`)==
+    *
+    * Every other `TrinoEngine` method returns
+    * `Either[EngineError, T]` so consumers pattern-match on errors
+    * via the closed `EngineError` ADT. Following the standing
+    * pattern: same shape, same error model. The `Left` branch is
+    * currently unreachable (this method is pure), but the type
+    * signature stays consistent for future extensibility
+    * (e.g. cluster-aware type enrichment).
+    *
+    * ==Mirrors Spark's `df.schema`==
+    *
+    * Spark's `df.schema` returns `DataFrame` of field metadata.
+    * The Trino adapter's `schema` returns `SchemaSummary` of field
+    * metadata. Same BEHAVIOR (walk model, return field metadata),
+    * different SHAPE (typed vs DataFrame). */
+  def schema(model: Model, ctx: EngineContext): Either[EngineError, SchemaSummary] = {
+    val dimFields: List[SchemaField] = model.dimensions.map { d =>
+      SchemaField(
+        fieldName   = d.name,
+        fieldKind   = SchemaFieldKind.Dimension,
+        description = None,
+        dataType    = d.dataType,
+      )
+    }
+    val measureFields: List[SchemaField] = model.measures.map { m =>
+      SchemaField(
+        fieldName   = m.name,
+        fieldKind   = SchemaFieldKind.Measure,
+        description = None,
+        dataType    = None,
+      )
+    }
+    val calcFields: List[SchemaField] = model.calculatedMeasures.map { c =>
+      SchemaField(
+        fieldName   = c.name,
+        fieldKind   = SchemaFieldKind.CalculatedMeasure,
+        description = None,
+        dataType    = None,
+      )
+    }
+    val joinFields: List[SchemaField] = model.joins.flatMap { j =>
+      // One JoinKey per join's source-target pair (preserves the
+      // join cardinality in the metadata). Each entry carries the
+      // model-side alias (None for anonymous joins).
+      List(
+        SchemaField(
+          fieldName   = j.name,
+          fieldKind   = SchemaFieldKind.JoinKey,
+          description = None,
+          dataType    = None,
+        ),
+      )
+    }
+    Right(SchemaSummary(
+      modelName        = model.name,
+      modelDescription = model.description,
+      fields           = dimFields ++ measureFields ++ calcFields ++ joinFields,
+    ))
   }
 
   /** Return up to `n` rows from executing `model`. Mirrors the
