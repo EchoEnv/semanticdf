@@ -128,6 +128,27 @@ class TrinoEngine extends Engine[Any] {
     */
   def connectionFactory: Option[() => TrinoConnection] = _connectionFactory
 
+  /** Set the connection factory. Called by the server bootstrap
+    * once the Trino cluster is reachable. After this is set,
+    * `execute()` can dispatch queries.
+    *
+    * ==Behavior contract (pinned by `TrinoEngineFactorySpec`)==
+    *
+    * This method **mutates** the engine in place and returns
+    * `this`. Two consequences:
+    *
+    *   1. Fluent usage: `new TrinoEngine().withConnectionFactory(...)`
+    *      returns the same instance and works as expected.
+    *
+    *   2. **Singleton hazard**: do NOT call this on
+    *      `TrinoEngine.instance`. The singleton is shared across
+    *      all consumers; calling `withConnectionFactory` on it
+    *      would mutate shared state and leak the connection
+    *      factory to callers that didn't ask for it. Production
+    *      code should always use `new TrinoEngine()`.
+    *
+    * @param f the new factory (replaces any existing one)
+    * @return the same `TrinoEngine` instance (fluent) */
   def withConnectionFactory(f: () => TrinoConnection): TrinoEngine = {
     _connectionFactory = Some(f)
     this
