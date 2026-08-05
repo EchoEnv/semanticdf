@@ -5,22 +5,45 @@ import io.semanticdf.core.model.Model
 
 /** First concrete `Engine` implementation — the Trino adapter.
   *
-  * Implements the `Engine[+R]` contract from `io.semanticdf.core.engine`
+  * Implements the `Engine[R]` contract from `io.semanticdf.core.engine`
   * (PR #352, #353). The result type is `Any` for now because the full
   * portable `PortableExpr` / `RelOp` IR is separate Phase 2 work
   * (per the design doc §7.2 budget: "core type/expression/relational
   * nodes and validation (900-1,200 LoC)"). Once `PortableModel` and the
   * portable IR land, `TrinoEngine[R]` will use the real result type.
   *
-  * ==What this class does today==
+  * ==What this class does==
   *
   *   - `identity = "trino"` — wire-stable engine label
   *   - `capabilities` — the set of typed `Capability` features Trino
   *     supports (e.g. NestedStructTypes, BroadcastJoin, SkewJoin)
-  *   - `compile` / `execute` / `explain` — currently throw
-  *     `EngineError.FeatureDeferred` with a roadmap pointer; the
-  *     actual SQL lowering + cluster integration land in follow-up
-  *     PRs (see `adapters/semanticdf-trino/README.md`).
+  *   - `compile(model, ctx)` — walks the portable `Model`, returns
+  *     an `ExecutionPlan[Any]` with a `ParameterizedSql` (PR #371)
+  *   - `execute(plan, ctx)` — opens a Trino connection (per-request),
+  *     runs the parameterized SQL, returns the `TrinoResult`
+  *   - `explain(model, ctx)` — returns the parameterized SQL (a
+  *     useful preview; the full Trino `EXPLAIN` output is a
+  *     follow-up PR that connects to a real cluster)
+  *
+  * ==Why `connectionFactory` is a field (vs. `EngineContext`)==
+  *
+  * The Trino connection is engine-specific (not a per-query policy).
+  * It belongs to the engine, not to the query context. Per the
+  * data-driven mantra ("behavior lives in the engine adapter"), the
+  * connection lifecycle is the engine's responsibility.
+  *
+  * The `connectionFactory: () => TrinoConnection` is `Option`-typed
+  * so the singleton (`TrinoEngine.instance`) can exist without a
+  * configured Trino cluster (useful for tests + for MCP `list_models`
+  * which doesn't execute). When a query is dispatched, the engine
+  * calls the factory to get a per-request connection (closed in
+  * `finally`).
+  *
+  * ==Why no connection pool (yet)==
+  *
+  * Connection pooling (Apache DBCP, HikariCP, Trino's built-in pool)
+  * is a follow-up optimization. For v1, the factory creates a
+  * fresh connection per `execute()` call.
   *
   * ==Boundary contract==
   *
@@ -39,20 +62,7 @@ import io.semanticdf.core.model.Model
   * `identity` and `capabilities` are pure data (the contract is data).
   * `compile` / `execute` / `explain` are behavior — the engine-specific
   * part. Per the data-driven mantra, behavior lives in the engine
-  * adapter layer, not in core. The full implementation of these
-  * methods is future Phase 2 work.
-  *
-  * ==Consolidation plan (NOT in this PR)==
-  *
-  * Once `PortableModel` and the portable IR land:
-  *   - Change `Engine[Any]` to `Engine[TrinoResult]` (concrete result type)
-  *   - Implement `compile(model, ctx)` — walk portable op tree, emit
-  *     Trino SQL with parameter binding
-  *   - Implement `execute(plan, ctx)` — JDBC/HTTP execution against
-  *     a real Trino cluster
-  *   - Implement `explain(model, ctx)` — return Trino's `EXPLAIN` output
-  *   - Add result decoding (Trino `ResultSet` → portable `ResultRow`)
-  *   - Add tests against a Docker Trino cluster (the decision gate)
+  * adapter layer, not in core.
   */
 class TrinoEngine extends Engine[Any] {
 
@@ -60,54 +70,50 @@ class TrinoEngine extends Engine[Any] {
     * MCP clients (`describe_model`, OKF generation, `audit_log`). */
   val identity: String = "trino"
 
-  /** The set of typed capabilities this Trino engine supports.
-    *
-    * These are the features Trino has natively — the Engine contract
-    * uses them to:
-    *   - Validate at compile time: a request that needs an
-    *     unsupported capability returns `EngineError.UnsupportedCapability`
-    *   - Surface to consumers (MCP `list_models` lists supported
-    *     features per engine)
-    *   - Adapt policies (e.g. `JoinHints.preferredStrategy = Broadcast`
-    *     maps to Trino's `BROADCAST` join distribution)
-    *
-    * This is a closed `Set` (not a stream / future) so the adapter can
-    * pre-compute it once at construction.
-    *
-    * Note: the closed enumeration is a deliberate starting point.
-    * Capabilities not in the closed set can be added as needed
-    * (e.g. `Capability.Named("trino-array-distinct")` for a Trino
-    * extension that doesn't have a canonical case object). */
+  /** The set of typed capabilities this Trino engine supports. */
   val capabilities: Set[Capability] = Set(
     Capability.NestedStructTypes,
     Capability.BroadcastJoin,
     Capability.SkewJoin,
     Capability.WindowRanking,
     Capability.LateBinding,
-    // Note: `Materialize` is NOT in the set — Trino doesn't have a
-    // native persist() equivalent; the adapter rejects this policy
-    // via `EngineError.UnsupportedCapability(Materialize, ...)`.
   )
 
-  /** Compile a portable [[Model]] to a Trino-specific plan.
-    * Delegates to `TrinoQueryCompiler.compile`, which walks the
-    * model and emits Trino SQL. The returned plan is an
-    * `ExecutionPlan[Any]` where the `native` field is the SQL
-    * string.
+  /** The connection factory. None means "no Trino cluster
+    * configured" — the engine returns `EngineError.ConnectionFailed`
+    * from `execute()` in that case. */
+  private var _connectionFactory: Option[() => TrinoConnection] = None
+
+  /** Set the connection factory. Called by the server bootstrap
+    * once the Trino cluster is reachable. After this is set,
+    * `execute()` can dispatch queries.
     *
-    * The compiler is engine-portable behavior: it does not
-    * connect to Trino, does not execute the query. It just
-    * produces a SQL string from the model's declarative shape.
-    * Connection + execution is the execute() step (still
-    * FeatureDeferred). */
+    * Per scala-data-driven-refactor §1: this is a `var` field,
+    * not a constructor parameter, because the engine is sometimes
+    * constructed before the cluster is reachable (MCP server
+    * startup order). The `var` allows late binding.
+    *
+    * Per scala-data-driven-refactor §1 ("Highest-stakes version"):
+    * `var` fields are normally a Serializable smell — but this
+    * field holds a `() => TrinoConnection` function (a closure),
+    * not data. The engine itself doesn't cross serialization
+    * boundaries (each server instance owns its own `TrinoEngine`).
+    */
+  def connectionFactory: Option[() => TrinoConnection] = _connectionFactory
+
+  def withConnectionFactory(f: () => TrinoConnection): TrinoEngine = {
+    _connectionFactory = Some(f)
+    this
+  }
+
+  /** Compile a portable [[Model]] to a Trino-specific plan. */
   def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
     // For v1: the engine doesn't yet hold a model registry OR a
     // rollup registry, so joins and rollup selection are NOT
     // resolved at the engine level. The caller can call
-    // `TrinoQueryCompiler.instance.compile(model, modelSources,
-    // rollupSources, rollupWatermarks, now)` directly to provide
-    // the registries. Future PRs will add `modelRegistry` and
-    // `rollupRegistry` fields to the engine.
+    // `TrinoQueryCompiler.instance.compile(...)` directly to
+    // provide the registries. Future PRs will add `modelRegistry`
+    // and `rollupRegistry` fields to the engine.
     val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
     Right(ExecutionPlan(
       engine = EngineIdentity(
@@ -120,35 +126,90 @@ class TrinoEngine extends Engine[Any] {
   }
 
   /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.
-    * Deferred — requires the Model → Trino SQL pipeline (to
-    * produce the plan) and the Trino JDBC driver execution path.
     *
-    * The `plan.engine` field identifies which engine compiled the
-    * plan (must be Trino — we don't execute plans from other
-    * engines). The `plan.native` field would carry the Trino SQL
-    * string + parameter bindings once compile() is implemented. */
-  def execute(plan: ExecutionPlan[Any], ctx: EngineContext): Either[EngineError, Any] =
-    Left(EngineError.FeatureDeferred(
-      feature = "trino.execute",
-      release = "v0.5.0",
-    ))
+    * Phase 2 first end-to-end execute step (PR #372):
+    *   1. Extract the `ParameterizedSql` from the plan
+    *   2. Open a Trino connection (via `connectionFactory`)
+    *   3. Run the prepared statement + bind parameters
+    *   4. Return the `TrinoResult` (rows + columns)
+    *
+    * The connection is closed in `finally` so a failed query
+    * doesn't leak JDBC resources.
+    *
+    * ==Why per-request connection (vs. shared)==
+    *
+    * Per the design: "Engine adapters manage their own connection
+    * lifecycle." For v1, the simplest correct behavior is a fresh
+    * connection per query. Future PRs add connection pooling
+    * (Apache DBCP, HikariCP, or Trino's built-in pool).
+    *
+    * ==Why `EngineError.ConnectionFailed` (not `ExecutionFailed`)==
+    *
+    * The closed `EngineError` ADT (per PR #352) has the cases the
+    * MCP server's error mapping handles. `ConnectionFailed(reason)`
+    * covers the "no cluster configured" case. Runtime query
+    * failures (e.g. a SQL syntax error from the cluster) propagate
+    * as exceptions caught here and surfaced as
+    * `EngineError.ConnectionFailed(reason = e.getMessage)`.
+    * (Future PR: split runtime query errors into a distinct case.) */
+  def execute(plan: ExecutionPlan[Any], ctx: EngineContext): Either[EngineError, Any] = {
+    _connectionFactory match {
+      case None =>
+        Left(EngineError.ConnectionFailed(
+          reason = "no Trino connection factory configured; call .withConnectionFactory(...) on the engine first",
+        ))
+      case Some(factory) =>
+        plan.native match {
+          case psql: io.semanticdf.core.engine.ParameterizedSql =>
+            val connection = factory()
+            try {
+              val result = connection.prepareStatement(psql.sql, psql.parameters)
+              Right(result)
+            } catch {
+              case e: Exception =>
+                Left(EngineError.ConnectionFailed(
+                  reason = s"execute failed: ${e.getMessage}",
+                ))
+            } finally {
+              connection.close()
+            }
+          case other =>
+            Left(EngineError.ConnectionFailed(
+              reason = s"Trino engine expects ParameterizedSql, got: ${other.getClass.getSimpleName}",
+            ))
+        }
+    }
+  }
 
   /** Return a Trino `EXPLAIN` plan description for a portable
-    * [[Model]]. Deferred until the Model → Trino SQL pipeline is
-    * built (the explain output requires a real SQL query). */
-  def explain(model: Model, ctx: EngineContext): Either[EngineError, String] =
-    Left(EngineError.FeatureDeferred(
-      feature = "trino.explain",
-      release = "v0.5.0",
-    ))
+    * [[Model]]. Phase 2 first end-to-end explain: return the
+    * parameterized SQL (with `?` placeholders) for now. A full
+    * Trino `EXPLAIN` output (with cost estimates, partition
+    * pruning, etc.) lands in a follow-up PR that connects to a
+    * real cluster.
+    *
+    * Per the design: "explain MUST NOT execute the query." This
+    * implementation is purely compile-time — no IO, no
+    * connection. The Trino-specific `EXPLAIN (FORMAT JSON)` prefix
+    * is a future PR. */
+  def explain(model: Model, ctx: EngineContext): Either[EngineError, String] = {
+    TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty).sql match {
+      case sql: String => Right(sql)
+      case _           => Left(EngineError.FeatureDeferred(
+        feature = "trino.explain.full",
+        release = "v0.5.0",
+      ))
+    }
+  }
 }
 
 object TrinoEngine {
 
-  /** Singleton instance — the canonical Trino engine. Used by the
-    * MCP `MCPEngineRegistry` (a future Phase 2 component) to register
-    * the Trino adapter by name. The singleton is the simplest viable
-    * pattern; future multi-instance needs (per-tenant configs, etc.)
-    * would replace this with a factory. */
+  /** Singleton instance — the canonical Trino engine (no
+    * connection factory configured). Used by the MCP
+    * `MCPEngineRegistry` for `list_models` / `describe_model`
+    * (which don't execute). For execute, callers construct a
+    * `new TrinoEngine().withConnectionFactory(...)` or set the
+    * factory on the singleton before dispatch. */
   val instance: TrinoEngine = new TrinoEngine
 }
