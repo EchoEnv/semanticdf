@@ -27,7 +27,7 @@ object TrinoIntegrationSupport {
     * (closed via `finally`). */
   def engineWithConnection(trinoUrl: String): TrinoEngine = {
     val connectionFactory: () => TrinoConnection = () =>
-      new JdbcTrinoConnection(trinoUrl)
+      JdbcTrinoConnection.fromUrl(trinoUrl)
     new TrinoEngine().withConnectionFactory(connectionFactory)
   }
 }

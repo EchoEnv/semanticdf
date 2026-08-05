@@ -96,6 +96,15 @@
       <version>408</version>
     </dependency>
 
+    <!-- HikariCP — connection pooling for Trino clusters (PR #388).
+         Optional: the engine works without it (per-request JDBC
+         connection); the pool is for production throughput. -->
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>5.1.0</version>
+    </dependency>
+
     <!-- Test scope -->
     <dependency>
       <groupId>org.scalatest</groupId>

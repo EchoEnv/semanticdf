@@ -10,28 +10,37 @@ import io.semanticdf.core.expr.LiteralValue
   * Per the multi-engine design (PR #337) and the README's open
   * item #3, end users need a concrete `TrinoConnection` to wire
   * to a real Trino cluster. The integration tests (PR #384) had
-  * a copy of this class in test source; this PR promotes it to
-  * main source so it's available to consumers.
+  * a copy of this class in test source; this PR (#386) promoted
+  * it to main source; this PR (#388) refactored it to support
+  * both single-connection and pool-backed usage.
+  *
+  * ==Why two factory methods (`fromUrl` + `fromConnection`)==
+  *
+  * Single-shot usage: `fromUrl(url)` opens its own JDBC connection
+  * (closed by `close()`). For connection pooling (HikariCP),
+  * use `fromConnection(existingConn)` — the pool owns the
+  * connection lifecycle; we just wrap it.
   *
   * ==Why no Spark dependencies==
   *
   * The boundary contract enforced by `pom.xml`: this module has
-  * zero `org.apache.spark.*` dependencies. JDBC is a Java API; the
-  * `LiteralValue` ↔ JDBC binding is engine-internal behavior.
+  * zero `org.apache.spark.*` dependencies. JDBC is a Java API;
+  * the `LiteralValue` ↔ JDBC binding is engine-internal behavior.
   *
-  * ==Usage==
+  * ==Usage (single-connection, simplest)==
   *
   * {{{
   *   val engine = TrinoEngine.instance.withConnectionFactory { () =>
-  *     new JdbcTrinoConnection("jdbc:trino://coordinator.example.com:8080")
+  *     JdbcTrinoConnection.fromUrl("jdbc:trino://coordinator.example.com:8080")
   *   }
-  *   val plan = engine.compile(model, ctx).toOption.get
-  *   val result = engine.execute(plan, ctx).toOption.get.asInstanceOf[TrinoResult]
   * }}}
   *
-  * Each `execute()` opens a fresh JDBC connection (closed via
-  * `finally`); production users wanting shared connections should
-  * wrap this in a pool (e.g. HikariCP — a future PR).
+  * ==Usage (pool-backed, production-recommended)==
+  *
+  * {{{
+  *   val pool = TrinoConnectionPoolFactory.hikari("jdbc:trino://coordinator:8080")
+  *   val engine = TrinoEngine.instance.withConnectionFactory(pool)
+  * }}}
   *
   * ==Why `extends TrinoConnection` (vs. concrete JDBC driver class)==
   *
@@ -39,16 +48,8 @@ import io.semanticdf.core.expr.LiteralValue
   * `() => TrinoConnection`. Production code injects this concrete
   * class; tests inject `FakeTrinoConnection`. The trait is the
   * seam that lets the engine stay unaware of the driver. */
-final class JdbcTrinoConnection(trinoUrl: String) extends TrinoConnection {
-
-  /** The underlying JDBC connection. We hold the reference so a
-    * single `JdbcTrinoConnection` reuses the connection across
-    * multiple `prepareStatement` calls (one per `engine.execute`).
-    * The connection is closed by `close()`. */
-  private val conn: java.sql.Connection = {
-    Class.forName("io.trino.jdbc.TrinoDriver")
-    java.sql.DriverManager.getConnection(trinoUrl, "test", null)
-  }
+final class JdbcTrinoConnection private (private val conn: java.sql.Connection)
+    extends TrinoConnection {
 
   override def prepareStatement(
       sql:        String,
@@ -72,6 +73,10 @@ final class JdbcTrinoConnection(trinoUrl: String) extends TrinoConnection {
   }
 
   override def close(): Unit = {
+    // Closing a pooled connection returns it to the pool
+    // (HikariCP wraps the connection in a proxy); closing a
+    // single-shot connection (per `fromUrl`) actually closes
+    // the underlying JDBC connection.
     try conn.close() catch { case _: java.sql.SQLException => () }
   }
 
@@ -111,10 +116,8 @@ final class JdbcTrinoConnection(trinoUrl: String) extends TrinoConnection {
   }
 
   /** Read a JDBC `ResultSet` into a [[TrinoResult]]. Per
-    * scala-data-driven-refactor §1: this is the data layer's
-    * "shape" — `TrinoResult` is pure data, no behavior. The
-    * binding between JDBC's column types and `LiteralValue` is
-    * compiled exhaustive (all 16 `LiteralValue` cases). */
+    * scala-data-driven-refactor §1: `TrinoResult` is pure data;
+    * this is the data layer's "shape" with no behavior. */
   private def readResultSet(rs: java.sql.ResultSet): TrinoResult = {
     val meta     = rs.getMetaData
     val ncols    = meta.getColumnCount
@@ -163,4 +166,28 @@ final class JdbcTrinoConnection(trinoUrl: String) extends TrinoConnection {
       case _ => LiteralValue.StringValue(raw.toString)  // defensive fallback
     }
   }
+}
+
+object JdbcTrinoConnection {
+
+  /** Single-shot: open a JDBC connection to the given Trino URL
+    * and wrap it. The connection is closed when `close()` is
+    * called on this instance.
+    *
+    * Per scala-data-driven-refactor §2 ("shape and validity are
+    * separate"): the driver load + URL parse happen at the
+    * factory boundary; the body of the class trusts its inputs. */
+  def fromUrl(trinoUrl: String): JdbcTrinoConnection = {
+    Class.forName("io.trino.jdbc.TrinoDriver")
+    val conn = java.sql.DriverManager.getConnection(trinoUrl, "test", null)
+    new JdbcTrinoConnection(conn)
+  }
+
+  /** Pool-backed: wrap an already-open JDBC connection (typically
+    * borrowed from a connection pool). The pool owns the
+    * connection lifecycle; calling `close()` on the wrapper
+    * returns the connection to the pool (HikariCP wraps the
+    * connection in a closeable proxy). */
+  def fromConnection(conn: java.sql.Connection): JdbcTrinoConnection =
+    new JdbcTrinoConnection(conn)
 }
