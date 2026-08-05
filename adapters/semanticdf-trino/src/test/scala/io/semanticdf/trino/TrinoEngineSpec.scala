@@ -219,4 +219,85 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     val engine: io.semanticdf.core.engine.Engine[Any] = TrinoEngine.instance
     engine.identity shouldBe "trino"
   }
+
+  // -- preview (engine-specific behavior, mirrors original Spark library) --
+
+  test("preview(n) returns up to n rows from executing model") {
+    val rows: List[List[io.semanticdf.core.expr.LiteralValue]] = (1 to 10).toList.map { i =>
+      List(io.semanticdf.core.expr.LiteralValue.IntValue(i))
+    }
+    // sampleModel has no dimensions/measures, so compile emits
+    // `SELECT  FROM "public"."orders" AS "orders"`. preview must
+    // append `LIMIT n` to this exact SQL.
+    val baseSql = TrinoEngine.instance.compile(sampleModel, EngineContext.defaultContext)
+      .toOption.get.native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql].sql
+    val expectedSql = baseSql + " LIMIT 3"
+
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("id"),
+        rows    = rows.take(3),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val m      = sampleModel
+    val result = engine.preview(m, 3, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    val tr = result.toOption.get
+    tr.rowCount shouldBe 3
+    fakeConn.recordedCalls.get((expectedSql, 0)) shouldBe Some(1)
+  }
+
+  test("preview appends LIMIT n to the compiled SQL (not parameterized as ?)") {
+    // Capture the SQL the connection received; assert it ends with LIMIT 5.
+    val capturedSql = new java.util.concurrent.atomic.AtomicReference[String]("")
+    val fakeConn = new TrinoConnection {
+      override def prepareStatement(sql: String, parameters: List[io.semanticdf.core.expr.LiteralValue]): TrinoResult = {
+        capturedSql.set(sql)
+        TrinoResult(Nil, Nil)
+      }
+      override def close(): Unit = ()
+    }
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    engine.preview(sampleModel, 5, EngineContext.defaultContext)
+    capturedSql.get() should include ("LIMIT 5")
+  }
+
+  test("preview with n=0 returns 0 rows (LIMIT 0 is valid SQL)") {
+    val baseSql = TrinoEngine.instance.compile(sampleModel, EngineContext.defaultContext)
+      .toOption.get.native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql].sql
+    val expectedSql = baseSql + " LIMIT 0"
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(List("id"), Nil),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.preview(sampleModel, 0, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get.rowCount shouldBe 0
+  }
+
+  test("preview with n<0 returns Left(EngineError.ConnectionFailed)") {
+    val engine = new TrinoEngine()
+    val m      = sampleModel
+    val result = engine.preview(m, -1, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err shouldBe a [EngineError.ConnectionFailed]
+    err.toString should include ("preview n must be >= 0")
+  }
+
+  test("preview with no connection factory returns Left(EngineError.ConnectionFailed)") {
+    val engine = new TrinoEngine()  // no factory
+    val result = engine.preview(sampleModel, 1, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
+  }
 }
