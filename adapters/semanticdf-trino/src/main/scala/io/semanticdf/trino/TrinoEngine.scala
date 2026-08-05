@@ -409,6 +409,52 @@ class TrinoEngine extends Engine[Any] {
       }
     }
   }
+
+  /** Compose `preview(n)` + the row-as-map transformation of
+    * `executeAsRows`. Mirrors Spark's `df.take(n).collect()`
+    * pattern: get the first N rows as a row-oriented consumer
+    * shape.
+    *
+    * ==Why this exists (per user constraint)==
+    *
+    * User constraint: 'behavior must mirror original Spark
+    * library, with little change if necessary.' `preview(n)`
+    * returns a `TrinoResult` (column-oriented); most consumers
+    * want the row-oriented `List[Map]` shape. This composes
+    * the two existing methods so consumers can call one method
+    * instead of two.
+    *
+    * ==Why two-line composition is worth its own method==
+    *
+    * The composition IS a one-liner in the consumer:
+    * `engine.preview(...).map(r => r.rows.map(row => ...))`.
+    * But every consumer would write that same composition.
+    * Centralizing it here:
+    *   1. Names the operation (`previewAsRows` reads clearly)
+    *   2. Documents the Spark mirror (df.take(n).collect())
+    *   3. Provides a single contract point for tests
+    *
+    * ==Why not on the Engine trait==
+    *
+    * Same as `preview()` / `count()` / `executeAsRows()`:
+    * engine-specific convenience. Adapter-internal. Each
+    * adapter would compose its own. Spark's equivalent is
+    * `compile + dataset.limit(n).collect() + map(_.getValuesMap)`.
+    *
+    * ==Why short-circuits on preview failure==
+    *
+    * If `preview` returns `Left`, no transformation happens.
+    * The `Either` chain preserves error types without losing
+    * detail. */
+  def previewAsRows(
+      model: Model,
+      n:     Int,
+      ctx:   EngineContext,
+  ): Either[EngineError, List[Map[String, io.semanticdf.core.expr.LiteralValue]]] = {
+    preview(model, n, ctx).map { result =>
+      result.rows.map(row => result.columns.zip(row).toMap)
+    }
+  }
 }
 
 object TrinoEngine {

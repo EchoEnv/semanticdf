@@ -566,4 +566,71 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     result.isLeft shouldBe true
     result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
   }
+
+  // -- previewAsRows (compose preview + executeAsRows shape; mirrors df.take(n).collect()) --
+
+  test("previewAsRows returns at most n rows as List[Map[String, LiteralValue]]") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = compiled.sql + " LIMIT 2"
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(
+        columns = List("region", "total"),
+        rows    = List(
+          List(
+            io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+            io.semanticdf.core.expr.LiteralValue.LongValue(100L),
+          ),
+          List(
+            io.semanticdf.core.expr.LiteralValue.StringValue("BB"),
+            io.semanticdf.core.expr.LiteralValue.LongValue(200L),
+          ),
+        ),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.previewAsRows(m, 2, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    val rows = result.toOption.get
+    rows should have size 2
+    rows(0) shouldBe Map(
+      "region" -> io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+      "total"  -> io.semanticdf.core.expr.LiteralValue.LongValue(100L),
+    )
+    rows(1) shouldBe Map(
+      "region" -> io.semanticdf.core.expr.LiteralValue.StringValue("BB"),
+      "total"  -> io.semanticdf.core.expr.LiteralValue.LongValue(200L),
+    )
+  }
+
+  test("previewAsRows with n=0 returns Nil (LIMIT 0 is valid SQL)") {
+    val m   = sampleModel
+    val compiled = TrinoEngine.instance.compile(m, EngineContext.defaultContext).toOption.get
+      .native.asInstanceOf[io.semanticdf.core.engine.ParameterizedSql]
+    val expectedSql = compiled.sql + " LIMIT 0"
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql        = expectedSql,
+      parameters = 0,
+      result     = TrinoResult(columns = List("region"), rows = Nil),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+    val result = engine.previewAsRows(m, 0, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe Nil
+  }
+
+  test("previewAsRows with n<0 returns Left(EngineError.ConnectionFailed)") {
+    val engine = new TrinoEngine()  // no factory
+    val result = engine.previewAsRows(sampleModel, -1, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err shouldBe a [EngineError.ConnectionFailed]
+    err.toString should include ("preview n must be >= 0")
+  }
 }
