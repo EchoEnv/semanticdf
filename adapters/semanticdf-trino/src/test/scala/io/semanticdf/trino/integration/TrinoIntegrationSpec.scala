@@ -132,4 +132,34 @@ class TrinoIntegrationSpec
       .sum
     countSum shouldBe 5L
   }
+
+  // -- explainPlan: cluster-aware explain, mirroring Spark's explain(spark) --
+
+  test("explainPlan returns Trino's physical plan as String") {
+    // Per scala-data-driven-refactor §1: this is data-driven —
+    // same model + cluster → deterministic plan output.
+    assumeDocker()
+
+    val engine  = TrinoIntegrationSupport.engineWithConnection(trinoUrl)
+    val model   = buildModel()  // tpch.tiny.region with count(*)
+    val ctx     = EngineContext.defaultContext
+
+    val explained = engine.explainPlan(model, ctx)
+    explained.isRight shouldBe true
+    val planText = explained.toOption.get
+
+    // The plan should be non-empty (Trino always returns something
+    // for EXPLAIN) and contain at least one operator name. We pick
+    // a generic marker that should be present in any Trino
+    // plan against the tpch.tiny.region table.
+    planText should not be empty
+    // Trino's default format includes aggregate-related operators
+    // when the query has a COUNT/GROUP BY. Match loosely.
+    planText.toUpperCase should (
+      include ("AGGREGATE")
+        or include ("OUTPUT")
+        or include ("TABLE")
+        or include ("SCAN")
+    )
+  }
 }
