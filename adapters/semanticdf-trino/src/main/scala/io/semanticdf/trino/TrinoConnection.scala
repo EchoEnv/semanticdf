@@ -105,6 +105,24 @@ final case class TrinoResult(
   /** Convenience: number of rows. */
   def rowCount: Int = rows.size
 
+  /** Convenience: true if this result has no rows. Mirrors the
+    * original Spark library's `df.isEmpty` pattern — a simple
+    * sentinel for empty result sets.
+    *
+    * Per scala-data-driven-refactor §1: this is exactly the
+    * kind of method that earns its place on a data type —
+    * CHEAP (constant-time list `isEmpty`),
+    * TOTAL (never throws), PURE (no side effects),
+    * and FUNCTION OF FIELDS (`rows.isEmpty`).
+    *
+    * ==Why on TrinoResult (vs. a separate helper)==
+    *
+    * The data-driven mantra lists `(total, fullName, isEmpty)`
+    * as the canonical examples of methods that belong on data
+    * types. They're cheap, total, pure, function of fields —
+    * exactly the test this method passes. */
+  def isEmpty: Boolean = rows.isEmpty
+
   /** Convenience: get a single cell at (row, col). Returns `None`
     * if the indices are out of bounds. */
   def cell(rowIdx: Int, colIdx: Int): Option[LiteralValue] =
