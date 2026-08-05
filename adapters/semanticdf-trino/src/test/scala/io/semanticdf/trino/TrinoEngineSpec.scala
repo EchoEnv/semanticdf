@@ -112,21 +112,84 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     psql.sql should include ("""FROM "public"."orders"""")
   }
 
-  test("execute returns Left(EngineError.FeatureDeferred) for the placeholder path") {
+  test("execute returns Left(EngineError.ConnectionFailed) when no factory is configured") {
+    // The singleton instance has no connection factory.
     val plan: ExecutionPlan[Any] = ExecutionPlan[Any](
       engine = EngineIdentity("trino", "0.286", "0.2.4"),
-      native = "SELECT * FROM orders",
+      native = io.semanticdf.core.engine.ParameterizedSql(
+        sql = """SELECT * FROM "orders"""",
+        parameters = Nil,
+      ),
     )
     val result = TrinoEngine.instance.execute(plan, EngineContext.defaultContext)
     result.isLeft shouldBe true
-    result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
   }
 
-  test("explain returns Left(EngineError.FeatureDeferred) for the placeholder path") {
-    val m = sampleModel
-    val result = TrinoEngine.instance.explain(m, EngineContext.defaultContext)
+  test("execute returns Right(TrinoResult) when factory is configured") {
+    // Build a fresh engine with a FakeTrinoConnection factory.
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql = """SELECT * FROM "public"."orders" AS "orders"""",
+      parameters = 0,
+      result = TrinoResult(
+        columns = List("orders_id"),
+        rows    = List(List(io.semanticdf.core.expr.LiteralValue.IntValue(42))),
+      ),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+
+    val plan: ExecutionPlan[Any] = ExecutionPlan[Any](
+      engine = EngineIdentity("trino", "0.286", "0.2.4"),
+      native = io.semanticdf.core.engine.ParameterizedSql(
+        sql = """SELECT * FROM "public"."orders" AS "orders"""",
+        parameters = Nil,
+      ),
+    )
+    val result = engine.execute(plan, EngineContext.defaultContext)
+    result.isRight shouldBe true
+    val tr = result.toOption.get.asInstanceOf[TrinoResult]
+    tr.rowCount shouldBe 1
+    tr.cell(0, 0) shouldBe Some(io.semanticdf.core.expr.LiteralValue.IntValue(42))
+  }
+
+  test("execute records the SQL call on the connection") {
+    val fakeConn = FakeTrinoConnection.withResponse(
+      sql = """SELECT * FROM "public"."orders" AS "orders"""",
+      parameters = 0,
+      result = TrinoResult(columns = Nil, rows = Nil),
+    )
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+
+    val plan: ExecutionPlan[Any] = ExecutionPlan[Any](
+      engine = EngineIdentity("trino", "0.286", "0.2.4"),
+      native = io.semanticdf.core.engine.ParameterizedSql(
+        sql = """SELECT * FROM "public"."orders" AS "orders"""",
+        parameters = Nil,
+      ),
+    )
+    engine.execute(plan, EngineContext.defaultContext)
+    fakeConn.recordedCalls.get(("""SELECT * FROM "public"."orders" AS "orders"""", 0)) shouldBe Some(1)
+  }
+
+  test("execute returns Left(EngineError.ConnectionFailed) for invalid plan native (not ParameterizedSql)") {
+    val fakeConn = FakeTrinoConnection()
+    val engine = new TrinoEngine().withConnectionFactory(() => fakeConn)
+
+    val plan: ExecutionPlan[Any] = ExecutionPlan[Any](
+      engine = EngineIdentity("trino", "0.286", "0.2.4"),
+      native = "NOT-A-PARAMETERIZED-SQL",  // invalid — should be ParameterizedSql
+    )
+    val result = engine.execute(plan, EngineContext.defaultContext)
     result.isLeft shouldBe true
-    result.left.toOption.get shouldBe a [EngineError.FeatureDeferred]
+    result.left.toOption.get shouldBe a [EngineError.ConnectionFailed]
+  }
+
+  test("explain returns Right(String) with the compiled SQL") {
+    val m = sampleModel  // source = SourceRef.ByName(None, Some("public"), "orders")
+    val result = TrinoEngine.instance.explain(m, EngineContext.defaultContext)
+    result.isRight shouldBe true
+    val sql = result.toOption.get
+    sql should include ("""FROM "public"."orders"""")
   }
 
   // -- boundary contract: zero Spark imports --
