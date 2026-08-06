@@ -89,10 +89,27 @@ object CacheKey {
       // both miss and hit.
       val maxRowsPart = LengthPrefixed.encodeOptString(
         Option(maxRows).filter(_ != DefaultMaxRows).map(_.toString))
+      // `eng` is the engine identity (per design §4.5.5). Included
+      // as a length-prefixed `name|nativeVersion|engineAdapterVersion`
+      // triple so a Spark request and a Trino request for the same
+      // model produce DIFFERENT cache keys. Old requests (built
+      // before this field was added) read as `None` \u2014 their cache
+      // key omits the `eng` segment, which is a different canonical
+      // string than new requests. Existing cache entries are NOT
+      // reused for new engine-aware requests; new requests build
+      // their own cache namespace. This is the conservative
+      // cross-engine cache-isolation behavior per the round-3
+      // DE finding 11 closure.
+      val enginePart = req.engine match {
+        case Some(e) => LengthPrefixed.encodeString(
+          s"${e.name}|${e.nativeVersion}|${e.engineAdapterVersion}"
+        )
+        case None    => LengthPrefixed.encodeString("")
+      }
       val canonical = s"m=$modelPart|mv=$versionPart|me=$measuresPart|dim=$dimsPart" +
         s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart" +
-        s"|mr=$maxRowsPart"
+        s"|mr=$maxRowsPart|eng=$enginePart"
       Some(LengthPrefixed.sha256(canonical))
     }
   }

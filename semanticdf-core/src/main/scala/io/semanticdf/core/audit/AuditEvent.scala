@@ -2,6 +2,8 @@ package io.semanticdf.core.audit
 
 import java.time.Instant
 
+import io.semanticdf.core.engine.EngineIdentity
+
 /** Engine-portable mirror of `io.semanticdf.audit.AuditEvent` —
   * Phase 1 increment 9: data-only audit event for engine adapters.
   *
@@ -88,6 +90,13 @@ final case class AuditEvent(
       * surface an executed plan; Spark populates this with
       * `df.queryExecution.executedPlan.toString()`). */
     executedPlan: Option[String] = None,
+    /** Engine identity (per design §4.5.5). Used by the dedup
+      * key so a Spark request and a Trino request for the same
+      * model produce DIFFERENT audit events (per round-3 DE
+      * finding 11 closure). `None` for events written before
+      * this field was added — old events read as `None`, new
+      * events write `Some(...)`. */
+    engine:       Option[EngineIdentity] = None,
 )
 
 object AuditEvent {
@@ -110,13 +119,18 @@ object AuditEvent {
       dimensions: Seq[String],
       whereHash:  Option[String],
       havingHash: Option[String],
+      engine:     Option[EngineIdentity] = None,
   ): String = {
     import java.security.MessageDigest
+    val engineStr = engine.map { e =>
+      s"${e.name}|${e.nativeVersion}|${e.engineAdapterVersion}"
+    }.getOrElse("")
     val canonical = s"${model}|${version}|" +
       s"${measures.sorted.mkString(",")}|" +
       s"${dimensions.sorted.mkString(",")}|" +
       s"${whereHash.getOrElse("")}|" +
-      s"${havingHash.getOrElse("")}"
+      s"${havingHash.getOrElse("")}|" +
+      s"${engineStr}"
     val bytes = MessageDigest.getInstance("SHA-256").digest(canonical.getBytes("UTF-8"))
     bytes.map(b => f"${b & 0xff}%02x").mkString
   }
