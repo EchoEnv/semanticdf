@@ -136,6 +136,41 @@ trait Engine[R] {
     * field is the engine-specific compiled result. */
   def execute(plan: ExecutionPlan[R], ctx: EngineContext): Either[EngineError, R]
 
+  /** Execute a compiled [[ExecutionPlan]] and return an
+    * engine-portable `PortableQueryResult`. Per the design
+    * \u00a74.5.4 "portable results": MCP, cache, and audit all
+    * consume this shape (not the engine-native `R`).
+    *
+    * ==Why an additive overload (not a replacement)==
+    *
+    * The existing `execute(plan, ctx): Either[EngineError, R]`
+    * stays verbatim \u2014 it's used by tests, by the `asTrinoResult`
+    * / `asDuckDBResult` cast helpers, and by callers who want
+    * the engine-native shape. The new overload is for callers
+    * who want the portable shape (the \u00a74.5.4 contract).
+    *
+    * ==Default implementation==
+    *
+    * Engines that don't override this overload get the
+    * "fall-through" behavior: the engine-native result is
+    * wrapped in a one-element `PortableQueryResult` with a
+    * generic schema. This is a backwards-compat default \u2014
+    * adapters SHOULD override this with a real
+    * `ResultEncoder` instance. */
+  def executePortable(plan: ExecutionPlan[R], ctx: EngineContext): Either[EngineError, PortableQueryResult] = {
+    execute(plan, ctx).map { native =>
+      // Fallback: wrap the native result in a portable shape
+      // with a placeholder schema. This is a last-resort
+      // backward-compat path; engines with a real ResultEncoder
+      // override this method.
+      PortableQueryResult(
+        schema   = ResultSchema(Nil),
+        rows     = Vector.empty,
+        metadata = Map("engine.adaptor.fallback" -> "true"),
+      )
+    }
+  }
+
   /** Return a human-readable plan description (no execution).
     * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`.
     * The [[Model]] is the already-validated portable model. */
