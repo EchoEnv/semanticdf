@@ -135,57 +135,55 @@ class DuckDBEngine extends Engine[Any] {
     * Mirrors `TrinoEngine.compile` (with the same §4.6
     * source-resolution wiring from PR #395). */
   override def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
-    // Step 1: source resolution (if configured). Mirrors the
-    // Trino engine's wiring exactly — same error cases, same
-    // Either types.
-    val resolutionResult: Either[EngineError, Unit] = _sourceResolver match {
+    // PR 2: when a `SourceResolver` is configured, route through
+    // the new engine-portable `RelOp` flow. When no resolver is
+    // configured, keep the legacy `Model → SQL` direct path.
+    val engineId = EngineIdentity(
+      name                 = identity,
+      nativeVersion        = "1.5.5",
+      engineAdapterVersion = "0.2.4",
+    )
+    _sourceResolver match {
       case None =>
-        Right(())
+        val sql = DuckDBQueryCompiler.instance.compile(model, Map.empty)
+        Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+          engine               = engineId,
+          native               = sql,
+          warnings             = Nil,
+          requiredCapabilities = capabilities,
+          normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+        ))
 
       case Some(resolver) =>
-        resolver.resolve(model.source, EngineIdentity(
-          name                 = identity,
-          nativeVersion        = "1.5.5",
-          engineAdapterVersion = "0.2.4",
-        )) match {
-          case _: ResolvedSource.Scan        => Right(())
-          case _: ResolvedSource.NotFound    =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"duckdb.compile.source-not-found:${model.name}",
-              release = "v0.5.0",
-            ))
-          case _: ResolvedSource.Incompatible =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"duckdb.compile.source-incompatible:${model.name}",
-              release = "v0.5.0",
-            ))
-          case _: ResolvedSource.AuthFailed   =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"duckdb.compile.source-auth-failed:${model.name}",
-              release = "v0.5.0",
-            ))
+        io.semanticdf.core.query.QueryBuilder.build(model, resolver, engineId).map { (plan: io.semanticdf.core.rel.RelOp) =>
+          val sql = DuckDBQueryCompiler.instance.compileRelOp(plan)
+          io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+            engine               = engineId,
+            native               = sql,
+            warnings             = Nil,
+            requiredCapabilities = capabilities,
+            normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+          )
         }
     }
+  }
 
-    resolutionResult.map { _ =>
-      val sql = DuckDBQueryCompiler.instance.compile(model, Map.empty)
-      val engineId = EngineIdentity(
-        name                 = identity,
-        nativeVersion        = "1.5.5",
-        engineAdapterVersion = "0.2.4",
-      )
-      // Per design §4.5.4 "Inspectable plans": populate
-      // warnings, requiredCapabilities, normalizedSchema.
-      // DuckDB's native plan is `ParameterizedSql` (already
-      // Serializable) so `cacheable = true` is the default.
-      io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
-        engine               = engineId,
-        native               = sql,
-        warnings             = Nil,
-        requiredCapabilities = capabilities,
-        normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),  // populated in PR 3
-      )
-    }
+  /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
+    * directly. Mirrors `TrinoEngine.compile(plan, ctx)`. */
+  def compile(plan: io.semanticdf.core.rel.RelOp, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
+    val engineId = EngineIdentity(
+      name                 = identity,
+      nativeVersion        = "1.5.5",
+      engineAdapterVersion = "0.2.4",
+    )
+    val sql = DuckDBQueryCompiler.instance.compileRelOp(plan)
+    Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+      engine               = engineId,
+      native               = sql,
+      warnings             = Nil,
+      requiredCapabilities = capabilities,
+      normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+    ))
   }
 
   /** Execute a compiled [[ExecutionPlan]] against a DuckDB

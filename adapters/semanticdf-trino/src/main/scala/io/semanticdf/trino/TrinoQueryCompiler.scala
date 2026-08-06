@@ -160,6 +160,109 @@ class TrinoQueryCompiler {
     )
   }
 
+  /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
+    * to a Trino SQL string. The engine-portable path per
+    * `Engine.compile(plan, ctx)`.
+    *
+    * ==Why a separate method (not a `Model` overload)==
+    *
+    * Per the design §4.5.1: the contract's primary compile
+    * path takes `RelOp`, not `Model`. The `RelOp` is the result
+    * of `QueryBuilder.build(model, resolver)` — the engine
+    * receives a pre-resolved plan tree.
+    *
+    * ==v1 scope==
+    *
+    * This method handles the 7 RelOp cases the engine-portable
+    * model produces:
+    *   - `Scan`         → the FROM clause (with catalog/schema/table)
+    *   - `Filter`       → WHERE clause
+    *   - `Aggregate`    → GROUP BY + aggregate columns
+    *   - `Project`      → SELECT columns
+    *   - `Sort`         → ORDER BY clause
+    *   - `Limit`        → LIMIT ... OFFSET ...
+    *   - `Join`         → JOIN clause (deferred; emits placeholder)
+    *
+    * For v1 we handle the same shape as the existing `Model`
+    * overload: dimensions / measures / calculatedMeasures
+    * surfaced via `Project` + `Aggregate`. */
+  def compileRelOp(plan: io.semanticdf.core.rel.RelOp): ParameterizedSql = {
+    val params = scala.collection.mutable.ListBuffer.empty[io.semanticdf.core.expr.LiteralValue]
+    val parts  = renderRelOp(plan, params)
+    ParameterizedSql(
+      sql        = parts.filter(_.nonEmpty).mkString(" "),
+      parameters = params.toList,
+    )
+  }
+
+  /** Walk a `RelOp` tree top-down, emitting SQL fragments into
+    * `parts` and binding literal parameters into `params`. */
+  private def renderRelOp(
+      plan:   io.semanticdf.core.rel.RelOp,
+      params: scala.collection.mutable.ListBuffer[io.semanticdf.core.expr.LiteralValue],
+  ): List[String] = {
+    plan match {
+      case io.semanticdf.core.rel.RelOp.Scan(source, _, _) =>
+        // The FROM clause: catalog.schema.table.
+        val fromClause = source match {
+          case io.semanticdf.core.engine.ResolvedSource.Scan(
+            io.semanticdf.core.model.SourceRef.ByName(catalog, namespace, table), _) =>
+            // Use the original SourceRef for the FROM clause so
+            // the engine emits the user-declared catalog/schema/table.
+            val cat = catalog.getOrElse("memory")
+            val sch = namespace.getOrElse("main")
+            s""""$cat"."$sch"."$table""""
+          case _ => "-- unresolved source"
+        }
+        List(s"FROM $fromClause")
+
+      case io.semanticdf.core.rel.RelOp.Filter(input, predicate) =>
+        renderRelOp(input, params) :+ s"WHERE ${renderExpr(predicate, params)}"
+
+      case io.semanticdf.core.rel.RelOp.Aggregate(input, groupBy, aggregates) =>
+        // The aggregate node emits the GROUP BY and the aggregated
+        // columns. The project node above it sets the SELECT order.
+        val groupByCols = groupBy.map(e => renderExpr(e, params))
+        val aggCols     = aggregates.map(a => renderAggregateCall(a, params))
+        renderRelOp(input, params) ++
+          (if (groupByCols.nonEmpty) List(s"GROUP BY ${groupByCols.mkString(", ")}") else Nil) ++
+          aggCols.map(c => s"SELECT $c")
+
+      case io.semanticdf.core.rel.RelOp.Project(input, expressions) =>
+        val projCols = expressions.map { case (e, alias) =>
+          s"${renderExpr(e, params)} AS \"$alias\""
+        }
+        renderRelOp(input, params) :+ s"SELECT ${projCols.mkString(", ")}"
+
+      case io.semanticdf.core.rel.RelOp.Sort(input, keys) =>
+        val orderBy = keys.map(renderSortKey).mkString(", ")
+        renderRelOp(input, params) :+ s"ORDER BY $orderBy"
+
+      case io.semanticdf.core.rel.RelOp.Limit(input, count, offset) =>
+        val limit = if (offset > 0) s"LIMIT $count OFFSET $offset" else s"LIMIT $count"
+        renderRelOp(input, params) :+ limit
+
+      case io.semanticdf.core.rel.RelOp.Join(_, _, _, _) =>
+        List("-- Joins deferred to a future PR")
+    }
+  }
+
+  /** Render a `SortKey` (engine-portable) as a Trino `ORDER BY`
+    * fragment. */
+  private def renderSortKey(
+      key: io.semanticdf.core.rel.SortKey,
+  ): String = {
+    val dir = key.direction match {
+      case io.semanticdf.core.rel.SortDirection.Ascending  => "ASC"
+      case io.semanticdf.core.rel.SortDirection.Descending => "DESC"
+    }
+    val nullOrd = key.nullOrdering match {
+      case io.semanticdf.core.rel.NullOrdering.First => "NULLS FIRST"
+      case io.semanticdf.core.rel.NullOrdering.Last  => "NULLS LAST"
+    }
+    s"\"${key.expression.asInstanceOf[Expr].toString}\" $dir $nullOrd"
+  }
+
   // -- SELECT clause --
 
   /** Render the SELECT clause columns: dimensions + base measures
