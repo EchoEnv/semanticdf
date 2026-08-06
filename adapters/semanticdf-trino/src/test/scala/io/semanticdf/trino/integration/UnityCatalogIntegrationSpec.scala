@@ -1,7 +1,8 @@
 package io.semanticdf.trino.integration
 
-import io.semanticdf.core.engine.{EngineIdentity, ResolvedSource}
-import io.semanticdf.core.model.SourceRef
+import io.semanticdf.core.engine.{EngineContext, EngineIdentity, ResolvedSource}
+import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelStatus, SourceRef}
+import io.semanticdf.trino.{TrinoEngine, TrinoConnection}
 import io.semanticdf.unitycatalog.{HttpUnityCatalogClient, UnityCatalogSourceResolver}
 import org.scalatest.Assertions.fail
 
@@ -124,7 +125,6 @@ class UnityCatalogIntegrationSpec extends UnityCatalogFixture {
   }
 
   // -- resource monitoring proof --
-
   test("Docker cluster stays under memory cap during a real resolve (memory+disk monitoring)") {
     assumeDocker()
 
@@ -175,5 +175,72 @@ class UnityCatalogIntegrationSpec extends UnityCatalogFixture {
     val diskBytes = scala.sys.process.Process(Seq("du", "-sb", "../semanticdf-unity-catalog/docker-uc/data"))
       .lineStream.headOption.map(_.split('\t').head.toLong).getOrElse(0L)
     Map("mem_bytes" -> memBytes.toString, "disk_bytes" -> diskBytes.toString)
+  }
+
+  // -- cross-engine composition (per multi-engine design §4.6) --
+
+  test("TrinoEngine.compile calls UnityCatalogSourceResolver before SQL emit (real cluster)") {
+    assumeDocker()
+    setupTestResources()
+
+    // Compose the catalog layer (Unity Catalog) with the engine
+    // layer (Trino). This is the §4.6 cross-engine composition
+    // the design promises: any catalog + any engine compose
+    // cleanly without coupling.
+    val client   = HttpUnityCatalogClient(baseUrl = ucUrl)
+    val resolver = UnityCatalogSourceResolver(client, identity)
+    val engine   = new TrinoEngine().withSourceResolver(resolver)
+
+    // Build a minimal Model pointing at the UC-registered table.
+    // We use empty dimensions/measures because this test only
+    // exercises the resolution path, not the SQL emit against
+    // actual rows.
+    val model = Model.of(
+      name      = "orders",
+      source    = SourceRef.ByName(
+        catalog   = Some("unity"),
+        namespace = Some("semanticdf"),
+        table     = "orders",
+      ),
+      dimensions         = Nil,
+      measures           = Nil,
+      calculatedMeasures = Nil,
+      joins              = Nil,
+      defaultPolicies    = ModelPolicyDefaults.none,
+      status             = ModelStatus.Draft,
+    ).fold(err => fail(s"sampleModel failed validation: $err"), m => m)
+
+    val result = engine.compile(model, EngineContext.defaultContext)
+    result.isRight shouldBe true
+  }
+
+  test("TrinoEngine.compile with UnityCatalogSourceResolver returns Left(FeatureDeferred) when UC says NotFound") {
+    assumeDocker()
+    // DO NOT call setupTestResources() — the catalog doesn't have
+    // the table; the resolver must return NotFound; compile must
+    // translate that to Left(EngineError.FeatureDeferred).
+    val client   = HttpUnityCatalogClient(baseUrl = ucUrl)
+    val resolver = UnityCatalogSourceResolver(client, identity)
+    val engine   = new TrinoEngine().withSourceResolver(resolver)
+
+    val model = Model.of(
+      name      = "does_not_exist",
+      source    = SourceRef.ByName(
+        catalog   = Some("unity"),
+        namespace = Some("semanticdf"),
+        table     = "does_not_exist_42",
+      ),
+      dimensions         = Nil,
+      measures           = Nil,
+      calculatedMeasures = Nil,
+      joins              = Nil,
+      defaultPolicies    = ModelPolicyDefaults.none,
+      status             = ModelStatus.Draft,
+    ).fold(err => fail(s"sampleModel failed validation: $err"), m => m)
+
+    val result = engine.compile(model, EngineContext.defaultContext)
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err.toString should include ("source-not-found")
   }
 }

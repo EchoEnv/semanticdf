@@ -633,4 +633,101 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     err shouldBe a [EngineError.ConnectionFailed]
     err.toString should include ("preview n must be >= 0")
   }
+
+  // -- withSourceResolver wiring (per multi-engine design §4.6) --
+
+  test("withSourceResolver sets the resolver and returns the same engine (fluent)") {
+    val engine = new TrinoEngine()
+    val called = new java.util.concurrent.atomic.AtomicInteger(0)
+    val resolver = new io.semanticdf.core.engine.SourceResolver {
+      override def resolve(
+          source:    io.semanticdf.core.model.SourceRef,
+          identity:  io.semanticdf.core.engine.EngineIdentity,
+      ): io.semanticdf.core.engine.ResolvedSource = {
+        called.incrementAndGet()
+        io.semanticdf.core.engine.ResolvedSource.Scan(
+          source = source,
+          schema = io.semanticdf.core.engine.ResolvedSchema(),
+        )
+      }
+    }
+    val result = engine.withSourceResolver(resolver)
+    result should be theSameInstanceAs engine
+    engine.sourceResolver shouldBe Some(resolver)
+  }
+
+  test("compile calls the configured resolver before SQL emit (proves §4.6 wiring)") {
+    val called = new java.util.concurrent.atomic.AtomicInteger(0)
+    val resolver = new io.semanticdf.core.engine.SourceResolver {
+      override def resolve(
+          source:    io.semanticdf.core.model.SourceRef,
+          identity:  io.semanticdf.core.engine.EngineIdentity,
+      ): io.semanticdf.core.engine.ResolvedSource = {
+        called.incrementAndGet()
+        io.semanticdf.core.engine.ResolvedSource.Scan(
+          source = source,
+          schema = io.semanticdf.core.engine.ResolvedSchema(),
+        )
+      }
+    }
+    val engine = new TrinoEngine().withSourceResolver(resolver)
+
+    val m = sampleModel
+    val result = engine.compile(m, EngineContext.defaultContext)
+
+    result.isRight shouldBe true
+    called.get() shouldBe 1
+  }
+
+  test("compile returns Left(EngineError.FeatureDeferred) when the resolver rejects with NotFound") {
+    val resolver = new io.semanticdf.core.engine.SourceResolver {
+      override def resolve(
+          source:    io.semanticdf.core.model.SourceRef,
+          identity:  io.semanticdf.core.engine.EngineIdentity,
+      ): io.semanticdf.core.engine.ResolvedSource = {
+        io.semanticdf.core.engine.ResolvedSource.NotFound(
+          source = source,
+          reason = "test",
+        )
+      }
+    }
+    val engine = new TrinoEngine().withSourceResolver(resolver)
+
+    val m = sampleModel
+    val result = engine.compile(m, EngineContext.defaultContext)
+
+    result.isLeft shouldBe true
+    val err = result.left.toOption.get
+    err shouldBe a [EngineError.FeatureDeferred]
+    err.toString should include ("source-not-found")
+  }
+
+  test("compile returns Left(EngineError.FeatureDeferred) when the resolver rejects with Incompatible") {
+    val resolver = new io.semanticdf.core.engine.SourceResolver {
+      override def resolve(
+          source:    io.semanticdf.core.model.SourceRef,
+          identity:  io.semanticdf.core.engine.EngineIdentity,
+      ): io.semanticdf.core.engine.ResolvedSource = {
+        io.semanticdf.core.engine.ResolvedSource.Incompatible(
+          source = source,
+          reason = "test incompatible",
+        )
+      }
+    }
+    val engine = new TrinoEngine().withSourceResolver(resolver)
+
+    val result = engine.compile(sampleModel, EngineContext.defaultContext)
+    result.isLeft shouldBe true
+    result.left.toOption.get.toString should include ("source-incompatible")
+  }
+
+  test("compile skips the resolver when none is configured (backward-compat)") {
+    // No withSourceResolver call — engine.compile() should NOT
+    // touch a resolver (we have no way to assert "no resolver
+    // was called" except by ensuring compile succeeds without one).
+    val engine = new TrinoEngine()
+    val m = sampleModel
+    val result = engine.compile(m, EngineContext.defaultContext)
+    result.isRight shouldBe true
+  }
 }
