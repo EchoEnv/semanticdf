@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-duckdb — DuckDB engine adapter for the semanticdf library.
+
+  The SECOND engine adapter per the multi-engine design's §7.5
+  ("after two production engines reveal the stable seam"). DuckDB
+  adds:
+    - In-process transport (alongside Trino's JDBC)
+    - Embedded analytics pattern (alongside Trino's cluster)
+    - A SQL dialect that mirrors Spark DataFrame's most closely
+
+  ==Why this module exists==
+
+  Per the design doc §4.6.1 ("What goes in each layer" — engine
+  layer): DuckDB is a query engine, so it ships an Engine[R] impl.
+  Per §4.6.4 ("Why two contracts, not one"): the catalog layer
+  is independent. DuckDB has its own catalog discovery
+  (`DESCRIBE <table>`), so we also ship a `DuckDBSourceResolver`.
+  Both are engine-portable in their contracts; only the behavior
+  (in-memory DB vs remote cluster) differs.
+
+  ==Why DuckDB specifically==
+
+  Per user direction ("ok go duckdb"):
+    - Local-first (no cloud dependency)
+    - In-process transport (no Docker required for tests)
+    - SQL semantics closest to Spark DataFrame of any non-Spark
+      engine (most aligned with "use similar behavior as semanticdf
+      orginal")
+    - Embedded analytics use case (production-relevance)
+
+  ==Why this module is separate from semanticdf-trino==
+
+  Per the multi-engine design §4.6 layer-separation principle:
+  each engine adapter ships its own engine. The Trino adapter
+  has zero DuckDB deps; the DuckDB adapter has zero Trino deps.
+  They share the engine-portable contracts in semanticdf-core
+  but NOT each other's behavior.
+
+  ==What this module does==
+
+  - `DuckDBEngine` — `Engine[Any]` impl with the full set of
+    Spark library mirrors (`compile`, `execute`, `explain`,
+    `explainPlan`, `preview`, `count`, `executeAsRows`,
+    `previewAsRows`, `schema`, `describeCapabilities`)
+  - `DuckDBQueryCompiler` — Model → DuckDB SQL
+  - `JdbcDuckDBConnection` — JDBC wrapper (works for in-memory
+    and file-based modes)
+  - `DuckDBConnectionPoolFactory` — HikariCP-backed pool
+  - `DuckDBResult` + `DuckDBResultDecoder` — result shape
+  - `DuckDBSourceResolver` — `SourceResolver` impl using
+    DuckDB's `DESCRIBE <table>`
+
+  ==What this module does NOT do==
+
+  - No Spark / Trino / Databricks deps. Pure DuckDB.
+  - No engine-portable type definitions (those live in core).
+  - No MCP registry integration (consuming engine does that).
+
+  ==Boundary contract==
+
+  Zero Spark imports. Verifiable by:
+  `grep -r 'org.apache.spark' adapters/semanticdf-duckdb/src/main/scala/`
+
+  ==Library version==
+
+  0.2.4 — same as parent, core, spark, trino, unity-catalog.
+  No bump in this PR (no user-facing change; pure new engine).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.2.4</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-duckdb_2.13</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-duckdb</name>
+  <description>
+    DuckDB engine adapter for the semanticdf library. The second
+    engine adapter per the multi-engine design's §7.5 — adding
+    in-process + JDBC transports alongside Trino's remote-cluster
+    pattern.
+  </description>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (no Spark in this dep) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_2.13</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- DuckDB JDBC driver — includes the embedded engine for
+         in-memory and file-based modes. No external server needed
+         for tests. The same JAR runs against a `duckdb` server
+         via the standard JDBC URL pattern. -->
+    <dependency>
+      <groupId>org.duckdb</groupId>
+      <artifactId>duckdb_jdbc</artifactId>
+      <version>1.5.5.1</version>
+    </dependency>
+
+    <!-- HikariCP — connection pooling for production deployments
+         (mirrors the Trino adapter's pool setup, PR #389).
+         Optional: in-memory mode works without it. -->
+    <dependency>
+      <groupId>com.zaxxer</groupId>
+      <artifactId>HikariCP</artifactId>
+      <version>5.1.0</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

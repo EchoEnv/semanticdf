@@ -23,6 +23,7 @@
     <module>adapters/semanticdf-spark</module>
     <module>adapters/semanticdf-trino</module>
     <module>adapters/semanticdf-unity-catalog</module>
+    <module>adapters/semanticdf-duckdb</module>
   </modules>
 
   <properties>
