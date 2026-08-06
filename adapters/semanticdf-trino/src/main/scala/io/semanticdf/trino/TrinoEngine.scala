@@ -1,6 +1,6 @@
 package io.semanticdf.trino
 
-import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql, ResolvedSource, SourceResolver}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql, PortableQueryResult, ResolvedSource, SourceResolver}
 import io.semanticdf.core.model.Model
 import io.semanticdf.core.schema.{SchemaField, SchemaFieldKind, SchemaSummary}
 
@@ -369,6 +369,21 @@ class TrinoEngine extends Engine[Any] {
               reason = s"Trino engine expects ParameterizedSql, got: ${other.getClass.getSimpleName}",
             ))
         }
+    }
+  }
+
+  /** Override `executePortable` to return a `PortableQueryResult`
+    * via the `TrinoResultEncoder`. Per the design §4.5.4
+    * "portable results": MCP / cache / audit consume this shape.
+    *
+    * The path: `execute` (engine-native TrinoResult) \u2192 encode
+    * (typed values) \u2192 `PortableQueryResult`. The existing
+    * `execute` stays verbatim for the test/cast-helper use case. */
+  override def executePortable(plan: ExecutionPlan[Any], ctx: EngineContext): Either[EngineError, PortableQueryResult] = {
+    val encoder = new TrinoResultEncoder
+    execute(plan, ctx).flatMap { native =>
+      encoder.encode(native.asInstanceOf[TrinoResult])
+        .left.map(err => EngineError.ConnectionFailed(reason = s"trino result-encode failed: $err"))
     }
   }
 

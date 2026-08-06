@@ -1,6 +1,6 @@
 package io.semanticdf.duckdb
 
-import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql, ResolvedSource, SourceResolver}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql, PortableQueryResult, ResolvedSource, SourceResolver}
 import io.semanticdf.core.model.Model
 import io.semanticdf.core.schema.{SchemaField, SchemaFieldKind, SchemaSummary}
 
@@ -213,6 +213,17 @@ class DuckDBEngine extends Engine[Any] {
               reason = s"DuckDB engine expects ParameterizedSql, got: ${other.getClass.getSimpleName}",
             ))
         }
+    }
+  }
+
+  /** Override `executePortable` to return a `PortableQueryResult`
+    * via the `DuckDBResultEncoder`. Per the design §4.5.4
+    * "portable results": MCP / cache / audit consume this shape. */
+  override def executePortable(plan: ExecutionPlan[Any], ctx: EngineContext): Either[EngineError, PortableQueryResult] = {
+    val encoder = new DuckDBResultEncoder
+    execute(plan, ctx).flatMap { native =>
+      encoder.encode(native.asInstanceOf[DuckDBResult])
+        .left.map(err => EngineError.ConnectionFailed(reason = s"duckdb result-encode failed: $err"))
     }
   }
 
