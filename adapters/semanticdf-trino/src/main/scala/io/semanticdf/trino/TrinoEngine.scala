@@ -251,72 +251,69 @@ class TrinoEngine extends Engine[Any] {
     * would be premature; the existing variant fits and the
     * MCP error mapping handles it. */
   def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
-    // Step 1: source resolution (if configured). See scaladoc above.
-    val resolutionResult: Either[EngineError, Unit] = _sourceResolver match {
+    // PR 2: when a `SourceResolver` is configured, route through
+    // the new engine-portable `RelOp` flow (QueryBuilder +
+    // compileRelOp). When no resolver is configured, keep the
+    // legacy `Model → SQL` direct path for backward-compat.
+    val engineId = EngineIdentity(
+      name                 = identity,
+      nativeVersion        = "0.286",
+      engineAdapterVersion = "0.2.4",
+    )
+    _sourceResolver match {
       case None =>
-        // No catalog configured — skip the resolution step
-        // (backward-compat with PRs before §4.6 wiring).
-        Right(())
+        // No catalog configured — use the legacy direct path
+        // (no source resolution, no RelOp construction).
+        val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
+        Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+          engine               = engineId,
+          native               = sql,
+          warnings             = Nil,
+          requiredCapabilities = capabilities,
+          normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+        ))
 
       case Some(resolver) =>
-        resolver.resolve(model.source, EngineIdentity(
-          name                 = identity,
-          nativeVersion        = "0.286",
-          engineAdapterVersion = "0.2.4",
-        )) match {
-          case _: ResolvedSource.Scan =>
-            // Resolved successfully — schema info is available
-            // to the compile pipeline. Currently we only need
-            // the resolution itself to pass; future PRs may
-            // thread the schema into SQL emit.
-            Right(())
-
-          case _: ResolvedSource.NotFound =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"trino.compile.source-not-found:${model.name}",
-              release = "v0.5.0",
-            ))
-
-          case _: ResolvedSource.Incompatible =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"trino.compile.source-incompatible:${model.name}",
-              release = "v0.5.0",
-            ))
-
-          case _: ResolvedSource.AuthFailed =>
-            Left(EngineError.FeatureDeferred(
-              feature = s"trino.compile.source-auth-failed:${model.name}",
-              release = "v0.5.0",
-            ))
+        // Resolver configured — use the new RelOp flow.
+        io.semanticdf.core.query.QueryBuilder.build(model, resolver, engineId).map { (plan: io.semanticdf.core.rel.RelOp) =>
+          val sql = TrinoQueryCompiler.instance.compileRelOp(plan)
+          io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+            engine               = engineId,
+            native               = sql,
+            warnings             = Nil,
+            requiredCapabilities = capabilities,
+            normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+          )
         }
     }
+  }
 
-    // Step 2: SQL emit (only if resolution succeeded).
-    resolutionResult.map { _ =>
-      // For v1: the engine doesn't yet hold a model registry
-      // OR a rollup registry, so joins and rollup selection are
-      // NOT resolved at the engine level. The caller can call
-      // `TrinoQueryCompiler.instance.compile(...)` directly to
-      // provide the registries. Future PRs will add `modelRegistry`
-      // and `rollupRegistry` fields to the engine.
-      val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
-      val engineId = EngineIdentity(
-        name                 = identity,
-        nativeVersion        = "0.286",
-        engineAdapterVersion = "0.2.4",
-      )
-      // Per design §4.5.4 "Inspectable plans": populate
-      // warnings, requiredCapabilities, normalizedSchema.
-      // Trino's native plan is `ParameterizedSql` (already
-      // Serializable) so `cacheable = true` is the default.
-      io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
-        engine               = engineId,
-        native               = sql,
-        warnings             = Nil,
-        requiredCapabilities = capabilities,
-        normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),  // populated in PR 3
-      )
-    }
+  /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
+    * directly. The engine-portable path per `Engine.compile(plan, ctx)`.
+    *
+    * Per the design §4.5.1: the contract's primary compile path
+    * takes `RelOp`, not `Model`. The `Model` overload above routes
+    * through `QueryBuilder` to produce the `RelOp`; this overload
+    * accepts the `RelOp` directly (for adapters that want to skip
+    * the QueryBuilder step).
+    *
+    * v1: a single-source `RelOp` — no joins, no set ops
+    * (deferred per design §11). The RelOp walking happens
+    * in `TrinoQueryCompiler.compileRelOp`. */
+  def compile(plan: io.semanticdf.core.rel.RelOp, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
+    val engineId = EngineIdentity(
+      name                 = identity,
+      nativeVersion        = "0.286",
+      engineAdapterVersion = "0.2.4",
+    )
+    val sql = TrinoQueryCompiler.instance.compileRelOp(plan)
+    Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+      engine               = engineId,
+      native               = sql,
+      warnings             = Nil,
+      requiredCapabilities = capabilities,
+      normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+    ))
   }
 
   /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.

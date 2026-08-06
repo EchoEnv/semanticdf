@@ -1,6 +1,7 @@
 package io.semanticdf.core.engine
 
 import io.semanticdf.core.model.Model
+import io.semanticdf.core.rel.RelOp
 
 /** Engine-portable contract for query engines —
   * Phase 2 of the multi-engine design (docs/design/multi-engine-design.md §4).
@@ -90,7 +91,39 @@ trait Engine[R] {
     * Engine implementations override this. The [[Model]] is the
     * already-validated portable model (via \`Model.of\`); engine
     * adapters can rely on its invariants. */
-  def compile(model: Model, ctx: EngineContext): Either[EngineError, R]
+  def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[R]]
+
+  /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
+    * to an engine-specific plan. Returns
+    * `Either[EngineError, ExecutionPlan[R]]` — `Left` for any
+    * compile-time failure.
+    *
+    * ==Why both `Model` AND `RelOp` overloads==
+    *
+    * Per the multi-engine design §4.5.1: the contract's
+    * "primary" compile path takes a `RelOp` (the portable
+    * relational IR), not a `Model`. The `Model` overload above
+    * is provided for user ergonomics — adapters that want to skip
+    * the QueryBuilder step (e.g. for performance or to test
+    * hand-rolled `RelOp`s) can implement this overload directly.
+    *
+    * Per scala-data-driven-refactor §1 ("data is data, behavior
+    * lives elsewhere"): the `RelOp` is the engine-portable data
+    * shape; the engine-specific lowering is the behavior. This
+    * overload makes the boundary explicit.
+    *
+    * ==Why `ExecutionPlan[R]` (not just `R`)==
+    *
+    * Per PR #398: `ExecutionPlan` is now a `sealed trait` with
+    * abstract `warnings`, `requiredCapabilities`,
+    * `normalizedSchema`, `isCacheable` members. The return type
+    * is the inspectable shape — not just the engine-native
+    * payload. This fixes the DE-5 / ARC-9 finding that
+    * `compile` was returning `R` while impls were returning
+    * `ExecutionPlan[R]` (a latent type mismatch hidden by
+    * `R = Any`). */
+  def compile(plan: RelOp, ctx: EngineContext): Either[EngineError, ExecutionPlan[R]]
+
 
   /** Run a compiled [[ExecutionPlan]] and return a portable result.
     * Returns \`Either[EngineError, R]\` — \`Left\` for any
