@@ -300,13 +300,21 @@ class TrinoEngine extends Engine[Any] {
       // provide the registries. Future PRs will add `modelRegistry`
       // and `rollupRegistry` fields to the engine.
       val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
-      ExecutionPlan(
-        engine = EngineIdentity(
-          name                 = identity,
-          nativeVersion        = "0.286",
-          engineAdapterVersion = "0.2.4",
-        ),
-        native = sql,
+      val engineId = EngineIdentity(
+        name                 = identity,
+        nativeVersion        = "0.286",
+        engineAdapterVersion = "0.2.4",
+      )
+      // Per design §4.5.4 "Inspectable plans": populate
+      // warnings, requiredCapabilities, normalizedSchema.
+      // Trino's native plan is `ParameterizedSql` (already
+      // Serializable) so `cacheable = true` is the default.
+      io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+        engine               = engineId,
+        native               = sql,
+        warnings             = Nil,
+        requiredCapabilities = capabilities,
+        normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),  // populated in PR 3
       )
     }
   }
