@@ -169,13 +169,21 @@ class DuckDBEngine extends Engine[Any] {
 
     resolutionResult.map { _ =>
       val sql = DuckDBQueryCompiler.instance.compile(model, Map.empty)
-      ExecutionPlan(
-        engine = EngineIdentity(
-          name                 = identity,
-          nativeVersion        = "1.5.5",
-          engineAdapterVersion = "0.2.4",
-        ),
-        native = sql,
+      val engineId = EngineIdentity(
+        name                 = identity,
+        nativeVersion        = "1.5.5",
+        engineAdapterVersion = "0.2.4",
+      )
+      // Per design §4.5.4 "Inspectable plans": populate
+      // warnings, requiredCapabilities, normalizedSchema.
+      // DuckDB's native plan is `ParameterizedSql` (already
+      // Serializable) so `cacheable = true` is the default.
+      io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+        engine               = engineId,
+        native               = sql,
+        warnings             = Nil,
+        requiredCapabilities = capabilities,
+        normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),  // populated in PR 3
       )
     }
   }
