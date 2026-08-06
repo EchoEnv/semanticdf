@@ -24,6 +24,7 @@
     <module>adapters/semanticdf-trino</module>
     <module>adapters/semanticdf-unity-catalog</module>
     <module>adapters/semanticdf-duckdb</module>
+    <module>adapters/semanticdf-hive-metastore</module>
   </modules>
 
   <properties>
