@@ -124,6 +124,7 @@ The adapter also mirrors common Spark `DataFrame` terminal operations:
 | #389 | HikariCP-backed `TrinoConnectionPoolFactory` |
 | #390 | `TrinoEngine.explainPlan` (cluster-aware, mirrors `df.explain(spark)`) |
 | #392 | `TrinoEngine.schema` + engine-portable `SchemaSummary` (mirrors `df.schema`) |
+| #395 | Cross-engine composition (TrinoEngine.withSourceResolver + UnityCatalogSourceResolver, proves §4.6) |
 
 All non-parked items in the multi-engine design (§7.2) are now
 landed in this adapter.
@@ -249,6 +250,36 @@ val engine = new TrinoEngine().withConnectionFactory(pool)
 ```scala
 val planString: String = engine.explainPlan(model, ctx).toOption.get
 ```
+
+**Cross-engine composition (catalog + engine, per §4.6):**
+```scala
+import io.semanticdf.trino.TrinoEngine
+import io.semanticdf.unitycatalog.{HttpUnityCatalogClient, UnityCatalogSourceResolver}
+
+// 1. Build the catalog layer (Unity Catalog REST API).
+val client   = HttpUnityCatalogClient(baseUrl = "http://uc.example.com:8080")
+val resolver = UnityCatalogSourceResolver(client, engine.identity)
+
+// 2. Build the engine layer and wire the resolver in.
+val engine = new TrinoEngine()
+  .withConnectionFactory(() => JdbcTrinoConnection.fromUrl("jdbc:trino://..."))
+  .withSourceResolver(resolver)
+
+// 3. compile() consults the resolver BEFORE SQL emit. If UC says
+//    the table doesn't exist, compile returns Left(FeatureDeferred).
+val plan = engine.compile(model, EngineContext.defaultContext) match {
+  case Right(p)  => p
+  case Left(err) => throw new RuntimeException(s"compile failed: $err")
+}
+```
+
+The composition pattern proves the multi-engine design's §4.6
+layer-separation principle: any catalog adapter (Unity Catalog,
+Hive Metastore, Glue, Iceberg REST, ...) composes with any engine
+adapter (Trino, Spark, DuckDB, ...) without coupling. The
+adapter modules are independent — `adapters/semanticdf-trino`
+depends on `adapters/semanticdf-unity-catalog` only at test
+scope; production users can swap catalog adapters freely.
 
 ## See also
 

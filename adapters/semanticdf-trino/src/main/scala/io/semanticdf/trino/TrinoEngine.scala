@@ -1,6 +1,6 @@
 package io.semanticdf.trino
 
-import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql}
+import io.semanticdf.core.engine.{Capability, Engine, EngineContext, EngineError, EngineIdentity, ExecutionPlan, ParameterizedSql, ResolvedSource, SourceResolver}
 import io.semanticdf.core.model.Model
 import io.semanticdf.core.schema.{SchemaField, SchemaFieldKind, SchemaSummary}
 
@@ -107,6 +107,65 @@ class TrinoEngine extends Engine[Any] {
       "Trino supports late-binding table functions via DESCRIBE at query time",
   )
 
+  /** The source resolver. None means "no catalog configured"
+    * — `compile()` skips the resolution step. When set,
+    * `compile()` calls `_sourceResolver.resolve(model.source)`
+    * first; the resolved schema is used to validate the
+    * compile-time source identity (Incompatible / NotFound →
+    * `Left(EngineError.FeatureDeferred)`; Scan → compile
+    * proceeds).
+    *
+    * ==Why a separate `SourceResolver` field==
+    *
+    * Per the multi-engine design §4.6 layer-separation principle:
+    * the catalog layer is independent of the engine layer. A
+    * `TrinoEngine` can consume ANY catalog adapter — Unity
+    * Catalog, Hive Metastore, Glue, Iceberg REST, etc. — by
+    * passing the corresponding `SourceResolver` impl here.
+    * Default (None) means no resolver — the engine compiles
+    * without schema validation.
+    *
+    * ==Why mutable (`var`)==
+    *
+    * Mirrors the `_connectionFactory` pattern below — the
+    * engine is driver-local; no Spark serialization concern.
+    * (The `SourceResolver` impl itself must be `Serializable`
+    * — that's enforced by the `SourceResolver` trait contract
+    * in core.) */
+  private var _sourceResolver: Option[SourceResolver] = None
+
+  /** Wire-stable accessor for the source resolver. Set via
+    * `withSourceResolver(...)`. None means "no catalog
+    * configured." */
+  def sourceResolver: Option[SourceResolver] = _sourceResolver
+
+  /** Configure the source resolver. Pass any `SourceResolver`
+    * impl (Unity Catalog, Hive Metastore, Glue, etc.) — this
+    * engine doesn't care which catalog adapter is wired in.
+    * The resolver is consulted at every `compile(model, ctx)`
+    * call: if the model references a source that the resolver
+    * rejects (`Incompatible` / `NotFound`), `compile` returns
+    * `Left(EngineError.FeatureDeferred)`.
+    *
+    * ==Why fluent (returns `this`)==
+    *
+    * Mirrors `withConnectionFactory` — the same fluent pattern
+    * so engine configuration stays one-liner-friendly. The
+    * existing singleton-hazard characterization tests (PR #387)
+    * apply to this setter too.
+    *
+    * ==Why mutable (`_sourceResolver = Some(f)`)==
+    *
+    * Mirrors `withConnectionFactory`'s implementation. The
+    * engine is driver-local; no Spark serialization concern.
+    *
+    * @param resolver the new resolver (replaces any existing one)
+    * @return the same `TrinoEngine` instance (fluent) */
+  def withSourceResolver(resolver: SourceResolver): TrinoEngine = {
+    _sourceResolver = Some(resolver)
+    this
+  }
+
   /** The connection factory. None means "no Trino cluster
     * configured" — the engine returns `EngineError.ConnectionFailed`
     * from `execute()` in that case. */
@@ -155,23 +214,101 @@ class TrinoEngine extends Engine[Any] {
     this
   }
 
-  /** Compile a portable [[Model]] to a Trino-specific plan. */
+  /** Compile a portable [[Model]] to a Trino-specific plan.
+    *
+    * ==Source resolution flow (per multi-engine design §4.6)==
+    *
+    * When a `SourceResolver` is configured (via
+    * `withSourceResolver(...)`), `compile()` calls it BEFORE
+    * the SQL emit step:
+    *   - `ResolvedSource.Scan`    → compile proceeds (resolved
+    *                                schema is currently unused
+    *                                by the SQL emit; the
+    *                                resolution itself proves
+    *                                the source identity is
+    *                                valid for the configured
+    *                                catalog)
+    *   - `ResolvedSource.Incompatible` → `Left(FeatureDeferred)`
+    *   - `ResolvedSource.NotFound`     → `Left(FeatureDeferred)`
+    *   - (resolver not configured)      → compile proceeds
+    *                                    (no schema validation;
+    *                                    backward-compat with
+    *                                    PRs <#394)
+    *
+    * This is the wiring that proves the §4.6 layer-separation
+    * principle: any catalog adapter + this engine compose
+    * cleanly. Today only Trino + Unity Catalog is wired up
+    * (and tested via the integration suite); future PRs add
+    * Trino + Hive Metastore, Trino + Glue, etc. without
+    * changing this method.
+    *
+    * ==Why `FeatureDeferred` (not a new error case)==
+    *
+    * Per karpathy §2 ("don't add abstractions for single-use
+    * code"): the `EngineError` ADT already has `FeatureDeferred`
+    * for "this engine doesn't yet support that source shape".
+    * Adding a new `SourceNotFound` case for a single engine
+    * would be premature; the existing variant fits and the
+    * MCP error mapping handles it. */
   def compile(model: Model, ctx: EngineContext): Either[EngineError, ExecutionPlan[Any]] = {
-    // For v1: the engine doesn't yet hold a model registry OR a
-    // rollup registry, so joins and rollup selection are NOT
-    // resolved at the engine level. The caller can call
-    // `TrinoQueryCompiler.instance.compile(...)` directly to
-    // provide the registries. Future PRs will add `modelRegistry`
-    // and `rollupRegistry` fields to the engine.
-    val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
-    Right(ExecutionPlan(
-      engine = EngineIdentity(
-        name                 = identity,
-        nativeVersion        = "0.286",
-        engineAdapterVersion = "0.2.4",
-      ),
-      native = sql,
-    ))
+    // Step 1: source resolution (if configured). See scaladoc above.
+    val resolutionResult: Either[EngineError, Unit] = _sourceResolver match {
+      case None =>
+        // No catalog configured — skip the resolution step
+        // (backward-compat with PRs before §4.6 wiring).
+        Right(())
+
+      case Some(resolver) =>
+        resolver.resolve(model.source, EngineIdentity(
+          name                 = identity,
+          nativeVersion        = "0.286",
+          engineAdapterVersion = "0.2.4",
+        )) match {
+          case _: ResolvedSource.Scan =>
+            // Resolved successfully — schema info is available
+            // to the compile pipeline. Currently we only need
+            // the resolution itself to pass; future PRs may
+            // thread the schema into SQL emit.
+            Right(())
+
+          case _: ResolvedSource.NotFound =>
+            Left(EngineError.FeatureDeferred(
+              feature = s"trino.compile.source-not-found:${model.name}",
+              release = "v0.5.0",
+            ))
+
+          case _: ResolvedSource.Incompatible =>
+            Left(EngineError.FeatureDeferred(
+              feature = s"trino.compile.source-incompatible:${model.name}",
+              release = "v0.5.0",
+            ))
+
+          case _: ResolvedSource.AuthFailed =>
+            Left(EngineError.FeatureDeferred(
+              feature = s"trino.compile.source-auth-failed:${model.name}",
+              release = "v0.5.0",
+            ))
+        }
+    }
+
+    // Step 2: SQL emit (only if resolution succeeded).
+    resolutionResult.map { _ =>
+      // For v1: the engine doesn't yet hold a model registry
+      // OR a rollup registry, so joins and rollup selection are
+      // NOT resolved at the engine level. The caller can call
+      // `TrinoQueryCompiler.instance.compile(...)` directly to
+      // provide the registries. Future PRs will add `modelRegistry`
+      // and `rollupRegistry` fields to the engine.
+      val sql = TrinoQueryCompiler.instance.compile(model, Map.empty, Map.empty, Map.empty)
+      ExecutionPlan(
+        engine = EngineIdentity(
+          name                 = identity,
+          nativeVersion        = "0.286",
+          engineAdapterVersion = "0.2.4",
+        ),
+        native = sql,
+      )
+    }
   }
 
   /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.
