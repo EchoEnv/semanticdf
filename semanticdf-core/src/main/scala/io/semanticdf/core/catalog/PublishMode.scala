@@ -52,8 +52,8 @@ object PublishMode {
     * matches `expectedDigest`. Returns [PublishResult.Conflict]
     * otherwise.
     *
-    * Per the DE review of PR #410: `expectedDigest` must be
-    * non-empty. The smart constructor (apply) enforces this;
+    * Per the DE re-review of PR #410 (#5): `expectedDigest` must be
+    * non-empty. The smart constructor `compareAndSet` enforces this;
     * an empty digest is a degenerate CAS condition that has
     * no useful interpretation ("update if current digest is
     * empty" never matches a real catalog). The error is

@@ -19,13 +19,22 @@ package io.semanticdf.core.catalog
   * this trait \u2014 a small abstraction justified by testability
   * (consumers inject fakes for tests).
   *
-  * ==Why the typed [ManifestDocument] is `Nothing` for v1==
+  * ==Why the typed [ManifestDocument] is `Any` for v1 (NOT `Nothing`)==
   *
   * The full [ManifestDocument] v2 spec is deferred to PR 6 (Manifest
   * v2 + dual reader). For PR 10, we declare the trait's CONTRACT
   * using `Any` as a placeholder; the actual type lands when PR 6
-  * merges. The trait remains stable across the placeholder-to-real
-  * transition (only the `publish` / `discover` signatures change).
+  * merges.
+  *
+  * Why not `Nothing`? A trait with `def publish(doc: Nothing, ...)` is
+  * implementable (`override def publish(doc: Nothing, ...) = ???`) but
+  * UNCALLABLE: `Nothing` is uninhabited, so callers cannot construct a
+  * value to pass. Tests would have to use `null` (rejected by `Nothing`),
+  * `???` (throws immediately at the call site), or some trick like
+  * `null.asInstanceOf[Nothing]` (unsound). `Any` is the lesser evil:
+  * it permits any value at call sites, but the trait stays callable,
+  * implementable, and the transition to PR 6 is mechanical (replace
+  * `Any` with the real `ManifestDocument` ADT).
   *
   * ==Why `Either[CatalogError, T]` (vs. exceptions or `Try`)==
   *
@@ -50,13 +59,11 @@ trait CatalogAdapter extends Serializable {
 
   /** Engine-portable placeholder for the v2 manifest.
     *
-    * Per karpathy §2: `Nothing` would be ideal (forces compile
-    * error at every consumer site) but a trait with a `Nothing`
-    * parameter is unimplementable — the override needs a real
-    * value to return. We use `Any` here as a SECOND-BEST placeholder;
-    * PR 6 (Manifest v2 + dual reader) will replace this with the real
-    * `ManifestDocument` ADT. The placeholder is documented in the
-    * method scaladoc as a forcing function. */
+    * Aliased to `Any` (not `Nothing`) for the reasons documented
+    * in the trait header: `Nothing` is implementable but uncallable.
+    * PR 6 (Manifest v2 + dual reader) will replace this with the
+    * real `ManifestDocument` ADT. The transition is mechanical:
+    * `type ManifestDocument = Any` → `type ManifestDocument = TheRealADT`. */
   type ManifestDocument = Any
 
   /** The catalog this adapter serves. Used for routing +
@@ -66,6 +73,27 @@ trait CatalogAdapter extends Serializable {
   /** Publish an entity to the catalog. The publication mode
     * ([PublishMode]) determines how the call interacts with
     * existing publications of the same identity.
+    *
+    * Per the DE re-review of PR #410 (#4): the caller passes an
+    * explicit [CatalogIdentity] (NOT derived from the doc) so
+    * the target is always clear. For CAS, this means the
+    * `expectedDigest` in [PublishMode.CompareAndSet] refers to
+    * the entity at THIS identity.
+    *
+    * ==Atomicity contract (per DE re-review N5)==
+    *
+    * Implementations MUST be server-side-atomic per identity.
+    * Specifically:
+    * - Two concurrent `Upsert` calls on the same identity MUST NOT
+    *   both succeed (one returns `Conflict`, the other `Inserted` /
+    *   `Updated`).
+    * - Two concurrent `CompareAndSet` calls on the same identity
+    *   with the same `expectedDigest` MUST NOT both succeed
+    *   (exactly one returns `Updated`; the other returns `Conflict`
+    *   with the new `current` ref).
+    * - The atomicity mechanism (CAS, OCC, server-side locks) is
+    *   implementation-defined; the contract is on the OBSERVABLE
+    *   result, not the mechanism.
     *
     * Returns:
     * - `Right(PublishResult.Inserted)` if the entity was created
@@ -91,11 +119,18 @@ trait CatalogAdapter extends Serializable {
     * `Right(None)` if the entity doesn't exist at the given
     * ref (NOT a 404 — a missing entity is a normal case).
     *
-    * Per the DE review of PR #410 (#3): the FULL ref (identity
-    * + version + digest) is used for the lookup. A stale ref
-    * (correct identity but wrong version or digest) returns
-    * `Right(None)` (NOT `Right(Some(stale))`); the caller can
-    * retry with the current ref.
+    * Per the DE re-review of PR #410 (#3) + #1 (CRITICAL N1):
+    * the lookup is keyed on `ref.identity` (same key `publish`
+    * uses), then the FULL ref (version + digest) is compared
+    * against the stored entry:
+    * - exact match (stored == requested) → `Right(Some(doc))`
+    * - same identity, different version/digest (stale) → `Right(None)`
+    * - no entry at the identity (absent) → `Right(None)`
+    *
+    * Stale and absent both return `Right(None)`. If the caller
+    * needs to distinguish (e.g. for "force refresh" logic), they
+    * should issue a `list` with the identity as a filter and
+    * read the current ref from the result.
     *
     * @return the entity if the full ref matches, `None` if it
     *         doesn't (stale or absent), `Left(CatalogError)`
@@ -106,6 +141,13 @@ trait CatalogAdapter extends Serializable {
 
   /** List entities matching the filter. Returns `Right(Nil)` if no
     * entities match.
+    *
+    * Per the DE re-review N4: implementations MUST return
+    * results in a deterministic order (insertion order is
+    * recommended for adapters with stable local state; the
+    * production adapter is free to choose any consistent
+    * order, but it MUST be the same order across calls given
+    * the same state). This is required for stable pagination.
     *
     * @return the matching entries (possibly empty), `Left(CatalogError)`
     *         if the operation failed. */

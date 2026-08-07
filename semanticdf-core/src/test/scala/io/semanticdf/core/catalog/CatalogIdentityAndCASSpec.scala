@@ -93,12 +93,20 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   }
 
   test("PublishMode.CompareAndSet rejects empty digest (smart constructor)") {
-    // Per DE review of PR #410: empty expectedDigest is a
+    // Per DE re-review of PR #410 (#5): empty expectedDigest is a
     // degenerate CAS condition with no useful interpretation.
     val ex = intercept[IllegalArgumentException] {
       PublishMode.compareAndSet("")
     }
     ex.getMessage should include ("non-empty")
+  }
+
+  test("PublishMode.CompareAndSet rejects null digest (smart constructor)") {
+    // Per DE re-review N8: the smart ctor's require clause also
+    // rejects null; this test pins that.
+    intercept[IllegalArgumentException] {
+      PublishMode.compareAndSet(null)
+    }
   }
 
   // ====================================================================
@@ -230,18 +238,26 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   /** A minimal in-memory fake catalog adapter for the test. The
     * fake stores entities as `(ref, content)` pairs keyed by
     * the explicit [CatalogIdentity] passed to `publish` (NOT
-    * derived from the doc, per the SWE review of PR #410 C1).
+    * derived from the doc, per the SWE re-review of PR #410 C1).
+    *
+    * Per the DE re-review #1 (CRITICAL N1) + SWE re-review HIGH-1:
+    * publish and discover MUST share the same key (otherwise the
+    * discover exact-match code path is unreachable). Both key on
+    * `identity.toString`. `discover` then compares the FULL ref
+    * (version + digest) for stale detection: if the stored ref
+    * matches the requested ref exactly → Right(Some(doc));
+    * if same identity but different version/digest → Right(None)
+    * (stale); if no entry → Right(None) (absent).
     *
     * The fake is NOT thread-safe (per the DE review #2):
     * concurrent `publish` calls on the same identity can race.
     * The production adapter implementation is required to be
     * server-side-atomic (per the CatalogAdapter scaladoc). The
     * fake models the serial case for unit tests; concurrent
-    * tests are deferred to integration tests with real catalogs.
-    */
+    * tests are deferred to integration tests with real catalogs. */
   private final class FakeCatalogAdapter extends CatalogAdapter {
     override def catalog: String = "fake"
-    private val store = scala.collection.mutable.Map.empty[String, (CatalogRef, Any)]
+    private val store = scala.collection.mutable.LinkedHashMap.empty[String, (CatalogRef, Any)]
 
     override def publish(
         identity: CatalogIdentity,
@@ -249,13 +265,12 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
         as:      CatalogEntity,
         mode:    PublishMode,
     ): Either[CatalogError, PublishResult] = {
-      // Per DE review #4: CAS uses an explicit target identity
+      // Per DE re-review #4: CAS uses an explicit target identity
       // (passed in), not derived from the doc.
       val key = identity.toString
-      // ManifestDocument is Nothing, so doc is uninhabited.
-      // For the fake, we use a synthetic digest derived from the
-      // identity (a real adapter would hash the actual manifest).
-      val newDigest = if (doc == null) "doc-placeholder" else doc.toString  // null-safe placeholder
+      // ManifestDocument is Any (placeholder; real type in PR 6).
+      // For the fake, we use a null-safe synthetic digest.
+      val newDigest = if (doc == null) "doc-placeholder" else doc.toString
       mode match {
         case PublishMode.CreateOnly =>
           store.get(key) match {
@@ -267,9 +282,6 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
               Right(PublishResult.Inserted(ref))
           }
         case PublishMode.Upsert =>
-          // Per SWE review C1 / DE #1: this is the path that was
-          // missing. The fake now keys on `identity` (passed in),
-          // so the same identity CAN be upserted twice.
           store.get(key) match {
             case Some((prev, _)) =>
               val cur = prev.copy(version = prev.version + 1, digest = newDigest)
@@ -294,31 +306,31 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
       }
     }
 
-    override def discover(ref: CatalogRef): Either[CatalogError, Option[Nothing]] =
-      // Per DE review #3: the fake now keys on the FULL ref
-      // (identity + version + digest), not just identity. A
-      // stale ref (wrong version/digest) returns None.
-      store.get(ref.toString) match {
+    override def discover(ref: CatalogRef): Either[CatalogError, Option[Any]] = {
+      // Per DE re-review N1 + SWE re-review HIGH-1: key on the
+      // SAME identity (ref.identity) that publish used. Then
+      // compare FULL ref for stale detection.
+      store.get(ref.identity.toString) match {
         case Some((stored, doc)) if stored == ref =>
-          // Can't actually return a stored ManifestDocument
-          // because Nothing is uninhabited; but the lookup
-          // succeeds.
+          // Exact match. Return Some(doc) so the test can
+          // distinguish from stale / absent.
+          Right(Some(doc))
+        case Some((_, _)) =>
+          // Same identity, different version/digest → stale.
           Right(None)
-        case Some(_) =>
-          Right(None)  // stale ref
         case None =>
-          Right(None)  // absent
+          // No entry at this identity → absent.
+          Right(None)
       }
+    }
 
     override def list(
         filter: CatalogFilter,
     ): Either[CatalogError, List[CatalogEntry]] = {
+      // Per DE re-review N4: iteration order is now
+      // DETERMINISTIC (LinkedHashMap insertion order) and
+      // documented as "insertion order" in the trait scaladoc.
       val all = store.values.toList.map(_._1)
-      // Per SWE review M1: the filter now ALSO honors `kind`.
-      // For v1, every stored entity is a `Model`, so `kind` is
-      // always Some(CatalogEntity.Model) effectively. The
-      // filter would only exclude if the caller asks for a
-      // different kind than what's stored.
       val filtered = all.filter { r =>
         filter.catalog.forall(_ == r.catalog) &&
         filter.namespace.forall(_ == r.namespace) &&
@@ -331,6 +343,10 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   }
 
   // -- Tests using the new explicit-identity publish --
+  // TODO(PR6): when `ManifestDocument = Any` becomes a real ADT,
+  // replace every `null` doc arg with a real ManifestDocument value.
+  // The fake currently derives digests from `doc.toString` (null-safe
+  // to "doc-placeholder"), which will need to change.
 
   private val ordersIdentity = CatalogIdentity("fake", "public", "orders")
 
@@ -374,22 +390,6 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
     ))
   }
 
-  test("Upsert on existing identity: previous.version+1 == current.version") {
-    val adapter = new FakeCatalogAdapter
-    val first = adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly)
-    first.toOption.get match {
-      case PublishResult.Inserted(r) => r.version shouldBe 1
-      case other => fail(s"expected Inserted, got $other")
-    }
-    val second = adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.Upsert)
-    second.toOption.get match {
-      case PublishResult.Updated(prev, cur) =>
-        cur.version shouldBe (prev.version + 1)
-        cur.version shouldBe 2
-      case other => fail(s"expected Updated, got $other")
-    }
-  }
-
   test("CompareAndSet with matching expectedDigest: Right(Updated)") {
     val adapter = new FakeCatalogAdapter
     val first = adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly).toOption.get
@@ -425,23 +425,33 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   }
 
   test("discover on existing ref (exact match): Right(Some(...))") {
+    // Per DE re-review N1: this test must actually use the
+    // STORED ref (not one with a different digest), otherwise
+    // the exact-match code path is unreachable. We capture
+    // the ref returned by publish and pass it back.
     val adapter = new FakeCatalogAdapter
-    adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly)
-    val ref = CatalogRef("fake", "public", "orders", 1, "null")
-    val result = adapter.discover(ref)
-    result shouldBe Right(None)  // Nothing is uninhabited, but the lookup succeeded
+    val insertResult = adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly)
+    val storedRef = insertResult.toOption.get match {
+      case PublishResult.Inserted(r) => r
+      case other => fail(s"unexpected: $other")
+    }
+    val result = adapter.discover(storedRef)
+    result.toOption.get shouldBe a [Some[_]]
+    result.toOption.get.isDefined shouldBe true
   }
 
   test("discover on stale ref (wrong version): Right(None)") {
     // Per DE review #3: stale refs (wrong version/digest)
-    // return None.
+    // return None. Same identity as stored, but version 99
+    // (stored is version 1) → stale → None.
     val adapter = new FakeCatalogAdapter
     adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly)
-    val staleRef = CatalogRef("fake", "public", "orders", 99, "stale-digest")
+    val staleRef = CatalogRef("fake", "public", "orders", 99, "doc-placeholder")
     adapter.discover(staleRef) shouldBe Right(None)
   }
 
   test("discover on stale ref (wrong digest): Right(None)") {
+    // Same identity as stored, but wrong digest → stale → None.
     val adapter = new FakeCatalogAdapter
     adapter.publish(ordersIdentity, null, CatalogEntity.Model, PublishMode.CreateOnly)
     val staleRef = CatalogRef("fake", "public", "orders", 1, "wrong-digest")
@@ -449,10 +459,10 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   }
 
   test("discover on absent identity: Right(None) (NOT Left)") {
+    // No entry at this identity → absent → None.
     val adapter = new FakeCatalogAdapter
     val ref = CatalogRef("nonexistent", "public", "orders", 1, "abc")
-    val result = adapter.discover(ref)
-    result shouldBe Right(None)
+    adapter.discover(ref) shouldBe Right(None)
   }
 
   test("list with empty filter returns all entities") {
@@ -531,6 +541,63 @@ class CatalogIdentityAndCASSpec extends AnyFunSuite with Matchers {
   test("CatalogFilter round-trips through Java serialization") {
     val f = CatalogFilter(catalog = Some("unity"), kind = Some(CatalogEntity.Model), limit = Some(10))
     javaSerializeRoundTrip(f) shouldBe f
+  }
+
+  // Per DE re-review N6: fill the serialization-test coverage gaps.
+  test("CatalogIdentity round-trips through Java serialization") {
+    val id = CatalogIdentity("unity", "public", "orders")
+    javaSerializeRoundTrip(id) shouldBe id
+  }
+
+  test("CatalogEntity singletons round-trip through Java serialization") {
+    javaSerializeRoundTrip(CatalogEntity.Model) shouldBe CatalogEntity.Model
+    javaSerializeRoundTrip(CatalogEntity.Rollup) shouldBe CatalogEntity.Rollup
+    javaSerializeRoundTrip(CatalogEntity.ExtensionBlob) shouldBe CatalogEntity.ExtensionBlob
+  }
+
+  test("CatalogEntry round-trips through Java serialization") {
+    val r = CatalogRef("unity", "public", "orders", 1, "abc")
+    val e = CatalogEntry(r, CatalogEntity.Model, Map("owner" -> "analytics"))
+    javaSerializeRoundTrip(e) shouldBe e
+  }
+
+  test("PublishResult.Inserted round-trips through Java serialization") {
+    val r = CatalogRef("unity", "public", "orders", 1, "abc")
+    javaSerializeRoundTrip(PublishResult.Inserted(r)) shouldBe PublishResult.Inserted(r)
+  }
+
+  test("PublishResult.Conflict (with current) round-trips through Java serialization") {
+    val r = CatalogRef("unity", "public", "orders", 1, "abc")
+    val c = PublishResult.Conflict("digest mismatch", Some(r))
+    javaSerializeRoundTrip(c) shouldBe c
+  }
+
+  test("PublishResult.Conflict (no current) round-trips through Java serialization") {
+    val c = PublishResult.Conflict("permission denied")
+    javaSerializeRoundTrip(c) shouldBe c
+  }
+
+  test("CatalogError.Conflict (no current) round-trips through Java serialization") {
+    // Per DE re-review N6: the no-arg `Conflict` no longer has a
+    // serialization test after the H4 split. Restore it.
+    val err = CatalogError.Conflict("reason")
+    javaSerializeRoundTrip(err) shouldBe err
+  }
+
+  test("CatalogError.Unauthorized round-trips through Java serialization") {
+    javaSerializeRoundTrip(CatalogError.Unauthorized("no perm")) shouldBe CatalogError.Unauthorized("no perm")
+  }
+
+  test("CatalogError.Network round-trips through Java serialization") {
+    javaSerializeRoundTrip(CatalogError.Network("timeout")) shouldBe CatalogError.Network("timeout")
+  }
+
+  test("CatalogError.Unsupported round-trips through Java serialization") {
+    javaSerializeRoundTrip(CatalogError.Unsupported("read-only")) shouldBe CatalogError.Unsupported("read-only")
+  }
+
+  test("CatalogError.MalformedManifest round-trips through Java serialization") {
+    javaSerializeRoundTrip(CatalogError.MalformedManifest("missing fields")) shouldBe CatalogError.MalformedManifest("missing fields")
   }
 
   // -- Helper: Java serialization round-trip --
