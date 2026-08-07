@@ -94,18 +94,29 @@ class TrinoEngine extends Engine[Any] {
     * Per the Engine trait contract: every capability in
     * `capabilities` MUST have an entry here. Future PRs that
     * add a new capability must update both sets. */
-  val describeCapabilities: Map[Capability, String] = Map(
-    Capability.NestedStructTypes ->
-      "Trino supports nested ROW types in queries and result sets",
-    Capability.BroadcastJoin ->
-      "Trino supports BROADCAST join distribution for small-side optimization",
-    Capability.SkewJoin ->
-      "Trino supports skew-aware join optimization for hot key detection",
-    Capability.WindowRanking ->
-      "Trino supports window functions (ROW_NUMBER, RANK, DENSE_RANK, etc.)",
-    Capability.LateBinding ->
-      "Trino supports late-binding table functions via DESCRIBE at query time",
-  )
+  override val describeCapabilities: io.semanticdf.core.engine.EngineCapabilities =
+    io.semanticdf.core.engine.EngineCapabilities(
+      identity           = "trino",
+      descriptions       = Map(
+        Capability.NestedStructTypes ->
+          "Trino supports nested ROW types in queries and result sets",
+        Capability.BroadcastJoin ->
+          "Trino supports BROADCAST join distribution for small-side optimization",
+        Capability.SkewJoin ->
+          "Trino supports skew-aware join optimization for hot key detection",
+        Capability.WindowRanking ->
+          "Trino supports window functions (ROW_NUMBER, RANK, DENSE_RANK, etc.)",
+        Capability.LateBinding ->
+          "Trino supports late-binding table functions via DESCRIBE at query time",
+      ),
+      supportedJoinKinds = Set(
+        io.semanticdf.core.rel.JoinKind.Inner,
+        io.semanticdf.core.rel.JoinKind.Left,
+        io.semanticdf.core.rel.JoinKind.Right,
+        io.semanticdf.core.rel.JoinKind.Full,
+        io.semanticdf.core.rel.JoinKind.Cross,
+      ),
+    )
 
   /** The source resolver. None means "no catalog configured"
     * — `compile()` skips the resolution step. When set,

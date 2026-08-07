@@ -78,18 +78,23 @@ class DuckDBEngine extends Engine[Any] {
   /** Per-capability description (typed strings). Mirrors
     * `TrinoEngine.describeCapabilities` — same pattern, same
     * use case (MCP `describe_model`). */
-  val describeCapabilities: Map[Capability, String] = Map(
-    Capability.NestedStructTypes ->
-      "DuckDB supports nested STRUCT types in queries and result sets",
-    Capability.BroadcastJoin ->
-      "DuckDB supports broadcast joins for small-side optimization",
-    Capability.SkewJoin ->
-      "DuckDB supports skew-aware joins for hot key detection",
-    Capability.LateBinding ->
-      "DuckDB supports late-binding schema queries via DESCRIBE / pragma_table_info",
-    Capability.Materialize ->
-      "DuckDB has persistent storage (file-based mode) — eligible for Materialize",
-  )
+  override val describeCapabilities: io.semanticdf.core.engine.EngineCapabilities =
+    io.semanticdf.core.engine.EngineCapabilities(
+      identity           = "duckdb",
+      descriptions       = Map(
+        Capability.NestedStructTypes ->
+          "DuckDB supports nested STRUCT types in queries and result sets",
+        Capability.BroadcastJoin ->
+          "DuckDB supports broadcast joins for small-side optimization",
+        Capability.SkewJoin ->
+          "DuckDB supports skew-aware joins for hot key detection",
+        Capability.LateBinding ->
+          "DuckDB supports late-binding schema queries via DESCRIBE / pragma_table_info",
+        Capability.Materialize ->
+          "DuckDB has persistent storage (file-based mode) — eligible for Materialize",
+      ),
+      supportsMaterialize = true,
+    )
 
   /** The connection factory. None means "no DuckDB instance
     * configured" — the engine returns `EngineError.ConnectionFailed`

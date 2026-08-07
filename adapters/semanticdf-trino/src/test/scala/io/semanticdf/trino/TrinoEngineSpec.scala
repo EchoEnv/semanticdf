@@ -93,25 +93,41 @@ class TrinoEngineSpec extends AnyFunSuite with Matchers {
     TrinoEngine.instance.capabilities should not contain (Capability.Materialize)
   }
 
-  // -- describeCapabilities (typed descriptions per capability) --
+  // -- describeCapabilities (structured value object) --
 
-  test("describeCapabilities has a non-empty description map") {
-    TrinoEngine.instance.describeCapabilities should not be empty
+  test("describeCapabilities has a non-empty descriptions map") {
+    val ec = TrinoEngine.instance.describeCapabilities
+    ec.descriptions should not be empty
   }
 
   test("describeCapabilities has an entry for every capability in `capabilities`") {
     val caps = TrinoEngine.instance.capabilities
-    val descs = TrinoEngine.instance.describeCapabilities
+    val ec = TrinoEngine.instance.describeCapabilities
     caps.foreach { cap =>
-      descs should contain key cap
+      ec.descriptions should contain key cap
     }
   }
 
   test("describeCapabilities entries are non-empty strings") {
-    val descs = TrinoEngine.instance.describeCapabilities
-    descs.values.foreach { desc =>
+    val ec = TrinoEngine.instance.describeCapabilities
+    ec.descriptions.values.foreach { desc =>
       desc should not be empty
     }
+  }
+
+  test("describeCapabilities exposes supportedJoinKinds as a Set[JoinKind]") {
+    val ec = TrinoEngine.instance.describeCapabilities
+    ec.supportedJoinKinds shouldBe Set(
+      io.semanticdf.core.rel.JoinKind.Inner,
+      io.semanticdf.core.rel.JoinKind.Left,
+      io.semanticdf.core.rel.JoinKind.Right,
+      io.semanticdf.core.rel.JoinKind.Full,
+      io.semanticdf.core.rel.JoinKind.Cross,
+    )
+  }
+
+  test("describeCapabilities exposes identity as the engine label") {
+    TrinoEngine.instance.describeCapabilities.identity shouldBe "trino"
   }
 
   // -- compile / execute / explain — deferred --

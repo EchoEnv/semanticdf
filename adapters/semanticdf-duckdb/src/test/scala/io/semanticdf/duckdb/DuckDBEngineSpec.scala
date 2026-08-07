@@ -60,11 +60,18 @@ class DuckDBEngineSpec extends AnyFunSuite with Matchers {
 
   test("describeCapabilities has an entry for every capability in `capabilities`") {
     val caps = DuckDBEngine.instance.capabilities
-    val desc = DuckDBEngine.instance.describeCapabilities
+    val ec = DuckDBEngine.instance.describeCapabilities
     caps.foreach { c =>
-      desc.get(c) shouldBe defined
-      desc(c) should not be empty
+      ec.descriptions.get(c) shouldBe defined
+      ec.descriptions(c) should not be empty
     }
+  }
+
+  test("describeCapabilities exposes identity + supportsMaterialize") {
+    val ec = DuckDBEngine.instance.describeCapabilities
+    ec.identity shouldBe "duckdb"
+    ec.supportsMaterialize shouldBe true
+    ec.supportedJoinKinds shouldBe Set.empty  // not advertised for DuckDB v1
   }
 
   // -- compile() --

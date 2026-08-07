@@ -79,6 +79,26 @@ trait Engine[R] {
     * adapters can pre-compute it once. */
   def capabilities: Set[Capability]
 
+  /** Structured per-engine capability bundle \u2014 value-object view
+    * of the engine's advertised features. Used by MCP
+    * `describe_model` to surface supported features per engine.
+    *
+    * PR 9 of the 12-PR triage plan: replaces the loose
+    * `Map[Capability, String]` that used to be returned. The
+    * structured shape gives consumers typed fields to route on
+    * (`supportedJoinKinds`, `supportsRollup`, `supportsMaterialize`)
+    * instead of forcing them to parse strings.
+    *
+    * Default implementation derives a minimal bundle from
+    * `capabilities` (no join kinds, no rollup, no materialize).
+    * Engine adapters that support these features should override
+    * to populate the structured fields. */
+  def describeCapabilities: EngineCapabilities =
+    EngineCapabilities(
+      identity     = identity,
+      descriptions = capabilities.map(c => c -> c.name).toMap,
+    )
+
   /** Compile a portable [[Model]] to an engine-specific plan. Returns
     * \`Either[EngineError, R]\` — \`Left\` for any compile-time
     * failure (unsupported capability, decimal overflow, etc.).
