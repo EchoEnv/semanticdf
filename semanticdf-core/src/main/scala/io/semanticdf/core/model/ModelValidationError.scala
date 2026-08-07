@@ -50,7 +50,7 @@ package io.semanticdf.core.model
   *
   * ==Data-driven mantra compliance==
   *
-  * - Pure data: sealed trait + 5 case classes
+  * - Pure data: sealed trait + 6 case classes
   * - Equality auto-derived (case classes)
   * - `Product with Serializable`
   *
@@ -94,5 +94,18 @@ object ModelValidationError {
     * count; `byteCount` is the actual byte count (canonical UTF-8).
     * Maps to MCP's `ErrorDetail("extension_envelope_exceeded", ...)`. */
   final case class ExtensionEnvelopeExceeded(fieldCount: Int, byteCount: Int)
+      extends ModelValidationError
+
+  /** Check 6: the legacy \`SemanticTable\` carried \`where\` or
+    * \`having\` predicates that the v0.3.0 bridge can't yet
+    * convert. \`reason\` is the human-readable explanation.
+    * Maps to MCP's \`ErrorDetail("filter_conversion_unsupported", reason)\`.
+    *
+    * Per the v0.3.0 pre-tag audit (Gap 4): the v1 bridge silently
+    * dropped filters, producing a portable Model that ran without
+    * the user's row-level hygiene. Replaced silent-drop with
+    * fail-loud; closes the gap until the predicate-converter PR
+    * lands in v0.3.1. */
+  final case class FilterConversionUnsupported(reason: String)
       extends ModelValidationError
 }

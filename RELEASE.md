@@ -47,9 +47,26 @@ remaining migration is complete.
 | MCP engine registry + routing | ✅ |
 | Spark adapter implements `Engine[R]` (with predicate-type split) | partial (predicate-type unification pending) |
 | Trino adapter implements `Engine[R]` | ✅ |
-| DuckDB adapter implements `Engine[R]` | ✅ |
+| DuckDB adapter implements `Engine[R]` | ✅ (basic aggregates only — Sum/Count/CountDistinct/Avg/Min/Max; advanced aggregates in v0.3.1) |
 | `SemanticTableCore` emits portable IR + routes through `Engine[R]` | pending |
 | Manifest v2 (real `ManifestDocument` ADT) | pending |
+
+**Fail-loud behavior (pre-tag fixes, Gaps 3 + 4):**
+
+- **`ModelBridge.toModel`** returns `Left(ModelValidationError.FilterConversionUnsupported)`
+  when the legacy `SemanticTable` carries a `where` or `having`
+  predicate. Replaces the v1 silent-drop (the portable Model would
+  have run queries against unfiltered rows). Users port filters
+  manually to `FilterSpec(name, predicate = Expr)` until the
+  predicate-converter PR lands in v0.3.1.
+- **`TrinoQueryCompiler.compileRelOp`** returns
+  `Left(EngineError.UnsupportedCapability("RelOp.Join", ...))` when
+  the portable plan contains a `RelOp.Join`. Replaces the previous
+  `-- Joins deferred to a future PR` literal comment that produced
+  empty results with no error. Join compile lands in v0.3.1.
+
+For the full feature-parity gap analysis (7 gaps, prioritized P0–P3),
+see [`docs/design/v0.3.1-feature-parity-backlog.md`](docs/design/v0.3.1-feature-parity-backlog.md).
 
 ### Test count
 

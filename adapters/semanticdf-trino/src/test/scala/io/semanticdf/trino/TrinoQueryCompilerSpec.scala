@@ -716,4 +716,48 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
     val c = new TrinoQueryCompiler
     c shouldBe a [TrinoQueryCompiler]
   }
+
+  // -- v0.3.0 pre-tag fix (Gap 3): fail loud on RelOp.Join --
+
+  test("compileRelOp returns Left(UnsupportedCapability) when the plan contains a Join") {
+    // Per the v0.3.0 pre-tag audit: the previous
+    // `-- Joins deferred to a future PR` literal comment
+    // returned a syntactically-valid but semantically-empty
+    // SQL string (Trino parsed it as a comment-only statement
+    // and returned empty results). Replaced with fail-loud.
+    val resolved: io.semanticdf.core.engine.ResolvedSource =
+      io.semanticdf.core.engine.ResolvedSource.Scan(
+        source = byName,
+        schema = io.semanticdf.core.engine.ResolvedSchema(Map.empty),
+      )
+    val plan: io.semanticdf.core.rel.RelOp = io.semanticdf.core.rel.RelOp.Join(
+      left      = io.semanticdf.core.rel.RelOp.Scan(resolved, Nil, Nil),
+      right     = io.semanticdf.core.rel.RelOp.Scan(resolved, Nil, Nil),
+      kind      = JoinKind.Inner,
+      condition = io.semanticdf.core.expr.Expr.Equal(
+        io.semanticdf.core.expr.Expr.FieldRef("a"),
+        io.semanticdf.core.expr.Expr.FieldRef("a"),
+      ),
+    )
+    val result = compiler.compileRelOp(plan)
+    result match {
+      case Left(io.semanticdf.core.engine.EngineError.UnsupportedCapability(name, reason)) =>
+        name shouldBe "RelOp.Join"
+        reason should include ("v0.3.1")
+      case other =>
+        fail(s"expected Left(UnsupportedCapability), got $other")
+    }
+  }
+
+  test("compileRelOp succeeds for non-Join plans (regression guard)") {
+    val resolved: io.semanticdf.core.engine.ResolvedSource =
+      io.semanticdf.core.engine.ResolvedSource.Scan(
+        source = byName,
+        schema = io.semanticdf.core.engine.ResolvedSchema(Map.empty),
+      )
+    val plan: io.semanticdf.core.rel.RelOp =
+      io.semanticdf.core.rel.RelOp.Scan(resolved, Nil, Nil)
+    val result = compiler.compileRelOp(plan)
+    result.isRight shouldBe true
+  }
 }

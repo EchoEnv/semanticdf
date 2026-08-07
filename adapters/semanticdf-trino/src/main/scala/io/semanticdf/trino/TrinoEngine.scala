@@ -286,15 +286,16 @@ class TrinoEngine extends Engine[Any] {
 
       case Some(resolver) =>
         // Resolver configured — use the new RelOp flow.
-        io.semanticdf.core.query.QueryBuilder.build(model, resolver, engineId).map { (plan: io.semanticdf.core.rel.RelOp) =>
-          val sql = TrinoQueryCompiler.instance.compileRelOp(plan)
-          io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
-            engine               = engineId,
-            native               = sql,
-            warnings             = Nil,
-            requiredCapabilities = capabilities,
-            normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
-          )
+        io.semanticdf.core.query.QueryBuilder.build(model, resolver, engineId).flatMap { (plan: io.semanticdf.core.rel.RelOp) =>
+          TrinoQueryCompiler.instance.compileRelOp(plan).map { sql =>
+            io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+              engine               = engineId,
+              native               = sql,
+              warnings             = Nil,
+              requiredCapabilities = capabilities,
+              normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+            ): io.semanticdf.core.engine.ExecutionPlan[Any]
+          }
         }
     }
   }
@@ -317,14 +318,15 @@ class TrinoEngine extends Engine[Any] {
       nativeVersion        = "0.286",
       engineAdapterVersion = "0.2.4",
     )
-    val sql = TrinoQueryCompiler.instance.compileRelOp(plan)
-    Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
-      engine               = engineId,
-      native               = sql,
-      warnings             = Nil,
-      requiredCapabilities = capabilities,
-      normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
-    ))
+    TrinoQueryCompiler.instance.compileRelOp(plan).map { sql =>
+      io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
+        engine               = engineId,
+        native               = sql,
+        warnings             = Nil,
+        requiredCapabilities = capabilities,
+        normalizedSchema     = io.semanticdf.core.engine.ResultSchema(Nil),
+      )
+    }
   }
 
   /** Execute a compiled [[ExecutionPlan]] against a Trino cluster.

@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import io.semanticdf.core.expr.Expr
 import io.semanticdf.core.rel.{AggregateFn, JoinKind}
-import io.semanticdf.core.model.{Model, ModelPolicyDefaults, SourceRef}
+import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelValidationError, SourceRef}
 
 /** Tests for [ModelBridge] \u2014 the partial bridge from the legacy
   * [SemanticTable] (spark-flavored) to the engine-portable
@@ -246,5 +246,38 @@ class ModelBridgeSpec extends AnyFunSuite with Matchers {
     val st = buildSimpleTable(name = "")
     val result = ModelBridge.toModel(st)
     result.isLeft shouldBe true
+  }
+
+  // -- v0.3.0 pre-tag fix (Gap 4): fail loud on legacy filters --
+
+  test("toModel returns Left(FilterConversionUnsupported) when legacy table carries a `where` predicate") {
+    val st = buildSimpleTable()
+      .where(io.semanticdf.predicate.Predicate.Compare("gt", "amount", 50))
+    val result = ModelBridge.toModel(st)
+    result match {
+      case Left(ModelValidationError.FilterConversionUnsupported(reason)) =>
+        reason should include ("where")
+        reason should include ("orders")
+      case other =>
+        fail(s"expected Left(FilterConversionUnsupported), got $other")
+    }
+  }
+
+  test("toModel returns Left(FilterConversionUnsupported) when legacy table carries a `having` predicate") {
+    val st = buildSimpleTable()
+      .having(io.semanticdf.predicate.Predicate.Compare("gt", "row_count", 0))
+    val result = ModelBridge.toModel(st)
+    result match {
+      case Left(ModelValidationError.FilterConversionUnsupported(reason)) =>
+        reason should include ("having")
+      case other =>
+        fail(s"expected Left(FilterConversionUnsupported), got $other")
+    }
+  }
+
+  test("toModel succeeds for tables WITHOUT where/having (regression guard)") {
+    val st = buildSimpleTable()
+    val result = ModelBridge.toModel(st)
+    result.isRight shouldBe true
   }
 }
