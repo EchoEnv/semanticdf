@@ -743,7 +743,8 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
     result match {
       case Left(io.semanticdf.core.engine.EngineError.UnsupportedCapability(name, reason)) =>
         name shouldBe "RelOp.Join"
-        reason should include ("v0.3.1")
+        reason should include ("compileRelOp")
+        reason should include ("modelSources")
       case other =>
         fail(s"expected Left(UnsupportedCapability), got $other")
     }
