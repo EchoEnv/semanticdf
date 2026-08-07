@@ -28,7 +28,7 @@
   <parent>
     <groupId>io.semanticdf</groupId>
     <artifactId>semanticdf-parent</artifactId>
-    <version>0.2.4</version>
+    <version>0.3.0</version>
     <relativePath>../../pom.xml</relativePath>
   </parent>
 

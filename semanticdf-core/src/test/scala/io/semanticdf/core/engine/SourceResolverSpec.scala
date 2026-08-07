@@ -22,7 +22,7 @@ class SourceResolverSpec extends AnyFunSuite with Matchers {
   private val testIdentity = EngineIdentity(
     name                 = "test",
     nativeVersion        = "0.1.0",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   private val sampleSource = SourceRef.ByName(

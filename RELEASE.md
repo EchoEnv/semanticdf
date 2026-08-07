@@ -1,10 +1,14 @@
 # Release notes
 
-## v0.3.0 — engine-portable core (in progress)
+## v0.3.0 — engine-portable core (TAGGED 2026-08-07)
 
-**Not tagged yet.** Library version still `0.2.4`; this section
-tracks the work that will roll up into the v0.3.0 tag when the
-remaining migration is complete.
+**Tagged `v0.3.0`.** Library version is now `0.3.0` across all
+modules. This is the engine-portable core + multi-engine design:
+portable ADTs in `semanticdf-core`, four engine adapters
+(`semanticdf-spark`, `-trino`, `-duckdb`, plus read-only catalog
+adapters for Unity Catalog and Hive Metastore), MCP engine
+registry with routing, and the catalog identity + CAS publication
+contract.
 
 ### Headline
 

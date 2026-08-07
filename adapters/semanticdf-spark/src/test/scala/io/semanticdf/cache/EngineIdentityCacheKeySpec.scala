@@ -17,12 +17,12 @@ class EngineIdentityCacheKeySpec extends AnyFunSuite with Matchers {
   private val sparkEngine = EngineIdentity(
     name                 = "spark",
     nativeVersion        = "3.5.8",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
   private val trinoEngine = EngineIdentity(
     name                 = "trino",
     nativeVersion        = "0.286",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   private def baseReq(engine: Option[EngineIdentity]): AuditQueryRequest =
