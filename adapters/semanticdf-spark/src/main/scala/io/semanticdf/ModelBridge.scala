@@ -3,6 +3,7 @@ package io.semanticdf
 import io.semanticdf.core.expr.Expr
 import io.semanticdf.core.model._
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn, JoinKind}
+import io.semanticdf.{SemanticOp, SemanticFilterOp}
 
 /** Engine-portable partial-bridge from the legacy [SemanticTable]
   * (spark-flavored) to the engine-portable [Model] (core).
@@ -104,6 +105,35 @@ object ModelBridge {
     * fails validation (e.g. duplicate dimension/measure names).
     * Returns `Right(Model)` on success. */
   def toModel(st: SemanticTable): Either[ModelValidationError, Model] = {
+    // v0.3.0 pre-tag fix (Gap 4): fail loud if the legacy table
+    // v0.3.0 pre-tag fix (Gap 4): fail loud if the legacy table
+    // carries a `where` or `having` predicate. The v1 bridge
+    // can't yet convert them; silently dropping them was a
+    // data-hygiene regression (the portable model would run
+    // queries against unfiltered rows). Close the bridge until
+    // the predicate-converter PR lands in v0.3.1.
+    //
+    // Detection:
+    //   - `having` lives in `st.postAggPredicates: List[Predicate]`
+    //     (set by `.having(pred)` in SemanticTableCore).
+    //   - `where` wraps the root op tree in `SemanticFilterOp`
+    //     chains (set by `.where(pred)`). Walk the tree to find
+    //     any filter node.
+    if (st.postAggPredicates.nonEmpty) {
+      return Left(ModelValidationError.FilterConversionUnsupported(
+        s"SemanticTable '${nameOrUnknown(st)}' carries a `having` predicate that the v0.3.0 bridge cannot yet convert. " +
+        "Port the predicate to a calc measure + FilterSpec manually, " +
+        "or wait for v0.3.1 (see docs/design/v0.3.1-feature-parity-backlog.md Gap 4).",
+      ))
+    }
+    if (hasPreAggFilter(st.root)) {
+      return Left(ModelValidationError.FilterConversionUnsupported(
+        s"SemanticTable '${nameOrUnknown(st)}' carries a `where` predicate that the v0.3.0 bridge cannot yet convert. " +
+        "Port the predicate to the portable `FilterSpec(name, predicate = Expr)` shape manually, " +
+        "or wait for v0.3.1 (see docs/design/v0.3.1-feature-parity-backlog.md Gap 4).",
+      ))
+    }
+
     // v1: name resolution priority:
     //   1. SemanticTable.name (the user-declared name from YAML `name:`)
     //   2. sourceTable (the YAML `table:` field, often the same as name)
@@ -167,6 +197,18 @@ object ModelBridge {
     * sourceTable (typically joined tables). Returns a synthetic
     * "<leftName>_<rightName>" string; falls back to "unnamed" if
     * the join info is empty. */
+  private def nameOrUnknown(st: SemanticTable): String =
+    st.name.orElse(st.sourceTable).getOrElse("<unnamed>")
+
+  /** Walk the legacy op tree and return true if any
+    * `SemanticFilterOp` exists at any depth. A `where` call wraps
+    * the tree in one or more `SemanticFilterOp` nodes; this
+    * detects the deepest one. */
+  private def hasPreAggFilter(op: SemanticOp): Boolean = op match {
+    case _: SemanticFilterOp => true
+    case _ => false
+  }
+
   private def deriveName(st: SemanticTable): String = {
     st.joins.headOption.flatMap { ji =>
       ji.leftName.orElse(ji.rightName).map(n => s"${ji.leftName.getOrElse(n)}_${ji.rightName.getOrElse("?")}")
