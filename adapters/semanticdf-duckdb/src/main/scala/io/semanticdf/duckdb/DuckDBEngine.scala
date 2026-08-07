@@ -146,7 +146,7 @@ class DuckDBEngine extends Engine[Any] {
     val engineId = EngineIdentity(
       name                 = identity,
       nativeVersion        = "1.5.5",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     _sourceResolver match {
       case None =>
@@ -179,7 +179,7 @@ class DuckDBEngine extends Engine[Any] {
     val engineId = EngineIdentity(
       name                 = identity,
       nativeVersion        = "1.5.5",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     val sql = DuckDBQueryCompiler.instance.compileRelOp(plan)
     Right(io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](

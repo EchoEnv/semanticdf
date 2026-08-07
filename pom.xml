@@ -7,7 +7,7 @@
 
   <groupId>io.semanticdf</groupId>
   <artifactId>semanticdf-parent</artifactId>
-  <version>0.2.4</version>
+  <version>0.3.0</version>
   <packaging>pom</packaging>
 
   <name>semanticdf-parent</name>

@@ -26,7 +26,7 @@ class UnityCatalogSourceResolverSpec extends AnyFunSuite with Matchers {
   private val identity = EngineIdentity(
     name                 = "trino",
     nativeVersion        = "0.286",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   // -- fixture builders --

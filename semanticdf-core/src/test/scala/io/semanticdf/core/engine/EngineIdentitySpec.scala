@@ -14,18 +14,18 @@ class EngineIdentitySpec extends AnyFunSuite with Matchers {
     val id = EngineIdentity(
       name                 = "trino",
       nativeVersion        = "0.286",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     id.name shouldBe "trino"
     id.nativeVersion shouldBe "0.286"
-    id.engineAdapterVersion shouldBe "0.2.4"
+    id.engineAdapterVersion shouldBe "0.3.0"
   }
 
   test("realistic: spark adapter identity") {
     val id = EngineIdentity(
       name                 = "spark",
       nativeVersion        = "3.5.8",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     id.name shouldBe "spark"
   }
@@ -34,7 +34,7 @@ class EngineIdentitySpec extends AnyFunSuite with Matchers {
     val id = EngineIdentity(
       name                 = "databricks",
       nativeVersion        = "13.3",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     id.name shouldBe "databricks"
   }
@@ -61,7 +61,7 @@ class EngineIdentitySpec extends AnyFunSuite with Matchers {
     val id = EngineIdentity(
       name                 = "trino",
       nativeVersion        = "0.286",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     val bos = new java.io.ByteArrayOutputStream()
     val oos = new java.io.ObjectOutputStream(bos)

@@ -39,7 +39,7 @@ class UnityCatalogIntegrationSpec extends UnityCatalogFixture {
   private val identity = EngineIdentity(
     name                 = "trino",
     nativeVersion        = "0.5.0",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   // -- cluster health (the most basic test) --
@@ -111,7 +111,7 @@ class UnityCatalogIntegrationSpec extends UnityCatalogFixture {
     val sparkIdentity = EngineIdentity(
       name                 = "spark",
       nativeVersion        = "3.5.8",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     val resolver = UnityCatalogSourceResolver(client, sparkIdentity)
 

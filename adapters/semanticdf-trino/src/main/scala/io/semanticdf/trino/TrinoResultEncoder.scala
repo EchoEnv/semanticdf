@@ -66,7 +66,7 @@ final class TrinoResultEncoder extends ResultEncoder[TrinoResult] {
       PortableQueryResult(
         schema   = schema,
         rows     = rows,
-        metadata = Map("engine.adaptor.id" -> "trino", "engine.adaptor.version" -> "0.2.4"),
+        metadata = Map("engine.adaptor.id" -> "trino", "engine.adaptor.version" -> "0.3.0"),
       )
     }
   }

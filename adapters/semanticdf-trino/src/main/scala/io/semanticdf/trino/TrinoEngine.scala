@@ -269,7 +269,7 @@ class TrinoEngine extends Engine[Any] {
     val engineId = EngineIdentity(
       name                 = identity,
       nativeVersion        = "0.286",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     _sourceResolver match {
       case None =>
@@ -316,7 +316,7 @@ class TrinoEngine extends Engine[Any] {
     val engineId = EngineIdentity(
       name                 = identity,
       nativeVersion        = "0.286",
-      engineAdapterVersion = "0.2.4",
+      engineAdapterVersion = "0.3.0",
     )
     TrinoQueryCompiler.instance.compileRelOp(plan).map { sql =>
       io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](

@@ -30,7 +30,7 @@ final class SparkEngineProvider(
   override val identity: EngineIdentity = EngineIdentity(
     name                 = "spark",
     nativeVersion        = spark.version,
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   override val available: Boolean = spark != null && sparkTableRegistry.nonEmpty
@@ -105,7 +105,7 @@ final class SparkEngineProvider(
       Right(PortableQueryResult(
         schema   = schema,
         rows     = rows,
-        metadata = Map("engine.adaptor.id" -> "spark", "engine.adaptor.version" -> "0.2.4"),
+        metadata = Map("engine.adaptor.id" -> "spark", "engine.adaptor.version" -> "0.3.0"),
       ))
     } catch {
       case e: Exception => Left(EngineError.ConnectionFailed(

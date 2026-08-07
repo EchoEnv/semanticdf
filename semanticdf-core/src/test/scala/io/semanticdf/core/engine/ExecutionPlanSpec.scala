@@ -18,7 +18,7 @@ class ExecutionPlanSpec extends AnyFunSuite with Matchers {
   private val sampleEngine = EngineIdentity(
     name                 = "trino",
     nativeVersion        = "0.286",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   // -- the case class is gone; it's a sealed trait now --

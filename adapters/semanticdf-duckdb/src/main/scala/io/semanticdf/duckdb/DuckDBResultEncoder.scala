@@ -52,7 +52,7 @@ final class DuckDBResultEncoder extends ResultEncoder[DuckDBResult] {
       PortableQueryResult(
         schema   = schema,
         rows     = rows,
-        metadata = Map("engine.adaptor.id" -> "duckdb", "engine.adaptor.version" -> "0.2.4"),
+        metadata = Map("engine.adaptor.id" -> "duckdb", "engine.adaptor.version" -> "0.3.0"),
       )
     }
   }

@@ -38,7 +38,7 @@ final class TrinoEngineProvider(
   override val identity: EngineIdentity = EngineIdentity(
     name                 = "trino",
     nativeVersion        = "0.286",
-    engineAdapterVersion = "0.2.4",
+    engineAdapterVersion = "0.3.0",
   )
 
   override val available: Boolean =
