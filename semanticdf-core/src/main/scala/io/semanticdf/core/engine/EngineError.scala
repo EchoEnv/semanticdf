@@ -41,7 +41,116 @@ package io.semanticdf.core.engine
   * Verifiable by:
   * \`grep -r 'org.apache.spark' semanticdf-core/src/main/scala/io/semanticdf/core/engine/EngineError.scala\`
   */
-sealed trait EngineError extends Product with Serializable
+sealed trait EngineError extends Product with Serializable {
+  /** Map this error to an engine-portable structured [ErrorDetail].
+    *
+    * Exhaustive on add: every case returns one [ErrorDetail]. The
+    * MCP server (and any other transport) can call this and ship
+    * the result verbatim. The mapping is total over the ADT (the
+    * Scala compiler enforces exhaustiveness).
+    *
+    * ==Per-case code mapping==
+    *
+    * - [UnsupportedCapability]   → `UNSUPPORTED_CAPABILITY`
+    * - [IncompatibleExprShape]   → `INCOMPATIBLE_EXPR_SHAPE`
+    * - [DecimalOverflow]         → `DECIMAL_OVERFLOW`
+    * - [FeatureDeferred]         → `FEATURE_DEFERRED`
+    * - [CancellationFailed]      → `CANCELLATION_FAILED`
+    * - [ConnectionFailed]        → `CONNECTION_FAILED`
+    * - [QueryTimedOut]           → `QUERY_TIMED_OUT`
+    * - [AuditSinkUnavailable]    → `AUDIT_SINK_UNAVAILABLE`
+    * - [ProviderInvocationFailed]→ `PROVIDER_INVOCATION_FAILED`
+    * - [SourceSchemaChanged]     → `SOURCE_SCHEMA_CHANGED`
+    * - [EngineUnavailable]       → `ENGINE_UNAVAILABLE`
+    */
+  def toErrorDetail: ErrorDetail = this match {
+    case EngineError.UnsupportedCapability(name, reason) =>
+      ErrorDetail(
+        code    = "UNSUPPORTED_CAPABILITY",
+        message = s"Engine does not support capability '$name': $reason",
+        hint    = Some(s"Use an engine that supports '$name', or remove the requirement"),
+        details = Map("capability" -> name, "reason" -> reason),
+      )
+    case EngineError.IncompatibleExprShape(shape, engine) =>
+      ErrorDetail(
+        code    = "INCOMPATIBLE_EXPR_SHAPE",
+        message = s"Expression shape '$shape' is not compatible with engine '$engine'",
+        hint    = Some(s"Rewrite the expression to a shape '$engine' supports, or pick a different engine"),
+        details = Map("shape" -> shape, "engine" -> engine),
+      )
+    case EngineError.DecimalOverflow(value, precision, scale) =>
+      ErrorDetail(
+        code    = "DECIMAL_OVERFLOW",
+        message = s"Decimal value '$value' exceeds the engine's DECIMAL($precision, $scale) limits",
+        hint    = Some("Round or truncate the value, or widen the DECIMAL precision/scale"),
+        details = Map("value" -> value, "precision" -> precision.toString, "scale" -> scale.toString),
+      )
+    case EngineError.FeatureDeferred(feature, release) =>
+      ErrorDetail(
+        code    = "FEATURE_DEFERRED",
+        message = s"Feature '$feature' is deferred to $release",
+        hint    = Some(s"Use a workaround, or wait for $release"),
+        details = Map("feature" -> feature, "release" -> release),
+      )
+    case EngineError.CancellationFailed(cancelStatus) =>
+      ErrorDetail(
+        code    = "CANCELLATION_FAILED",
+        message = s"Cancellation was requested but the engine reported status: $cancelStatus",
+        hint    = Some("Inspect engine logs; the query may still be running"),
+        details = Map("cancel_status" -> cancelStatus),
+      )
+    case EngineError.ConnectionFailed(reason) =>
+      ErrorDetail(
+        code    = "CONNECTION_FAILED",
+        message = s"Could not connect to engine: $reason",
+        hint    = Some("Check the connection string, credentials, and network"),
+        details = Map("reason" -> reason),
+      )
+    case EngineError.QueryTimedOut(cancelStatus) =>
+      ErrorDetail(
+        code    = "QUERY_TIMED_OUT",
+        message = s"Query timed out; engine best-effort cancellation status: $cancelStatus",
+        hint    = Some("Increase the timeout, or simplify the query (e.g. add LIMIT, pre-filter)"),
+        details = Map("cancel_status" -> cancelStatus),
+      )
+    case EngineError.AuditSinkUnavailable(name) =>
+      ErrorDetail(
+        code    = "AUDIT_SINK_UNAVAILABLE",
+        message = s"Audit sink '$name' is not registered or failed to initialize",
+        hint    = Some("Register the sink at server startup, or use the default in-memory sink"),
+        details = Map("sink_name" -> name),
+      )
+    case EngineError.ProviderInvocationFailed(name, reason) =>
+      ErrorDetail(
+        code    = "PROVIDER_INVOCATION_FAILED",
+        message = s"Provider '$name' invocation failed: $reason",
+        hint    = Some("Check the provider's underlying data source and credentials"),
+        details = Map("provider" -> name, "reason" -> reason),
+      )
+    case EngineError.SourceSchemaChanged(source) =>
+      ErrorDetail(
+        code    = "SOURCE_SCHEMA_CHANGED",
+        message = s"Source '$source' schema changed between compile and execute (or cache and execute)",
+        hint    = Some("Invalidate the cached plan and re-compile"),
+        details = Map("source" -> source),
+      )
+    case EngineError.EngineUnavailable(name, available, wasDefault) =>
+      ErrorDetail(
+        code    = "ENGINE_UNAVAILABLE",
+        message = (if (wasDefault)
+          s"Default engine '$name' is unavailable"
+        else
+          s"Engine '$name' is not registered"
+        ) + s"; available engines: [${available.mkString(", ")}]",
+        hint    = Some(s"Pick one of the available engines, or register '$name' at startup"),
+        details = Map(
+          "engine"      -> name,
+          "available"   -> available.mkString(","),
+          "was_default" -> wasDefault.toString,
+        ),
+      )
+  }
+}
 
 object EngineError {
 

@@ -62,9 +62,18 @@ final class Query(
       val result = handleViaRegistry(request)
       val elapsed = System.currentTimeMillis() - t0
       return result.fold(
-        err => throw new RuntimeException(
-          s"engine '${request.engine}' query failed: $err"
-        ),
+        err => {
+          // PR 7: map the engine-portable `EngineError` to a structured
+          // `ErrorDetail` (exhaustive on add, total over the ADT) and
+          // throw with the structured code + message. The full
+          // `ErrorDetail` (code, message, hint, details) is available
+          // via `err.toErrorDetail` for callers that want to route on it.
+          val detail = err.toErrorDetail
+          throw new RuntimeException(
+            s"[${detail.code}] ${detail.message}" +
+              detail.hint.fold("")(h => s" (hint: $h)")
+          )
+        },
         pqr => Envelope.ok(
           portableToData(pqr),
           warnings = Handlers.lifecycleWarnings(request.model, io.semanticdf.ModelStatus.Draft),
