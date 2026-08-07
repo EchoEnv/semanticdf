@@ -296,9 +296,13 @@ share two characteristics:
 
 For the full feature roadmap with priorities, see
 [`docs/backlog-type-safety.md`](backlog-type-safety.md).
+For the v0.3.0 → v0.3.1 feature-parity gaps specifically (Spark-on-portable
+migration, `t.all`, joins, predicate unification, rollup compile, catalog
+adapter), see
+[`docs/design/v0.3.1-feature-parity-backlog.md`](design/v0.3.1-feature-parity-backlog.md).
 For the architectural decisions behind these deferrals, see
 [`docs/adr/`](adr/).
 
 ---
 
-*This document is updated each release. Last updated: v0.2.2.*
+*This document is updated each release. Last updated: v0.3.0.*

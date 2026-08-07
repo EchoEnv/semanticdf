@@ -23,7 +23,7 @@ trying to do.
 | Run queries through the long-running platform runtime (post-crash recovery, draining, audit) | [`semanticdf-platform/README.md`](../semanticdf-platform/README.md), [`docs/design/platform-architecture.md`](design/platform-architecture.md), [`docs/design/platform-determinism-audit.md`](design/platform-determinism-audit.md) |
 | Learn why we made a particular design call | [`docs/adr/`](adr/) — three ADRs, each short |
 | Find an unfamiliar term | [`docs/GLOSSARY.md`](GLOSSARY.md) |
-| See what's in scope and what's on the roadmap | [`docs/known-limitations.md`](known-limitations.md) (current scope + guardrails + roadmap hints) |
+| See what's in scope and what's on the roadmap | [`docs/known-limitations.md`](known-limitations.md) (current scope + guardrails + roadmap hints) and [`docs/design/v0.3.1-feature-parity-backlog.md`](design/v0.3.1-feature-parity-backlog.md) (v0.3.0 → v0.3.1 priority list) |
 | Look up a specific API method | [`README.md`](../README.md) → `## API reference` |
 | See what changed in the last release | [`RELEASE.md`](../RELEASE.md) — version-by-version |
 | Investigate a phantom-type compile error | the `SemanticField` scaladoc and `docs/backlog-type-safety.md` (deferred follow-ons) |
@@ -39,6 +39,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `docs/guide.md` | Narrative walkthrough: how a query compiles, calc measures, joins, terminals, typed layer, notebook escape hatch. Pairs with DESIGN.md the way a guidebook pairs with a map. | New readers / users |
 | `DESIGN.md` | Architecture of record. Op tree, calc compilation, op-tree compilation, package layout, build & dependency strategy. | Contributors who need to understand *how* the framework works internally |
 | `docs/design/multi-engine-design.md` | The engine-portable design: `Engine[R]` contract, portable IR (`RelOp`), portable result types, capability surfaces, CAS publication contract. The reference for engine-adapter authors. | Engine-adapter authors; readers following the v0.3.0 migration |
+| `docs/design/v0.3.1-feature-parity-backlog.md` | The 7 gaps between the v0.3.0 portable design and full feature parity with the legacy Spark library. Prioritized roadmap: Spark-on-portable migration, `t.all`, joins, predicate unification, rollup compile, catalog adapter. | v0.3.1 contributors; readers asking "what's missing for parity?" |
 | `docs/GLOSSARY.md` | Terms-of-art reference. | Everyone — especially new readers |
 | `docs/getting-started.md` | The canonical consumer setup: prerequisites, Maven dep, SparkSession, sample DataFrame, first model, first query. One paste-and-run path from `mvn install` to printed output. | New users — start here |
 | `docs/DOCS_MAP.md` | This document. Wayfinding. | Everyone |

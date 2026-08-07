@@ -90,6 +90,7 @@ guarantee that they're asking for the right thing.
 - **[`semanticdf-platform/README.md`](semanticdf-platform/README.md)** — the standalone Restate-native platform runtime (long-running JVM with a Restate ingress, post-crash query reconciliation, bulk-startup recovery). Ships as a separate Maven module that depends on the library.
 - [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
 - **[`docs/design/multi-engine-design.md`](docs/design/multi-engine-design.md)** — the engine-portable design: `Engine[R]` contract, portable IR (`RelOp`), portable result types, capability surfaces, CAS publication contract. The reference for engine-adapter authors.
+- **[`docs/design/v0.3.1-feature-parity-backlog.md`](docs/design/v0.3.1-feature-parity-backlog.md)** — the 7 gaps between the v0.3.0 portable design and full feature parity with the legacy Spark library (Spark-on-legacy path, `t.all`, joins, predicate unification, rollup compile, catalog adapter). Prioritized roadmap.
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
