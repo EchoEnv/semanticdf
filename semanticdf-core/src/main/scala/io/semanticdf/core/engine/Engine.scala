@@ -174,25 +174,21 @@ trait Engine[R] {
     *
     * ==Default implementation==
     *
-    * Engines that don't override this overload get the
-    * "fall-through" behavior: the engine-native result is
-    * wrapped in a one-element `PortableQueryResult` with a
-    * generic schema. This is a backwards-compat default \u2014
-    * adapters SHOULD override this with a real
-    * `ResultEncoder` instance. */
-  def executePortable(plan: ExecutionPlan[R], ctx: EngineContext): Either[EngineError, PortableQueryResult] = {
-    execute(plan, ctx).map { native =>
-      // Fallback: wrap the native result in a portable shape
-      // with a placeholder schema. This is a last-resort
-      // backward-compat path; engines with a real ResultEncoder
-      // override this method.
-      PortableQueryResult(
-        schema   = ResultSchema(Nil),
-        rows     = Vector.empty,
-        metadata = Map("engine.adaptor.fallback" -> "true"),
-      )
-    }
-  }
+    * The default throws `NotImplementedError`. Adapters that
+    * want portable results MUST override this with a real
+    * `ResultEncoder` instance; the previous "wrap in an empty
+    * `PortableQueryResult`" fallback silently dropped data
+    * (caught by the v0.3.0 pre-tag audit per debug-mantra §5).
+    *
+    * This default is intentionally fail-loud: an engine that
+    * doesn't override `executePortable` will crash on the first
+    * MCP query, not return `Vector.empty`. The crash is the
+    * adapter author's signal that the contract isn't yet met. */
+  def executePortable(plan: ExecutionPlan[R], ctx: EngineContext): Either[EngineError, PortableQueryResult] =
+    throw new NotImplementedError(
+      "Engine.executePortable: this engine has not implemented the portable-result contract. " +
+      "Override executePortable with a real ResultEncoder (see adapters/semanticdf-spark, -trino, -duckdb for the canonical pattern)."
+    )
 
   /** Return a human-readable plan description (no execution).
     * Used by MCP \`explain\` tool. Returns \`Either[EngineError, String]\`.

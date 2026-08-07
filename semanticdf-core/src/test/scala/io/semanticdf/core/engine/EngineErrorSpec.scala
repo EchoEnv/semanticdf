@@ -98,6 +98,7 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
       EngineError.ProviderInvocationFailed("a", "b"),
       EngineError.SourceSchemaChanged("a"),
       EngineError.EngineUnavailable("a", Seq.empty, wasDefault = false),
+      EngineError.ModelNotFound("a"),
     )
     examples.foreach {
       case EngineError.UnsupportedCapability(_, _)      => ()
@@ -111,6 +112,7 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
       case EngineError.ProviderInvocationFailed(_, _)  => ()
       case EngineError.SourceSchemaChanged(_)          => ()
       case EngineError.EngineUnavailable(_, _, _)       => ()
+      case EngineError.ModelNotFound(_)                  => ()
     }
   }
 
@@ -124,6 +126,47 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
   test("Different case => not equal even with same fields") {
     val a = EngineError.UnsupportedCapability("x", "y")
     val b = EngineError.FeatureDeferred("x", "y")
+    a should not be b
+  }
+
+  // Per v0.3.0 pre-tag audit: ModelNotFound is the dedicated
+  // case for "model name not in the engine's registry". Distinct
+  // from EngineUnavailable (engine name) and FeatureDeferred
+  // (deferred to a future release).
+  test("ModelNotFound carries name") {
+    val e = EngineError.ModelNotFound("orders_v3")
+    e.name shouldBe "orders_v3"
+  }
+
+  test("ModelNotFound.toErrorDetail emits MODEL_NOT_FOUND code") {
+    val e = EngineError.ModelNotFound("orders_v3")
+    val d = e.toErrorDetail
+    d.code shouldBe "MODEL_NOT_FOUND"
+    d.message should include ("orders_v3")
+    d.hint shouldBe defined
+    d.details("model") shouldBe "orders_v3"
+  }
+
+  test("ModelNotFound round-trips through Java serialization") {
+    val e = EngineError.ModelNotFound("orders_v3")
+    val baos = new java.io.ByteArrayOutputStream
+    val oos  = new java.io.ObjectOutputStream(baos)
+    oos.writeObject(e)
+    oos.close()
+    val bais = new java.io.ByteArrayInputStream(baos.toByteArray)
+    val ois  = new java.io.ObjectInputStream(bais)
+    val deserialized = ois.readObject().asInstanceOf[EngineError.ModelNotFound]
+    ois.close()
+    deserialized shouldBe e
+  }
+
+  test("ModelNotFound differs from FeatureDeferred with same name field") {
+    // Regression: previously SparkEngineProvider returned
+    // FeatureDeferred(feature = "spark.provider.model-not-found:X", release = "v0.5.0")
+    // for a missing model, which polluted the FEATURE_DEFERRED
+    // semantics with lookup failures.
+    val a = EngineError.ModelNotFound("orders_v3")
+    val b = EngineError.FeatureDeferred("orders_v3", "v0.5.0")
     a should not be b
   }
 }

@@ -26,6 +26,24 @@ class MCPEngineRegistrySpec extends AnyFunSuite with Matchers {
     ): Either[EngineError, String] = ???
   }
 
+  /** A provider whose availability can be toggled post-construction.
+    * Used to test the runtime-available branch (the default must
+    * be available at construction, then can flip off later). */
+  private final class FlipFlopProvider(
+      override val identity: EngineIdentity,
+      initial: Boolean,
+  ) extends MCPEngineProvider {
+    private var _available: Boolean = initial
+    def setAvailable(v: Boolean): Unit = _available = v
+    override def available: Boolean = _available
+    override def query(
+        model: Model, request: MCPQueryRequest, ctx: EngineContext,
+    ): Either[EngineError, PortableQueryResult] = ???
+    override def explain(
+        model: Model, request: MCPQueryRequest, ctx: EngineContext,
+    ): Either[EngineError, String] = ???
+  }
+
   // -- Construction invariants --
 
   test("registry construction fails if default is not in the engines map") {
@@ -63,6 +81,39 @@ class MCPEngineRegistrySpec extends AnyFunSuite with Matchers {
         wasDefault shouldBe false
         available should contain ("spark")
       case other => fail(s"expected Left(EngineUnavailable), got $other")
+    }
+  }
+
+  // Per v0.3.0 pre-tag audit: `select` MUST distinguish "user
+  // asked for the default" from "user asked for a non-default
+  // name". Previously wasDefault was always `false`.
+  test("select wasDefault=true when user asks for the default name (and the provider flips off after startup)") {
+    // The default must be available at construction (per the
+    // `apply` invariant). To test the wasDefault branch, we
+    // construct with a healthy default + a healthy non-default,
+    // then flip the default off post-construction.
+    val spark = new FlipFlopProvider(EngineIdentity("spark", "3.5.8", "0.2.4"), initial = true)
+    val trino = new FakeProvider(EngineIdentity("trino", "0.286", "0.2.4"), available = true)
+    val registry = MCPEngineRegistry(Map("spark" -> spark, "trino" -> trino), default = "spark")
+    spark.setAvailable(false)
+    registry.select("spark") match {
+      case Left(EngineError.EngineUnavailable(name, _, wasDefault)) =>
+        name shouldBe "spark"
+        wasDefault shouldBe true
+      case other => fail(s"expected Left(EngineUnavailable) with wasDefault=true, got $other")
+    }
+  }
+
+  test("select wasDefault=false when user asks for a NON-default name") {
+    val spark = new FakeProvider(EngineIdentity("spark", "3.5.8", "0.2.4"), available = true)
+    val trino = new FlipFlopProvider(EngineIdentity("trino", "0.286", "0.2.4"), initial = true)
+    val registry = MCPEngineRegistry(Map("spark" -> spark, "trino" -> trino), default = "spark")
+    trino.setAvailable(false)
+    registry.select("trino") match {
+      case Left(EngineError.EngineUnavailable(name, _, wasDefault)) =>
+        name shouldBe "trino"
+        wasDefault shouldBe false
+      case other => fail(s"expected Left(EngineUnavailable) with wasDefault=false, got $other")
     }
   }
 
