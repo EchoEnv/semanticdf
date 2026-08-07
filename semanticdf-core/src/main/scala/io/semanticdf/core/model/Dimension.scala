@@ -5,7 +5,7 @@ import io.semanticdf.core.schema.SealedDataType
 
 /** Engine-portable dimension ADT — Phase 2 contract. Mirrors the
   * design doc §4.4.1 "Dimension" (concrete case class per the
-  * round-3 finding that pinned `Dimension.field(name, dataType)` as
+  * v0.3.0 design finding that pinned `Dimension.field(name, dataType)` as
   * the canonical smart constructor).
   *
   * A [[Dimension]] is a column-level grouping key — the user

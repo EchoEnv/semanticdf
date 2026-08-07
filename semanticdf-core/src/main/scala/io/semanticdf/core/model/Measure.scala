@@ -5,7 +5,7 @@ import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
 
 /** Engine-portable aggregate-measure ADT — Phase 2 contract. Mirrors
   * the design doc §4.4.1 "Measure" (concrete case class per the
-  * round-3 finding that pinned `Measure.aggregate(name, fn, expr)` as
+  * v0.3.0 design finding that pinned `Measure.aggregate(name, fn, expr)` as
   * the canonical smart constructor).
   *
   * A [[Measure]] is a column-level aggregate (e.g. `SUM(amount)`,

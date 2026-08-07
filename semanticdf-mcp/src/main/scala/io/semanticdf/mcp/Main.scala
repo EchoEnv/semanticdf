@@ -77,11 +77,11 @@ object Main {
       val okf        = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
       val mapper     = JsonSupport.scalaMapper()
 
-      // PR 5c: construct the engine registry (per design §6.4 +
-      // PR #402). For v1, we register only the Spark engine provider
-      // (Trino and other providers are future work). The default is
-      // "spark" so existing clients get the legacy-equivalent path
-      // (which the spark engine provider implements).
+      // Construct the engine registry (per design §6.4). For v1,
+      // we register only the Spark engine provider (Trino and other
+      // providers are future work). The default is "spark" so existing
+      // clients get the legacy-equivalent path (which the spark engine
+      // provider implements).
       val engineRegistry: io.semanticdf.core.engine.MCPEngineRegistry = {
         val sparkProvider = new SparkEngineProvider(
           spark, models.registry,

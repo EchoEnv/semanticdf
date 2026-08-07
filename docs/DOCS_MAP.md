@@ -18,6 +18,8 @@ trying to do.
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
 | Drive the framework as a CLI client over REST | [`examples/cli-consumer/README.md`](../examples/cli-consumer/README.md) |
 | Understand how a query compiles to a Spark plan | [`docs/guide.md`](../docs/guide.md) — narrative walkthrough, or [`DESIGN.md`](../DESIGN.md) §4 (architecture) for the formal version |
+| Implement or extend an engine adapter (Trino, DuckDB, custom) | [`docs/design/multi-engine-design.md`](design/multi-engine-design.md) — the `Engine[R]` contract, portable IR, capability surfaces | Engine-adapter authors |
+| Understand the catalog identity + CAS publication contract | [`docs/design/multi-engine-design.md`](design/multi-engine-design.md) §5.3 | Catalog-adapter authors; readers tracking model versioning |
 | Run queries through the long-running platform runtime (post-crash recovery, draining, audit) | [`semanticdf-platform/README.md`](../semanticdf-platform/README.md), [`docs/design/platform-architecture.md`](design/platform-architecture.md), [`docs/design/platform-determinism-audit.md`](design/platform-determinism-audit.md) |
 | Learn why we made a particular design call | [`docs/adr/`](adr/) — three ADRs, each short |
 | Find an unfamiliar term | [`docs/GLOSSARY.md`](GLOSSARY.md) |
@@ -36,6 +38,7 @@ Each document has *one* job. We're migrating toward that structure.
 | `README.md` | Front door. Problem framing, capabilities overview, links to everything else. | Everyone |
 | `docs/guide.md` | Narrative walkthrough: how a query compiles, calc measures, joins, terminals, typed layer, notebook escape hatch. Pairs with DESIGN.md the way a guidebook pairs with a map. | New readers / users |
 | `DESIGN.md` | Architecture of record. Op tree, calc compilation, op-tree compilation, package layout, build & dependency strategy. | Contributors who need to understand *how* the framework works internally |
+| `docs/design/multi-engine-design.md` | The engine-portable design: `Engine[R]` contract, portable IR (`RelOp`), portable result types, capability surfaces, CAS publication contract. The reference for engine-adapter authors. | Engine-adapter authors; readers following the v0.3.0 migration |
 | `docs/GLOSSARY.md` | Terms-of-art reference. | Everyone — especially new readers |
 | `docs/getting-started.md` | The canonical consumer setup: prerequisites, Maven dep, SparkSession, sample DataFrame, first model, first query. One paste-and-run path from `mvn install` to printed output. | New users — start here |
 | `docs/DOCS_MAP.md` | This document. Wayfinding. | Everyone |

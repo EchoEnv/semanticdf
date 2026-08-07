@@ -55,16 +55,19 @@ import io.semanticdf.core.rel.RelOp
   * sealed-ADT files. The contract is the boundary between data
   * (in core) and behavior (in engine adapters).
   *
-  * ==Consolidation plan (NOT in this PR)==
+  * ==Remaining v0.3.0 work==
   *
-  * Phase 2 follow-up PRs:
-  *   - Add \`EngineContext\` (typed policies: materialize, cache, audit,
-  *     join hints, timeout, cancellation)
-  *   - Add \`PortableQueryResult\` + \`ResultSchema\` + \`ResultRow\`
-  *     (case classes for engine-neutral result shape)
-  *   - Add \`PortableExpr\` + \`RelOp\` (the portable IR — separate
-  *     from the fluent API's \`SemanticOp\`)
-  *   - Migrate \`SemanticTableCore\` to emit portable IR + \`Engine\` calls
+  * The portable types and engine-portable IR have landed:
+  * \`EngineContext\`, \`PortableQueryResult\`, \`ResultValue\`,
+  * \`ResultRow\`, \`PortableQueryResult\`, and \`RelOp\` are all
+  * in the \`core.engine\` package.
+  *
+  * What remains: migrate \`SemanticTableCore\` (the legacy fluent
+  * API in \`src/main/scala/io/semanticdf/\`) to emit portable IR
+  * and route through \`Engine[R]\` instead of compiling directly
+  * to Spark plans. Until that lands, the legacy fluent chain
+  * coexists with the portable types — adapters implement \`Engine[R]\`
+  * against the portable API; consumers still use the fluent chain.
   */
 trait Engine[R] {
 
@@ -83,7 +86,7 @@ trait Engine[R] {
     * of the engine's advertised features. Used by MCP
     * `describe_model` to surface supported features per engine.
     *
-    * PR 9 of the 12-PR triage plan: replaces the loose
+    * v0.3.0: replaces the loose
     * `Map[Capability, String]` that used to be returned. The
     * structured shape gives consumers typed fields to route on
     * (`supportedJoinKinds`, `supportsRollup`, `supportsMaterialize`)

@@ -22,7 +22,7 @@ final case class QueryRequest(
     /** Engine identity (per design §4.5.5). Used by the cache
       * key + dedup hash so a Spark request and a Trino request
       * for the same model produce DIFFERENT cache entries /
-      * dedup keys (per round-3 DE finding 11 closure). `None`
+      * dedup keys (per design §11 closure). `None`
       * for requests built before this field was added — old
       * requests read as `None`, new requests write `Some(...)`. */
     engine:     Option[io.semanticdf.core.engine.EngineIdentity] = None,

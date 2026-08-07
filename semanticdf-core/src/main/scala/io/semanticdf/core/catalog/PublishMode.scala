@@ -1,7 +1,8 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable publication-mode ADT \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable publication-mode ADT \u2014 added in v0.3.0.
+  *
+  * Closed ADT: `CreateOnly`, `Upsert`, `CompareAndSet(expectedDigest)`. The `compareAndSet` smart constructor rejects empty digest.
   *
   * Defines how a [CatalogAdapter.publish] call interacts with an
   * existing publication of the same identity. The closed ADT

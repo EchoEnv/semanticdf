@@ -6,10 +6,9 @@ import org.scalatest.matchers.should.Matchers
 import io.semanticdf.core.engine.EngineIdentity
 import io.semanticdf.audit.{QueryRequest => AuditQueryRequest}
 
-/** Tests for engine-identity in the cache key (added in PR 4 of
-  * the 12-PR triage plan).
+/** Tests for engine-identity in the cache key (added in v0.3.0).
   *
-  * Per design \u00a74.5.5 + round-3 DE finding 11 closure: a Spark
+  * Per design \u00a74.5.5 + design §11 closure: a Spark
   * request and a Trino request for the same model must produce
   * DIFFERENT cache keys \u2014 otherwise a Spark result could be
   * returned to a Trino caller (or vice versa). */

@@ -4,7 +4,7 @@ import io.semanticdf.core.expr.Expr
 
 /** Engine-portable calculated-measure ADT — Phase 2 contract.
   * Mirrors the design doc §4.4.1 "CalculatedMeasure" (concrete,
-  * no `TransformSpec` member per round-3 DE finding 1.1).
+  * no `TransformSpec` member per design §1.1).
   *
   * A [[CalculatedMeasure]] is a measure whose value is COMPUTED from
   * other measures (or fields). It carries the name + the

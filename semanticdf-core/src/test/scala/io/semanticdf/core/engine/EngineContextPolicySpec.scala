@@ -6,7 +6,7 @@ import org.scalatest.matchers.should.Matchers
 import scala.concurrent.duration.Duration
 
 /** Policy-interaction + serialization tests for [EngineContext]
-  * (PR 12 of the 12-PR triage plan).
+  * (v0.3.0).
   *
   * The existing [EngineContextSpec] pins the basic data shape
   * (case counts, field preservation, equality). This spec pins:

@@ -8,9 +8,9 @@ import io.semanticdf.core.engine.EngineIdentity
 import java.time.Instant
 
 /** Tests for the `engine: Option[EngineIdentity]` field on
-  * `AuditEvent` (added in PR 4 of the 12-PR triage plan).
+  * `AuditEvent` (added in v0.3.0).
   *
-  * Per design \u00a74.5.5 + round-3 DE finding 11 closure: the
+  * Per design \u00a74.5.5 + design §11 closure: the
   * audit event MUST include the engine identity so the dedup
   * key distinguishes a Spark request from a Trino request for
   * the same model. Without it, a single dedup-hash key would

@@ -3,7 +3,7 @@ package io.semanticdf.core.engine
 import io.semanticdf.core.rel.JoinKind
 
 /** Structured value-object view of an engine's advertised
-  * capabilities \u2014 PR 9 of the 12-PR triage plan.
+  * capabilities \u2014 v0.3.0.
   *
   * Replaces the loose `Map[Capability, String]` that used to be
   * returned by per-engine `describeCapabilities`. The structured

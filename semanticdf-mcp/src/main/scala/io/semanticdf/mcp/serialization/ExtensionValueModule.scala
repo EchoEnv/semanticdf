@@ -13,9 +13,7 @@ import scala.collection.JavaConverters._
 
 /** Jackson module for round-tripping [ExtensionValue] over the wire.
   *
-  * PR 11 of the 12-PR triage plan: fixes the wire-format bug where
-  * `ExtensionValue.Null` did not survive JSON serialization. Before
-  * this fix:
+  * Before the v0.3.0 fix:
   *
   *   - `ExtensionValue.Null` serialized to JSON `{}` (because
   *     `case object` produces a no-arg constructor that Jackson

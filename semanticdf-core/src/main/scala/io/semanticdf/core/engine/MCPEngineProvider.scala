@@ -78,7 +78,7 @@ trait MCPEngineProvider {
   * ==Why no `where` / `having` / `orderBy` for v1==
   *
   * The `core.predicate.Predicate` and `predicate.Predicate`
-  * (spark-adapter) are TWO different types per the round-3
+  * (spark-adapter) are TWO different types per the v0.3.0
   * DE review (Predicate type duplication). The MCP server
   * currently uses the spark-adapter Predicate for filter
   * translation. For PR 5, the engine-portable `MCPQueryRequest`
@@ -86,7 +86,7 @@ trait MCPEngineProvider {
   * handler in `semanticdf-mcp` keeps its own filter logic on
   * the legacy path. A future PR aligns the predicate types
   * (per the design's "Predicate consolidation" plan in
-  * round-3 finding 6.2). */
+  * design §6.2). */
 final case class MCPQueryRequest(
     model:      String,
     dimensions: Seq[String] = Seq.empty,

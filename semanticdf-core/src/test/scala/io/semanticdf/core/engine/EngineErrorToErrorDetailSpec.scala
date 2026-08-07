@@ -4,7 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
 /** Tests for the `toErrorDetail` method on [EngineError]
-  * (PR 7 of the 12-PR triage plan).
+  * (v0.3.0).
   *
   * The mapping is total over the `EngineError` ADT (the Scala
   * compiler enforces exhaustiveness via the `match`). Each case

@@ -7,7 +7,7 @@ package io.semanticdf.core.engine
   *
   * ==Why `values: List[ResultValue]` (not `List[Any`)==
   *
-  * Per the round-3 DE review's CRITIQUE: `values: List[Any]`
+  * Per the v0.3.0 design review's CRITIQUE: `values: List[Any]`
   * violates the \u00a71.3 transitively-serializable invariant.
   * `ResultValue` is the sealed ADT that captures every
   * portable value type (per the design's "null / bool / int /

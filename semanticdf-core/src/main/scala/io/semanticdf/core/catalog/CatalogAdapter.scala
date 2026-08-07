@@ -1,11 +1,10 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable catalog-adapter contract \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable catalog-adapter contract \u2014 added in v0.3.0.
   *
-  * Mirrors the design \u00a75.3 spec. Every catalog adapter (Unity
-  * Catalog, Hive Metastore, custom catalogs) implements this
-  * trait. The trait defines the closed set of operations:
+  * Mirrors design \u00a75.3. Every catalog adapter (Unity Catalog, Hive
+  * Metastore, custom catalogs) implements this trait, which
+  * defines the closed set of operations:
   *
   *   1. `publish`  \u2014 write an entity to the catalog (with mode)
   *   2. `discover` \u2014 read an entity from the catalog by ref
@@ -21,10 +20,10 @@ package io.semanticdf.core.catalog
   *
   * ==Why the typed [ManifestDocument] is `Any` for v1 (NOT `Nothing`)==
   *
-  * The full [ManifestDocument] v2 spec is deferred to PR 6 (Manifest
-  * v2 + dual reader). For PR 10, we declare the trait's CONTRACT
-  * using `Any` as a placeholder; the actual type lands when PR 6
-  * merges.
+  * The full [ManifestDocument] v2 spec is deferred to v0.3.1
+  * (Manifest v2 + dual reader). For now, the trait's CONTRACT uses
+  * `Any` as a placeholder; the actual type lands when the manifest
+  * v2 work merges.
   *
   * Why not `Nothing`? A trait with `def publish(doc: Nothing, ...)` is
   * implementable (`override def publish(doc: Nothing, ...) = ???`) but
@@ -33,8 +32,8 @@ package io.semanticdf.core.catalog
   * `???` (throws immediately at the call site), or some trick like
   * `null.asInstanceOf[Nothing]` (unsound). `Any` is the lesser evil:
   * it permits any value at call sites, but the trait stays callable,
-  * implementable, and the transition to PR 6 is mechanical (replace
-  * `Any` with the real `ManifestDocument` ADT).
+  * implementable, and the transition to the real `ManifestDocument` ADT
+  * is mechanical (replace `Any` with the real type).
   *
   * ==Why `Either[CatalogError, T]` (vs. exceptions or `Try`)==
   *
@@ -110,7 +109,7 @@ trait CatalogAdapter extends Serializable {
     *   failed validation */
   def publish(
       identity: CatalogIdentity,
-      doc:      CatalogAdapter#ManifestDocument,    // type alias for Any (placeholder; real ManifestDocument lands in PR 6)
+      doc:      CatalogAdapter#ManifestDocument,    // type alias for Any; the real ManifestDocument lands in v0.3.1
       as:       CatalogEntity,
       mode:     PublishMode,
   ): Either[CatalogError, PublishResult]

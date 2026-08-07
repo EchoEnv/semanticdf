@@ -12,7 +12,7 @@ import io.semanticdf.rollup.{
 
 /** Java-serialization round-trip tests for the rollup package.
   *
-  * Background: the round-4 stacked-lens review of the v0.2.4 rollup
+  * Background: the v0.2.4 stacked-lens review of the v0.2.4 rollup
   * feature surfaced that the existing `SerializationSpec` covered
   * library types generally (SemanticTable, Predicate, SortKey, ...)
   * but had NO tests for any rollup-package types. The design intent

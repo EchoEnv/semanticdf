@@ -37,7 +37,7 @@ final class Query(
       * passes its shared `InMemoryAuditSink` to enable the
       * `audit_log` retrieval tool. */
     val auditSink: Option[io.semanticdf.audit.AuditSink] = None,
-    /** PR 5c: engine registry (per design §6.4 + PR #402). When
+    /** Engine registry (per design §6.4). When
       * `request.engine.nonEmpty` AND this is `Some(_)`,
       * `handle()`/`explain()` route through the engine provider;
       * otherwise the legacy `Models` + `SemanticTable` path is
@@ -54,9 +54,9 @@ final class Query(
 
   /** Handle `query`: run the query, return rows. */
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
-    // PR 5c: route through the engine registry when the request
-    // specifies an engine AND the registry is configured. Otherwise
-    // the legacy 'Models' + 'SemanticTable' path is used.
+    // Route through the engine registry when the request specifies
+    // an engine AND the registry is configured. Otherwise the legacy
+    // 'Models' + 'SemanticTable' path is used.
     if (request.engine.nonEmpty && engineRegistry.isDefined) {
       val t0 = System.currentTimeMillis()
       val result = handleViaRegistry(request)
@@ -172,18 +172,18 @@ final class Query(
     )
   }
 
-  /** PR 5c: route a query through the engine registry (per
-    * design §6.4 + PR #402). Called from `handle()` when
+  /** Route a query through the engine registry (per design §6.4).
+    * Called from `handle()` when
     * `request.engine.nonEmpty && engineRegistry.isDefined`.
     *
     * The legacy `Models` registry carries `SemanticTable`s
     * (spark-side, per the spark adapter). The engine registry
     * expects `Model` (engine-portable, per `core.model.Model`).
-    * For PR 5c v1, we build a synthetic `Model.of(name, ...)`
-    * with just the model name (the engine provider uses this
-    * for routing only; per-attribute lookup still goes through
-    * the legacy `Models` registry). The semantic `EngineContext`
-    * is the canonical shape per PR #400. */
+    * For v1, we build a synthetic `Model.of(name, ...)` with just
+    * the model name (the engine provider uses this for routing only;
+    * per-attribute lookup still goes through the legacy `Models`
+    * registry). The semantic `EngineContext` is the canonical shape
+    * per design §4.5.4. */
   private def handleViaRegistry(
       request: io.semanticdf.mcp.handlers.QueryRequest,
   ): Either[io.semanticdf.core.engine.EngineError, io.semanticdf.core.engine.PortableQueryResult] = {
@@ -513,9 +513,9 @@ object Query {
     props.put("time_grain", strProp("string"))
     props.put("time_grains", strProp("array"))
     props.put("time_range", strProp("array"))
-    // PR 5b: the 12th property (the design's "13th property"
-    // when counting from 1). Empty = legacy path; non-empty =
-    // route through MCPEngineRegistry.
+    // The 12th property (the design's "13th property" when counting
+    // from 1). Empty = legacy path; non-empty = route through
+    // MCPEngineRegistry.
     props.put("engine",     strProp("string"))
     new io.modelcontextprotocol.spec.McpSchema.JsonSchema(
       "object",
@@ -733,14 +733,14 @@ object Query {
 /** Top-level request DTO. Parsed from the MCP arguments map by the SDK
   * adapter (registered via `Query.registerSpec`).
   *
-  * ==The `engine` field (PR 5b, the 12th queryToolSchema property)==
+  * ==The `engine` field (12th queryToolSchema property)==
   *
   * When `engine.nonEmpty`, the Query handler routes through the
   * `MCPEngineRegistry` (per design §6.4). When `engine.isEmpty`,
   * the handler falls back to the legacy `Models` + `SemanticTable`
   * path (backward-compat with PRs #1-#401).
   *
-  * Per design §6.4 + the round-3 DE review's "MCP engine
+  * Per design §6.4 + the v0.3.0 design review's "MCP engine
   * registry" finding: the engine field is the 12th property in
   * `queryToolSchema` (the design's "13th property" is the
   * `engine` field added in this PR — counting from 1). */
