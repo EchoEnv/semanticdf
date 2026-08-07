@@ -249,13 +249,23 @@ class TrinoQueryCompiler {
         // v0.3.0 pre-tag fix (Gap 3): the previous "-- Joins
         // deferred to a future PR" emitted a comment-only SQL
         // string that Trino parsed as a no-op, returning empty
-        // results with no error. Replaced with fail-loud:
-        // surfaces the gap at compile time instead of at
-        // query time. The join compile lands in v0.3.1 (see
-        // docs/design/v0.3.1-feature-parity-backlog.md Gap 3).
+        // results with no error. v0.3.0 replaced it with fail-loud.
+        //
+        // v0.3.1 note: joins DO work via `compile(model, ...)` —
+        // the model-level path emits the JOIN clause via
+        // `renderFrom` + `renderJoinSpec`. Only the lower-level
+        // `compileRelOp` path is restricted because `RelOp.Join`
+        // does not carry the right-side `SourceRef` (joins are
+        // resolved from `model.joins` + a `SourceResolver` at
+        // the model level). Users who build `RelOp` plans by hand
+        // should use the model-level compile, or extend this
+        // signature to accept a `modelSources` map. Tracked in
+        // docs/design/v0.3.1-feature-parity-backlog.md Gap 3.
         Left(EngineError.UnsupportedCapability(
           name   = "RelOp.Join",
-          reason = "Joins in portable RelOp are deferred to v0.3.1 (PR Trino + DuckDB join compile).",
+          reason = "RelOp.Join is not supported by compileRelOp because the right-side SourceRef is not carried in the RelOp IR. " +
+                   "Use compile(model, modelSources, ...) for joins, or extend compileRelOp to accept a modelSources map. " +
+                   "See docs/design/v0.3.1-feature-parity-backlog.md Gap 3.",
         ))
     }
   }

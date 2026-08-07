@@ -161,11 +161,36 @@ class DuckDBQueryCompiler {
       case AggregateFn.Avg     => s"AVG(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
       case AggregateFn.Min     => s"MIN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
       case AggregateFn.Max     => s"MAX(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      // -- v0.3.1 backward-compat: advanced aggregates --
+      // DuckDB's syntax differs from the portable case-object names
+      // (e.g. portable StddevPopulation → DuckDB STDDEV_POP; portable
+      // PercentileContinuous → DuckDB QUANTILE_CONT). The previous
+      // fallback `case other => other.toString.toUpperCase(input)`
+      // emitted WRONG SQL for several cases (STDDEVSAMPLE instead of
+      // STDDEV_SAMP, PERCENTILECONTINUOUS instead of QUANTILE_CONT,
+      // etc.) — silent SQL correctness bug. These explicit mappings
+      // close Gap 5 in docs/design/v0.3.1-feature-parity-backlog.md.
+      //
+      // Percentile* hardcodes 0.5 (median). Future: extend the
+      // portable AggregateCall shape with a percentile arg so the
+      // user's intended percentile is preserved. Tracked as a
+      // follow-on.
+      case AggregateFn.StddevSample        => s"STDDEV_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.StddevPopulation    => s"STDDEV_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.VarianceSample      => s"VAR_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.VariancePopulation   => s"VAR_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.Median               => s"MEDIAN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.PercentileContinuous => s"QUANTILE_CONT(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
+      case AggregateFn.PercentileDiscrete   => s"QUANTILE_DISC(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
+      case AggregateFn.ApproxPercentile     => s"APPROX_QUANTILE(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
+      case AggregateFn.First                => s"FIRST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.Last                 => s"LAST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
       case other               =>
-        // Other aggregate fns (Stddev, Variance, Median,
-        // Percentile*) — emit as `FN(<input>) AS alias`. DuckDB
-        // supports most of these natively. Future PRs add
-        // per-fn mapping for fns with custom syntax.
+        // Truly unknown aggregate fn (future additions to the
+        // sealed ADT). Fall back to the case-object name (uppercased).
+        // If the rendered SQL is wrong, the user sees a DuckDB
+        // syntax error at execute time — loud failure at the
+        // engine boundary, not silent incorrect SQL.
         s"${other.toString.toUpperCase}(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
     }
   }
