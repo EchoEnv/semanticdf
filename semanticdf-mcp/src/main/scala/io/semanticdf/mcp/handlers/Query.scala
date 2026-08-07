@@ -37,22 +37,42 @@ final class Query(
       * passes its shared `InMemoryAuditSink` to enable the
       * `audit_log` retrieval tool. */
     val auditSink: Option[io.semanticdf.audit.AuditSink] = None,
+    /** PR 5c: engine registry (per design §6.4 + PR #402). When
+      * `request.engine.nonEmpty` AND this is `Some(_)`,
+      * `handle()`/`explain()` route through the engine provider;
+      * otherwise the legacy `Models` + `SemanticTable` path is
+      * used (backward-compat with pre-PR-5c callers).
+      *
+      * Per karpathy §2 ("minimum code that solves the problem"):
+      * default `None` preserves the existing constructor signature.
+      * The companion object exposes an additive constructor
+      * overload that accepts the registry. */
+    val engineRegistry: Option[io.semanticdf.core.engine.MCPEngineRegistry] = None,
 ) {
 
   private val log = Query.log
 
   /** Handle `query`: run the query, return rows. */
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
-    // PR 5b: 'request.engine' is parsed and stored on the
-    // request (schema property added), but the registry-routing
-    // path is intentionally NOT yet wired here. The full
-    // integration (registry lookup + PortableQueryResult →
-    // Envelope[Query.Data] translation + Main wiring + 13th
-    // queryToolSchema property) lands in PR 5c. The current
-    // scope is: request now carries the 'engine' field; the
-    // handler still uses the legacy 'Models' + 'SemanticTable'
-    // path. No break to existing callers (the field defaults
-    // to "" and is unused inside the handler).
+    // PR 5c: route through the engine registry when the request
+    // specifies an engine AND the registry is configured. Otherwise
+    // the legacy 'Models' + 'SemanticTable' path is used.
+    if (request.engine.nonEmpty && engineRegistry.isDefined) {
+      val t0 = System.currentTimeMillis()
+      val result = handleViaRegistry(request)
+      val elapsed = System.currentTimeMillis() - t0
+      return result.fold(
+        err => throw new RuntimeException(
+          s"engine '${request.engine}' query failed: $err"
+        ),
+        pqr => Envelope.ok(
+          portableToData(pqr),
+          warnings = Handlers.lifecycleWarnings(request.model, io.semanticdf.ModelStatus.Draft),
+          meta = io.semanticdf.mcp.Meta(elapsed_ms = elapsed, model = Some(request.model)),
+        ),
+      )
+    }
+
     val raw = registry(request.model)
     // Attach the audit sink (if any) so the underlying `query()` +
     // `toDataFrame()` flow emits an event. `withAuditSink` is a pure
@@ -140,6 +160,89 @@ final class Query(
       planText,
       warnings = Handlers.lifecycleWarnings(request.model, t.status),
       meta = io.semanticdf.mcp.Meta(model = Some(request.model)),
+    )
+  }
+
+  /** PR 5c: route a query through the engine registry (per
+    * design §6.4 + PR #402). Called from `handle()` when
+    * `request.engine.nonEmpty && engineRegistry.isDefined`.
+    *
+    * The legacy `Models` registry carries `SemanticTable`s
+    * (spark-side, per the spark adapter). The engine registry
+    * expects `Model` (engine-portable, per `core.model.Model`).
+    * For PR 5c v1, we build a synthetic `Model.of(name, ...)`
+    * with just the model name (the engine provider uses this
+    * for routing only; per-attribute lookup still goes through
+    * the legacy `Models` registry). The semantic `EngineContext`
+    * is the canonical shape per PR #400. */
+  private def handleViaRegistry(
+      request: io.semanticdf.mcp.handlers.QueryRequest,
+  ): Either[io.semanticdf.core.engine.EngineError, io.semanticdf.core.engine.PortableQueryResult] = {
+    val registry = engineRegistry.get  // safe: gated by handle() caller
+    val mcpReq = io.semanticdf.core.engine.MCPQueryRequest(
+      model      = request.model,
+      dimensions = request.dimensions.getOrElse(Nil),
+      measures   = request.measures,
+      limit      = request.limit.map(_.toLong),
+      timeGrain  = request.time_grain,
+    )
+    val provider = registry.select(request.engine) match {
+      case Right(p) => p
+      case Left(err) => return Left(err)
+    }
+    val model = io.semanticdf.core.model.Model.of(
+      name            = request.model,
+      source          = io.semanticdf.core.model.SourceRef.ByName(
+        catalog = None, namespace = None, table = request.model,
+      ),
+      dimensions         = Nil,
+      measures           = Nil,
+      calculatedMeasures = Nil,
+      joins              = Nil,
+      defaultPolicies    = io.semanticdf.core.model.ModelPolicyDefaults.none,
+      status             = io.semanticdf.core.model.ModelStatus.Draft,
+    ) match {
+      case Right(m) => m
+      case Left(_)  => throw new RuntimeException(
+        s"failed to build synthetic model for '${request.model}'"
+      )
+    }
+    provider.query(model, mcpReq, io.semanticdf.core.engine.EngineContext.defaultContext)
+  }
+
+  /** Translate a `PortableQueryResult` (the engine-portable shape,
+    * from PR #400) to the legacy `Query.Data` shape (the MCP
+    * envelope's existing column + row + row_count structure).
+    *
+    * Translation: the `ResultSchema.fields: List[Field]` becomes
+    * `Query.Data.columns: List[ColumnInfo]`, and the rows are
+    * converted to `List[Any]`. For v1 we don't preserve the
+    * typed `ResultValue` shape — the MCP envelope is engine-
+    * portable but type-erased. A future PR can carry the typed
+    * shape through. */
+  private def portableToData(
+      pqr: io.semanticdf.core.engine.PortableQueryResult,
+  ): io.semanticdf.mcp.handlers.Query.Data = {
+    val columns = pqr.schema.fields.toList.map { f =>
+      Query.ColumnInfo(name = f.name, `type` = f.dataType.toString)
+    }
+    val rows: List[List[Any]] = pqr.rows.toList.map { row =>
+      row.values.toList.map {
+        case io.semanticdf.core.engine.ResultValue.NullV              => null
+        case io.semanticdf.core.engine.ResultValue.BoolV(b)           => b
+        case io.semanticdf.core.engine.ResultValue.IntV(n)            => n
+        case io.semanticdf.core.engine.ResultValue.DoubleV(d)         => d
+        case io.semanticdf.core.engine.ResultValue.DecimalV(bd)       => bd
+        case io.semanticdf.core.engine.ResultValue.StringV(s)        => s
+        case io.semanticdf.core.engine.ResultValue.TimestampV(instant) => instant
+        case io.semanticdf.core.engine.ResultValue.DateV(date)       => date
+      }
+    }
+    Query.Data(
+      columns    = columns,
+      rows       = rows,
+      row_count  = pqr.rowCount,
+      truncated  = false,
     )
   }
 }

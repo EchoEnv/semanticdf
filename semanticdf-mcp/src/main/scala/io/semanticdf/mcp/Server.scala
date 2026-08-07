@@ -39,6 +39,7 @@ object Server {
       okf: OkfCache,
       spark: SparkSession,
       mapper: McpJsonMapper,
+      engineRegistry: Option[io.semanticdf.core.engine.MCPEngineRegistry] = None,
   ): McpSyncServer = {
     val transport = new StdioServerTransportProvider(mapper)
     // Shared in-memory audit sink — every `query` / `explain` call
@@ -46,7 +47,7 @@ object Server {
     // shared instance is the only coupling between the two handlers.
     val auditSink: io.semanticdf.audit.AuditSink =
       io.semanticdf.audit.AuditSink.inMemory(maxEvents = 1024)
-    val queryHandler = new Query(spark, auditSink = Some(auditSink))
+    val queryHandler = new Query(spark, auditSink = Some(auditSink), engineRegistry = engineRegistry)
 
     McpServer.sync(transport)
       .serverInfo("semanticdf-mcp", "0.1.12")

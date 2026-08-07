@@ -5,6 +5,7 @@ package io.semanticdf.mcp
 //  like Envelope[T] serialize correctly.)
 import org.apache.spark.sql.SparkSession
 import io.semanticdf.tools.SdfSession
+import io.semanticdf.spark.SparkEngineProvider
 import org.slf4j.LoggerFactory
 
 /** CLI entry point — `mvn scala:run -DmainClass=io.semanticdf.mcp.Main` or
@@ -76,9 +77,24 @@ object Main {
       val okf        = OkfCache.build(parsed.modelsDir, parsed.okfBundleDir)
       val mapper     = JsonSupport.scalaMapper()
 
+      // PR 5c: construct the engine registry (per design §6.4 +
+      // PR #402). For v1, we register only the Spark engine provider
+      // (Trino and other providers are future work). The default is
+      // "spark" so existing clients get the legacy-equivalent path
+      // (which the spark engine provider implements).
+      val engineRegistry: io.semanticdf.core.engine.MCPEngineRegistry = {
+        val sparkProvider = new SparkEngineProvider(
+          spark, models.registry,
+        )
+        io.semanticdf.core.engine.MCPEngineRegistry(
+          engines = Map("spark" -> sparkProvider),
+          default = "spark",
+        )
+      }
+
       parsed.transport match {
         case "stdio" =>
-          mcpServer = Server.build(models, okf, spark, mapper)
+          mcpServer = Server.build(models, okf, spark, mapper, engineRegistry = Some(engineRegistry))
           log.info("semanticdf-mcp listening on stdio. Press Ctrl-D to stop.")
           Thread.currentThread().join()  // park until SIGINT / SIGTERM
 
