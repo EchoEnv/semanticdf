@@ -17,11 +17,10 @@ package io.semanticdf.core.catalog
   *   publisher can verify the version bump + new digest.
   * - [Conflict]: the publication was rejected because the
   *   `PublishMode` precondition was not met. `current` is
-  *   `Some(ref)` if the entity exists at the requested
-  *   identity (the publisher can retry from the new state);
-  *   `None` if the conflict was a different kind (e.g.
-  *   `PublishMode.CreateOnly` on an existing entity still
-  *   produces [Conflict], but `current` is `Some(ref)`).
+  *   `Some(ref)` if the adapter can report the current ref
+  *   (CAS digest mismatch, CreateOnly on existing); `None`
+  *   only when the adapter has no visibility (e.g. permission
+  *   denied or transport failure during the lookup).
   *
   * ==Data-driven mantra compliance==
   *
@@ -45,9 +44,14 @@ object PublishResult {
   ) extends PublishResult
 
   /** The publication was rejected. `current` is the entity's
-    * current ref (if it exists); `reason` describes why. */
+    * current ref (if the adapter has visibility); `reason`
+    * describes why.
+    *
+    * Per the SWE review of PR #410 (H1): field order is
+    * `(reason, current)` to match [CatalogError.Conflict]'s
+    * convention ("primary" field first). */
   final case class Conflict(
-      current: Option[CatalogRef],
       reason:  String,
+      current: Option[CatalogRef] = None,
   ) extends PublishResult
 }

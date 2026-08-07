@@ -50,6 +50,26 @@ object PublishMode {
 
   /** Compare-and-set: update only if the current digest
     * matches `expectedDigest`. Returns [PublishResult.Conflict]
-    * otherwise. */
+    * otherwise.
+    *
+    * Per the DE review of PR #410: `expectedDigest` must be
+    * non-empty. The smart constructor (apply) enforces this;
+    * an empty digest is a degenerate CAS condition that has
+    * no useful interpretation ("update if current digest is
+    * empty" never matches a real catalog). The error is
+    * `IllegalArgumentException` at construction (per
+    * `scala-data-driven-refacer` \u00a71: validation at the boundary). */
   final case class CompareAndSet(expectedDigest: String) extends PublishMode
+
+  /** Smart constructor for [CompareAndSet]. Throws on empty
+    * digest. Use this in preference to the primary constructor
+    * so the error surfaces at the call site (not deep inside
+    * the adapter). */
+  def compareAndSet(expectedDigest: String): PublishMode = {
+    require(
+      expectedDigest != null && expectedDigest.nonEmpty,
+      "CompareAndSet.expectedDigest must be non-empty",
+    )
+    CompareAndSet(expectedDigest)
+  }
 }

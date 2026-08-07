@@ -19,7 +19,7 @@ package io.semanticdf.core.catalog
   * this trait \u2014 a small abstraction justified by testability
   * (consumers inject fakes for tests).
   *
-  * ==Why the typed [ManifestDocument] is `Any` for v1==
+  * ==Why the typed [ManifestDocument] is `Nothing` for v1==
   *
   * The full [ManifestDocument] v2 spec is deferred to PR 6 (Manifest
   * v2 + dual reader). For PR 10, we declare the trait's CONTRACT
@@ -48,6 +48,17 @@ package io.semanticdf.core.catalog
   */
 trait CatalogAdapter extends Serializable {
 
+  /** Engine-portable placeholder for the v2 manifest.
+    *
+    * Per karpathy §2: `Nothing` would be ideal (forces compile
+    * error at every consumer site) but a trait with a `Nothing`
+    * parameter is unimplementable — the override needs a real
+    * value to return. We use `Any` here as a SECOND-BEST placeholder;
+    * PR 6 (Manifest v2 + dual reader) will replace this with the real
+    * `ManifestDocument` ADT. The placeholder is documented in the
+    * method scaladoc as a forcing function. */
+  type ManifestDocument = Any
+
   /** The catalog this adapter serves. Used for routing +
     * identification. */
   def catalog: String
@@ -70,20 +81,28 @@ trait CatalogAdapter extends Serializable {
     * - `Left(CatalogError.MalformedManifest)` if the manifest
     *   failed validation */
   def publish(
-      doc: Any,                  // PR 6 placeholder: ManifestDocument v2
-      as:  CatalogEntity,
-      mode: PublishMode,
+      identity: CatalogIdentity,
+      doc:      CatalogAdapter#ManifestDocument,    // type alias for Any (placeholder; real ManifestDocument lands in PR 6)
+      as:       CatalogEntity,
+      mode:     PublishMode,
   ): Either[CatalogError, PublishResult]
 
   /** Discover an entity from the catalog by ref. Returns
     * `Right(None)` if the entity doesn't exist at the given
-    * ref (NOT a 404 \u2014 a missing entity is a normal case).
+    * ref (NOT a 404 — a missing entity is a normal case).
     *
-    * @return the entity if it exists, `None` if it doesn't,
-    *         `Left(CatalogError)` if the operation failed. */
+    * Per the DE review of PR #410 (#3): the FULL ref (identity
+    * + version + digest) is used for the lookup. A stale ref
+    * (correct identity but wrong version or digest) returns
+    * `Right(None)` (NOT `Right(Some(stale))`); the caller can
+    * retry with the current ref.
+    *
+    * @return the entity if the full ref matches, `None` if it
+    *         doesn't (stale or absent), `Left(CatalogError)`
+    *         if the operation failed. */
   def discover(
       ref: CatalogRef,
-  ): Either[CatalogError, Option[Any]]  // PR 6 placeholder: Option[ManifestDocument]
+  ): Either[CatalogError, Option[CatalogAdapter#ManifestDocument]]
 
   /** List entities matching the filter. Returns `Right(Nil)` if no
     * entities match.
