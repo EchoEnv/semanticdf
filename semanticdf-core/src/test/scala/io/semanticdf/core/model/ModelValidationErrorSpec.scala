@@ -43,24 +43,26 @@ class ModelValidationErrorSpec extends AnyFunSuite with Matchers {
 
   // -- closed enumeration --
 
-  test("ModelValidationError has exactly 5 cases") {
+  test("ModelValidationError has exactly 6 cases") {
     val all: Set[ModelValidationError] = Set(
       ModelValidationError.InvalidName("x"),
       ModelValidationError.DuplicateMember("dimension", "x"),
       ModelValidationError.UnknownReference("calc", "x"),
       ModelValidationError.CalcDepthExceeded(1, 1),
       ModelValidationError.ExtensionEnvelopeExceeded(1, 1),
+      ModelValidationError.FilterConversionUnsupported("legacy where"),
     )
-    all.size shouldBe 5
+    all.size shouldBe 6
   }
 
-  test("Sealed exhaustiveness: pattern-match over all 5 cases") {
+  test("Sealed exhaustiveness: pattern-match over all 6 cases") {
     val all: Seq[ModelValidationError] = Seq(
       ModelValidationError.InvalidName("x"),
       ModelValidationError.DuplicateMember("dimension", "x"),
       ModelValidationError.UnknownReference("calc", "x"),
       ModelValidationError.CalcDepthExceeded(1, 1),
       ModelValidationError.ExtensionEnvelopeExceeded(1, 1),
+      ModelValidationError.FilterConversionUnsupported("legacy where"),
     )
     all.foreach {
       case ModelValidationError.InvalidName(_)                  => ()
@@ -68,18 +70,20 @@ class ModelValidationErrorSpec extends AnyFunSuite with Matchers {
       case ModelValidationError.UnknownReference(_, _)         => ()
       case ModelValidationError.CalcDepthExceeded(_, _)        => ()
       case ModelValidationError.ExtensionEnvelopeExceeded(_,_) => ()
+      case ModelValidationError.FilterConversionUnsupported(_) => ()
     }
   }
 
   // -- Serializable --
 
-  test("all 5 cases round-trip through Java serialization") {
+  test("all 6 cases round-trip through Java serialization") {
     val cases: Seq[ModelValidationError] = Seq(
       ModelValidationError.InvalidName("name is blank"),
       ModelValidationError.DuplicateMember("dimension", "x"),
       ModelValidationError.UnknownReference("calc", "missing"),
       ModelValidationError.CalcDepthExceeded(10, 5),
       ModelValidationError.ExtensionEnvelopeExceeded(20, 9000),
+      ModelValidationError.FilterConversionUnsupported("legacy where: predicate"),
     )
     cases.foreach { v =>
       val bos = new java.io.ByteArrayOutputStream()

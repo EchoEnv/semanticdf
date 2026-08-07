@@ -2,7 +2,7 @@ package io.semanticdf.trino
 
 import java.time.Instant
 
-import io.semanticdf.core.engine.ParameterizedSql
+import io.semanticdf.core.engine.{EngineError, ParameterizedSql}
 import io.semanticdf.core.expr.{Expr, LiteralValue}
 import io.semanticdf.core.model.{Model, RollupFreshnessSpec, RollupSpec, SourceRef}
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
@@ -186,13 +186,14 @@ class TrinoQueryCompiler {
     * For v1 we handle the same shape as the existing `Model`
     * overload: dimensions / measures / calculatedMeasures
     * surfaced via `Project` + `Aggregate`. */
-  def compileRelOp(plan: io.semanticdf.core.rel.RelOp): ParameterizedSql = {
+  def compileRelOp(plan: io.semanticdf.core.rel.RelOp): Either[EngineError, ParameterizedSql] = {
     val params = scala.collection.mutable.ListBuffer.empty[io.semanticdf.core.expr.LiteralValue]
-    val parts  = renderRelOp(plan, params)
-    ParameterizedSql(
-      sql        = parts.filter(_.nonEmpty).mkString(" "),
-      parameters = params.toList,
-    )
+    renderRelOp(plan, params).map { parts =>
+      ParameterizedSql(
+        sql        = parts.filter(_.nonEmpty).mkString(" "),
+        parameters = params.toList,
+      )
+    }
   }
 
   /** Walk a `RelOp` tree top-down, emitting SQL fragments into
@@ -200,7 +201,7 @@ class TrinoQueryCompiler {
   private def renderRelOp(
       plan:   io.semanticdf.core.rel.RelOp,
       params: scala.collection.mutable.ListBuffer[io.semanticdf.core.expr.LiteralValue],
-  ): List[String] = {
+  ): Either[EngineError, List[String]] = {
     plan match {
       case io.semanticdf.core.rel.RelOp.Scan(source, _, _) =>
         // The FROM clause: catalog.schema.table.
@@ -214,36 +215,48 @@ class TrinoQueryCompiler {
             s""""$cat"."$sch"."$table""""
           case _ => "-- unresolved source"
         }
-        List(s"FROM $fromClause")
+        Right(List(s"FROM $fromClause"))
 
       case io.semanticdf.core.rel.RelOp.Filter(input, predicate) =>
-        renderRelOp(input, params) :+ s"WHERE ${renderExpr(predicate, params)}"
+        renderRelOp(input, params).map(_ :+ s"WHERE ${renderExpr(predicate, params)}")
 
       case io.semanticdf.core.rel.RelOp.Aggregate(input, groupBy, aggregates) =>
         // The aggregate node emits the GROUP BY and the aggregated
         // columns. The project node above it sets the SELECT order.
         val groupByCols = groupBy.map(e => renderExpr(e, params))
         val aggCols     = aggregates.map(a => renderAggregateCall(a, params))
-        renderRelOp(input, params) ++
-          (if (groupByCols.nonEmpty) List(s"GROUP BY ${groupByCols.mkString(", ")}") else Nil) ++
-          aggCols.map(c => s"SELECT $c")
+        renderRelOp(input, params).map { base =>
+          base ++
+            (if (groupByCols.nonEmpty) List(s"GROUP BY ${groupByCols.mkString(", ")}") else Nil) ++
+            aggCols.map(c => s"SELECT $c")
+        }
 
       case io.semanticdf.core.rel.RelOp.Project(input, expressions) =>
         val projCols = expressions.map { case (e, alias) =>
           s"${renderExpr(e, params)} AS \"$alias\""
         }
-        renderRelOp(input, params) :+ s"SELECT ${projCols.mkString(", ")}"
+        renderRelOp(input, params).map(_ :+ s"SELECT ${projCols.mkString(", ")}")
 
       case io.semanticdf.core.rel.RelOp.Sort(input, keys) =>
         val orderBy = keys.map(renderSortKey).mkString(", ")
-        renderRelOp(input, params) :+ s"ORDER BY $orderBy"
+        renderRelOp(input, params).map(_ :+ s"ORDER BY $orderBy")
 
       case io.semanticdf.core.rel.RelOp.Limit(input, count, offset) =>
         val limit = if (offset > 0) s"LIMIT $count OFFSET $offset" else s"LIMIT $count"
-        renderRelOp(input, params) :+ limit
+        renderRelOp(input, params).map(_ :+ limit)
 
       case io.semanticdf.core.rel.RelOp.Join(_, _, _, _) =>
-        List("-- Joins deferred to a future PR")
+        // v0.3.0 pre-tag fix (Gap 3): the previous "-- Joins
+        // deferred to a future PR" emitted a comment-only SQL
+        // string that Trino parsed as a no-op, returning empty
+        // results with no error. Replaced with fail-loud:
+        // surfaces the gap at compile time instead of at
+        // query time. The join compile lands in v0.3.1 (see
+        // docs/design/v0.3.1-feature-parity-backlog.md Gap 3).
+        Left(EngineError.UnsupportedCapability(
+          name   = "RelOp.Join",
+          reason = "Joins in portable RelOp are deferred to v0.3.1 (PR Trino + DuckDB join compile).",
+        ))
     }
   }
 
