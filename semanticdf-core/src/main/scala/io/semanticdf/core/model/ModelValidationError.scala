@@ -1,9 +1,10 @@
 package io.semanticdf.core.model
 
 /** Engine-portable model-validation-error ADT — Phase 2 contract.
-  * Mirrors the design doc §4.4.1 "ModelValidationError" (5 cases:
+  * Mirrors the design doc §4.4.1 "ModelValidationError" (6 cases:
   * InvalidName, DuplicateMember, UnknownReference,
-  * CalcDepthExceeded, ExtensionEnvelopeExceeded).
+  * CalcDepthExceeded, ExtensionEnvelopeExceeded,
+  * FilterConversionUnsupported).
   *
   * [[ModelValidationError]] is the structured error returned by
   * [[Model.of]] when validation fails. It's an ADT (not a Throwable)
