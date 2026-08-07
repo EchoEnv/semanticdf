@@ -5,7 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import io.semanticdf.core.rel.JoinKind
 
-/** Tests for [EngineCapabilities] (PR 9 of the 12-PR triage plan).
+/** Tests for [EngineCapabilities] (v0.3.0).
   *
   * The structured value object replaces the loose
   * `Map[Capability, String]` that used to be returned by

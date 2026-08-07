@@ -89,12 +89,44 @@ guarantee that they're asking for the right thing.
 - [`docs/guide.md`](docs/guide.md) — narrative walkthrough: how SemanticDF works, in plain English
 - **[`semanticdf-platform/README.md`](semanticdf-platform/README.md)** — the standalone Restate-native platform runtime (long-running JVM with a Restate ingress, post-crash query reconciliation, bulk-startup recovery). Ships as a separate Maven module that depends on the library.
 - [`DESIGN.md`](DESIGN.md) — architecture of record (decisions, the hard problems)
+- **[`docs/design/multi-engine-design.md`](docs/design/multi-engine-design.md)** — the engine-portable design: `Engine[R]` contract, portable IR (`RelOp`), portable result types, capability surfaces, CAS publication contract. The reference for engine-adapter authors.
 - [`docs/DOCS_MAP.md`](docs/DOCS_MAP.md) — wayfinding guide: which doc to read for which question
 - [`docs/GLOSSARY.md`](docs/GLOSSARY.md) — terms-of-art (op tree, BaseScope, MeasureScope, expression-tree surgery, …)
 - [`docs/adr/`](docs/adr/) — recorded decisions
 - [`RELEASE.md`](RELEASE.md) — version-by-version changelog
 - [`docs/known-limitations.md`](docs/known-limitations.md) — current scope & guardrails (what's in, what's deferred, with workarounds)
 - [`examples/`](examples/) — runnable end-to-end examples
+
+## Engine-portable core (in progress)
+
+SemanticDF is evolving from a **Spark-only semantic layer** to an
+**engine-agnostic semantic data platform**. The portable core lives
+under `io.semanticdf.core.*` (in `semanticdf-core/`); engine adapters
+implement `Engine[R]` and live in `adapters/semanticdf-*/`.
+
+| Module | Role |
+|---|---|
+| `semanticdf-core` | Portable ADTs: `Model`, `Dimension`, `Measure`, `FilterSpec`, `JoinSpec`, `RelOp`, `Engine[R]`, `ExecutionPlan`, `ResultValue`, `CatalogAdapter`, etc. **Zero Spark imports.** |
+| `adapters/semanticdf-spark` | Legacy fluent library + `SparkEngineProvider` (implements `Engine[R]` against the portable core). |
+| `adapters/semanticdf-trino` | Trino engine adapter — `TrinoEngine`, `TrinoEngineProvider`, `TrinoQueryCompiler`. |
+| `adapters/semanticdf-duckdb` | In-process DuckDB engine adapter — `DuckDBEngine`. |
+| `adapters/semanticdf-unity-catalog` | REST catalog adapter (read-only) over Unity Catalog. |
+| `adapters/semanticdf-hive-metastore` | Thrift catalog adapter (read-only) over Hive Metastore. |
+| `semanticdf-mcp` | MCP server with engine registry (`MCPEngineProvider` + `MCPEngineRegistry`); routes queries to the chosen engine provider. |
+
+**Status of the migration**: the portable types are in place; engine
+adapters for Spark, Trino, and DuckDB compile against them and round-
+trip queries end-to-end. The legacy fluent API (`SemanticTable.query(...).execute(spark)`)
+coexists with the new portable types until consumers migrate. The
+remaining migration step is wiring `SemanticTableCore` (the fluent
+API) to emit portable `RelOp` and route through `Engine[R]` instead
+of compiling directly to Spark plans — tracked as a follow-on.
+
+**Catalog identity + CAS** (design §5.3): `core/catalog/` defines
+`CatalogRef`, `CatalogIdentity`, `PublishMode` (`CreateOnly` /
+`Upsert` / `CompareAndSet`), `PublishResult`, and `CatalogAdapter`.
+Adapters publish models/rollups/extension blobs with per-identity
+atomic publication semantics.
 
 ## The platform
 

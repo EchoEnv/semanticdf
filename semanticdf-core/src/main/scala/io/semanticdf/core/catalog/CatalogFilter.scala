@@ -1,7 +1,8 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable catalog-filter record \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable catalog-filter record \u2014 added in v0.3.0.
+  *
+  * Used by `CatalogAdapter.list`. All fields Optional so the caller can scope by any combination.
   *
   * Used by [CatalogAdapter.list] to filter the listing. All fields
   * are Optional so the caller can scope the listing by any

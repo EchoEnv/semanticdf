@@ -19,7 +19,7 @@ package io.semanticdf.core.engine
   *
   * ==Why `require(engines(default).available)` at construction==
   *
-  * Per the design (and the DE round-3 finding 4.1): misconfigured
+  * Per the design (and the DE design §4.1): misconfigured
   * boots are loud at startup, not silent at query time. If the
   * default engine is unavailable at construction, the registry
   * throws \u2014 the MCP server fails to start with a typed error
@@ -42,7 +42,7 @@ final class MCPEngineRegistry (
   )
   require(
     engines(default).available,
-    s"MCPEngineRegistry default '$default' is registered but NOT available at startup (per round-3 DE finding 4.1: misconfigured boots must fail loud)",
+    s"MCPEngineRegistry default '$default' is registered but NOT available at startup (per design §4.1: misconfigured boots must fail loud)",
   )
 
   /** Select a provider by name. Returns:

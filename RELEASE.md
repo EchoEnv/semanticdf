@@ -1,5 +1,76 @@
 # Release notes
 
+## v0.3.0 — engine-portable core (in progress)
+
+**Not tagged yet.** Library version still `0.2.4`; this section
+tracks the work that will roll up into the v0.3.0 tag when the
+remaining migration is complete.
+
+### Headline
+
+- **Engine-portable core (`semanticdf-core/`).** A new module
+  holding portable ADTs that have no Spark dependency. Every
+  engine adapter (`semanticdf-spark`, `semanticdf-trino`,
+  `semanticdf-duckdb`) implements `Engine[R]` against these
+  types. Cross-engine types landed: `Model`, `Dimension`,
+  `Measure`, `FilterSpec`, `JoinSpec`, `RollupSpec`,
+  `RelOp`, `ExecutionPlan`, `PortableQueryResult`,
+  `ResultValue`, `ResultRow`, `EngineContext`,
+  `EngineCapabilities`, `EngineError` + `ErrorDetail`,
+  `AuditEvent`.
+
+- **Catalog identity + CAS publication contract.** New
+  `core/catalog/` package: `CatalogRef`, `CatalogIdentity`,
+  `PublishMode` (`CreateOnly` / `Upsert` / `CompareAndSet`),
+  `PublishResult`, `CatalogError`, `CatalogAdapter`. Per-identity
+  atomic publication with explicit conflict visibility
+  (`Conflict` vs `StaleConflict(current)`).
+
+- **MCP engine registry.** The MCP server routes queries to the
+  chosen engine provider via `MCPEngineRegistry`. Trino, DuckDB,
+  and Spark providers implement the same contract.
+
+- **Multi-engine query support.** The `query` MCP tool carries an
+  `engine` field; non-empty values route through the registry to
+  the chosen provider. Empty falls back to the legacy
+  `SemanticTable` path.
+
+### Migration status
+
+| Step | Status |
+|---|---|
+| Portable ADTs (model, dimension, measure, join, filter, rollup) | ✅ |
+| Portable IR (`RelOp`, `RelOp.compile`) | ✅ |
+| Portable result (`ResultValue`, `ResultRow`, `PortableQueryResult`) | ✅ |
+| Engine contract (`Engine[R]`, `EngineContext`, `ExecutionPlan`) | ✅ |
+| Catalog identity + CAS | ✅ |
+| MCP engine registry + routing | ✅ |
+| Spark adapter implements `Engine[R]` (with predicate-type split) | partial (predicate-type unification pending) |
+| Trino adapter implements `Engine[R]` | ✅ |
+| DuckDB adapter implements `Engine[R]` | ✅ |
+| `SemanticTableCore` emits portable IR + routes through `Engine[R]` | pending |
+| Manifest v2 (real `ManifestDocument` ADT) | pending |
+
+### Test count
+
+Was **992** at v0.2.4. Now **2,108** across 7 modules:
+`semanticdf-core` (640), `semanticdf-spark` (1,039),
+`semanticdf-trino` (9 integration + 196 unit),
+`semanticdf-duckdb` (26), `semanticdf-unity-catalog` (10),
+`semanticdf-hive-metastore` (no count here; counted in platform),
+`semanticdf-mcp` (188).
+
+### PR chain
+
+39 PRs (#351-#389) extracted the portable core and added engine
+adapters. 12-PR triage plan (#398-#408) closed the criticals on
+the portable contract (serializability, engine identity in cache,
+portable result, MCP engine routing, structured error codes,
+capability surfaces, ExtensionValue JSON round-trip, EngineContext
+policy interaction). PR #409 (SemanticTable → Model partial bridge)
+and PR #410 (CatalogIdentity + CAS) closed the last deferred
+items from the v0.2.4 design review.
+
 ## v0.2.4 — manual rollups feature
 
 9 PRs. **992 library tests green on Spark 3.5.8 + 4.1.1 (was 848).** Ships the

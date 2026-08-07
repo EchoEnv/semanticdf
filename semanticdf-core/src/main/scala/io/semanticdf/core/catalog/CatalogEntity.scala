@@ -1,7 +1,8 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable catalog-entity kind ADT \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable catalog-entity kind ADT \u2014 added in v0.3.0.
+  *
+  * Closed ADT: `Model`, `Rollup`, `ExtensionBlob`.
   *
   * Identifies WHAT kind of thing is being published to / discovered
   * from a catalog. The closed ADT forces every adapter to declare

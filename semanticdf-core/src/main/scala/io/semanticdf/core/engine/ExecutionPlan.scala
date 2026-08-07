@@ -5,7 +5,7 @@ import io.semanticdf.core.schema.Field
 /** Engine-portable execution-plan ADT — the wrapper around an
   * engine-specific compiled result.
   *
-  * Per the multi-engine design's round-3 DE finding 2.1 / round-5
+  * Per the multi-engine design's design §2.1 / v0.3.0
   * HIGH-A closure: `ExecutionPlan` is a `sealed trait` that does
   * NOT auto-extend `Product with Serializable`. The reason:
   * `R` can hold a cluster-unsafe handle (Spark `QueryPlan`,
@@ -27,7 +27,7 @@ import io.semanticdf.core.schema.Field
   * [[ExecutionPlan.Simple]] is a `case class` with `Serializable`
   * OFF (note: `extends ExecutionPlan[Simple.R]` — not
   * `extends Product with Serializable`). This breaks the
-  * round-3 DE finding 2.1 hazard.
+  * design §2.1 hazard.
   *
   * ==Why these three members (`warnings`, `requiredCapabilities`, `normalizedSchema`)==
   *
@@ -127,22 +127,9 @@ final case class ExecutionPlanSummary(
 /** Companion object — smart constructor + standard impls. */
 object ExecutionPlan {
 
-  /** The single concrete impl. A `case class` carrying all 6
-    * fields. Per the design's round-3 closure: this class does
-    * NOT extend `Product with Serializable` (the parent trait
-    * doesn't either) — the `native: R` field is the cluster-
-    * safety boundary.
-    *
-    * ==Why a `case class` (not an anonymous class)==
-    *
-    * Scala 2.13 has a known issue with anonymous-class instances
-    * of `sealed trait` with multiple abstract `def`s: certain
-    * combination of test runners + reflection can hang. The
-    * `case class` is the canonical, JVM-friendly equivalent —
-    * same shape, no anonymous-class machinery, faster compile. */
   /** The single concrete impl. A `final class` (not `case class`)
-    * with explicit `override val` accessors. Per the design's
-    * round-3 closure: this class does NOT extend
+    * with explicit `override val` accessors. Per design §4.5.4
+    * (cluster-safety boundary): this class does NOT extend
     * `Product with Serializable` (which is what `case class`
     * auto-derives). The `native: R` field is the cluster-safety
     * boundary.
@@ -152,7 +139,7 @@ object ExecutionPlan {
     * A `case class` in Scala 2.13 auto-extends
     * `Product with Serializable`. That auto-derived Serializable
     * would silently attempt to serialize the `native: R` field
-    * on any cluster-mode use, defeating the round-3 DE fix 2.1
+    * on any cluster-mode use, defeating the design §2.1
     * closure. A plain `final class` does NOT auto-extend
     * `Product with Serializable` — the type-level guarantee is
     * enforced.
@@ -195,7 +182,7 @@ object ExecutionPlan {
 /** Opaque, deliberately-not-Serializable wrapper for an
   * engine-native plan handle that must not cross a wire boundary.
   *
-  * Per the round-3 DE finding 2.1 closure: a Spark `QueryPlan`
+  * Per the design §2.1 closure: a Spark `QueryPlan`
   * or Databricks Connect plan can hold live JVM references that
   * are NOT cluster-safe. Storing one in [[ExecutionPlan.native]]
   * and then trying to ship the plan to a worker would silently

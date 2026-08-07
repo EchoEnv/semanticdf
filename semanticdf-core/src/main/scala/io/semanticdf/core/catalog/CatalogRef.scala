@@ -1,11 +1,12 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable typed catalog identity \u2014 Phase 2 contract +
-  * PR 10 of the v0.3.0 deferred-work triage.
+/** Engine-portable typed catalog ref \u2014 added in v0.3.0.
   *
-  * Closes design finding #13 ("Version catalog identity and define
-  * create-only/upsert/CAS results \u00a75.3"). Pre-PR-10 the design
-  * returned an undefined, unversioned `CatalogRef`.
+  * Extracted the stable `identity: CatalogIdentity` from
+  * `(catalog, namespace, name)`. Closes design finding #13
+  * ("Version catalog identity and define create-only/upsert/CAS
+  * results", \u00a75.3). Pre-v0.3.0 the design returned an undefined,
+  * unversioned `CatalogRef`.
   *
   * ==Why five fields==
   *

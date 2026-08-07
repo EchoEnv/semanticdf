@@ -1,7 +1,8 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable publication-result ADT \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable publication-result ADT \u2014 added in v0.3.0.
+  *
+  * Closed ADT: `Inserted(ref)`, `Updated(prev, cur)`, `Conflict(reason, current = None)`.
   *
   * Returns from [CatalogAdapter.publish]. The closed ADT forces
   * every adapter to surface the result shape explicitly (no

@@ -10,7 +10,7 @@ import org.scalatest.funsuite.AnyFunSuite
   *  (useRollup returns a different type)."
   *
   * Round-2 tried to preserve rollups across joins via `joinRollups`, but
-  * the round-3 review (H-A1) showed this was silently wrong — `RollupQuery.execute`
+  * the v0.3.0 design review (H-A1) showed this was silently wrong — `RollupQuery.execute`
   * ignores the joined op tree, so the user got the rollup source alone, no join.
   *
   * The cleaner architectural choice is to NOT preserve rollups across joins:
@@ -67,7 +67,7 @@ class H1Path2JoinDropsRollupSpec extends AnyFunSuite with SparkSessionFixture {
   }
 
   test("H-A1: joined.withRollup throws because joined.name is None (vacuous baseModel check)") {
-    // H-A1 in round-3 review: "joined.withRollup succeeds silently".
+    // H-A1 in v0.3.0 design review: "joined.withRollup succeeds silently".
     // Our H-1 fix uses `name.contains(rollup.baseModel)` which is false for None.
     // Verify: a rollup on a joined model can't be re-registered.
     val spark = this.spark

@@ -1,7 +1,8 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable catalog-entry record \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable catalog-entry record \u2014 added in v0.3.0.
+  *
+  * Returned by `CatalogAdapter.list`. Carries the typed `CatalogRef` + the entity kind + a small metadata map.
   *
   * Returned by [CatalogAdapter.list] for each entry that matches
   * the filter. Carries the typed [CatalogRef] + a short summary

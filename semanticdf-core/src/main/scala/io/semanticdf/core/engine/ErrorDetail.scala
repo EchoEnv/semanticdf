@@ -6,7 +6,7 @@ package io.semanticdf.core.engine
   * `io.semanticdf.mcp.Json`) but lives in `core` (engine-portable)
   * so non-MCP consumers (CLI, REST, programmatic) can reuse it.
   *
-  * ==Why this exists (PR 7 of the 12-PR triage plan)==
+  * ==Why this exists (v0.3.0)==
   *
   * Every engine adapter (Trino, DuckDB, Databricks, custom-platform)
   * returns `EngineError` from `compile` / `execute` / `explain`.

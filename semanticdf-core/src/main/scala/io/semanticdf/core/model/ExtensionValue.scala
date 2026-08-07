@@ -23,7 +23,7 @@ package io.semanticdf.core.model
   *
   * ==Why `Null` is a separate case object==
   *
-  * Per the design's round-3 DE finding 8.1: "A JSON member written
+  * Per the design's design §8.1: "A JSON member written
   * as `"field": null` round-trips to `Null`, never to absence
   * (absence is a different wire state). Without this case, fields
   * explicitly set to null would lose information on read because
@@ -74,7 +74,7 @@ sealed trait ExtensionValue extends Product with Serializable
 object ExtensionValue {
 
   /** The JSON value `null`. Distinct from an ABSENT field. Per
-    * round-3 DE finding 8.1. Maps to Jackson's `JsonNode.VALUE_NULL`,
+    * design §8.1. Maps to Jackson's `JsonNode.VALUE_NULL`,
     * Trino's `null` parameter. */
   case object Null extends ExtensionValue
 

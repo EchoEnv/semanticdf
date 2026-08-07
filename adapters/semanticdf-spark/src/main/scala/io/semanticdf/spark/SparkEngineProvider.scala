@@ -137,7 +137,7 @@ object SparkEngineProvider {
   }
 
   // Map a LiteralValue to a ResultValue (the portable shape from
-  // PR #400). Per the round-3 review: values: List[Any] violates
+  // PR #400). Per the v0.3.0 design review: values: List[Any] violates
   // the §1.3 transitively-serializable invariant. The sealed
   // ResultValue ADT forces every consumer to handle the closed
   // set of value shapes.

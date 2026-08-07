@@ -6,7 +6,7 @@ package io.semanticdf.core.engine
   *
   * ==Why `rows: Vector[ResultRow]` (not `Iterator[ResultRow]`)==
   *
-  * Per the round-3 DE review's CRITIQUE 1.3: "Iterator is one-
+  * Per the v0.3.0 design review's CRITIQUE 1.3: "Iterator is one-
   * shot runtime state and breaks the \u00a71.3 transitive-serializable
   * invariant". An `Iterator` is mutable runtime state \u2014 it can't
   * be cached, audited, or shipped to a worker. `Vector` is the

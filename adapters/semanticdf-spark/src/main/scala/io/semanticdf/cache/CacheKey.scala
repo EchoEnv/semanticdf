@@ -98,7 +98,7 @@ object CacheKey {
       // string than new requests. Existing cache entries are NOT
       // reused for new engine-aware requests; new requests build
       // their own cache namespace. This is the conservative
-      // cross-engine cache-isolation behavior per the round-3
+      // cross-engine cache-isolation behavior per the v0.3.0
       // DE finding 11 closure.
       val enginePart = req.engine match {
         case Some(e) => LengthPrefixed.encodeString(

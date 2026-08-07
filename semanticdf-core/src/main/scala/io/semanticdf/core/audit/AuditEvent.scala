@@ -52,17 +52,20 @@ import io.semanticdf.core.engine.EngineIdentity
   * This file compiles with zero `org.apache.spark.*` imports. Verifiable by:
   * `grep 'org.apache.spark' semanticdf-core/src/main/scala/io/semanticdf/core/audit/AuditEvent.scala`
   *
-  * The original `io.semanticdf.audit.AuditEvent` remains the canonical
-  * Spark-bearing type (the library's fluent API emits it). This core
-  * mirror is additive — engine-portable consumers (future Trino,
-  * Databricks adapters) can depend on this without dragging Spark.
+  * The original `io.semanticdf.audit.AuditEvent` (in
+  * `adapters/semanticdf-spark/src/main/scala/io/semanticdf/audit/`)
+  * remains the canonical Spark-bearing type that the library's
+  * fluent API emits. This core mirror is additive — engine-portable
+  * consumers (Trino, DuckDB, Unity Catalog, Hive Metastore adapters)
+  * depend on this type without dragging Spark.
   *
-  * ==Consolidation plan (NOT in this PR)==
+  * ==Remaining consolidation==
   *
-  * Phase 2: convert the library to emit core.AuditEvent from the
-  * fluent API. After that, the original `io.semanticdf.audit.AuditEvent`
-  * becomes a type alias (or is removed) and consumers stop importing
-  * two parallel types.
+  * Long-term: convert the library's fluent API to emit
+  * `core.audit.AuditEvent` instead of the Spark-bearing legacy
+  * type. After that, the legacy `io.semanticdf.audit.AuditEvent`
+  * becomes a type alias or is removed and consumers stop importing
+  * two parallel types. This is a v0.4.0+ migration.
   */
 final case class AuditEvent(
     ts:           Instant,
@@ -92,7 +95,7 @@ final case class AuditEvent(
     executedPlan: Option[String] = None,
     /** Engine identity (per design §4.5.5). Used by the dedup
       * key so a Spark request and a Trino request for the same
-      * model produce DIFFERENT audit events (per round-3 DE
+      * model produce DIFFERENT audit events (per v0.3.0 DE
       * finding 11 closure). `None` for events written before
       * this field was added — old events read as `None`, new
       * events write `Some(...)`. */

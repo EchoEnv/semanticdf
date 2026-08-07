@@ -7,7 +7,7 @@ package io.semanticdf.core.engine
   * ==Why a sealed ADT (not `Any`)==
   *
   * The previous `ResultRow.values: List[Any]` (per the
-  * round-3 DE review's CRITIQUE: "values: List[Any] violates
+  * v0.3.0 design review's CRITIQUE: "values: List[Any] violates
   * the \u00a71.3 transitively-serializable invariant") was
   * rejected. Per the design: "null is JVM null and rejected in
   * non-null fields; decimals preserve declared precision and

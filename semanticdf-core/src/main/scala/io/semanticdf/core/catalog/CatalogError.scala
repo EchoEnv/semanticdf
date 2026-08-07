@@ -1,12 +1,15 @@
 package io.semanticdf.core.catalog
 
-/** Engine-portable catalog-error ADT \u2014 PR 10 of the v0.3.0
-  * deferred-work triage.
+/** Engine-portable catalog-error ADT \u2014 added in v0.3.0.
   *
-  * Mirrors the design \u00a75.3 spec verbatim. Every catalog adapter
-  * returns one of these cases from `publish` / `discover` /
-  * `list`. The closed ADT forces the consumer (MCP, CLI,
-  * programmatic) to handle each case explicitly.
+  * Splits `Conflict(reason)` (no current visibility) from
+  * `StaleConflict(reason, current)` (CAS rejection, always
+  * carries the current `CatalogRef` so the caller can retry).
+  *
+  * Mirrors design \u00a75.3. Every catalog adapter returns one of these
+  * cases from `publish` / `discover` / `list`. The closed ADT
+  * forces the consumer (MCP, CLI, programmatic) to handle each
+  * case explicitly.
   *
   * ==Per-case semantics==
   *

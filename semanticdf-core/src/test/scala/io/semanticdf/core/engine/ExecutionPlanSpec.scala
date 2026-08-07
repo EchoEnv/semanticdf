@@ -8,7 +8,7 @@ import io.semanticdf.core.schema.{Field, SealedDataType}
 /** Tests for [[ExecutionPlan]] — the new inspectable sealed
   * trait + its `ExecutionPlanSummary` companion.
   *
-  * Per design §4.5.4 + round-3 DE finding 2.1 closure:
+  * Per design §4.5.4 + design §2.1 closure:
   * `ExecutionPlan` must NOT auto-extend `Product with Serializable`.
   * The tests pin this property. */
 class ExecutionPlanSpec extends AnyFunSuite with Matchers {
@@ -123,7 +123,7 @@ class ExecutionPlanSpec extends AnyFunSuite with Matchers {
 
   test("ExecutionPlan is a sealed trait, not a case class (type-level cluster-safety)") {
     // The plan's class should NOT have a `copy` method (case-class
-    // auto-derives one). If this test ever fails, the round-3
+    // auto-derives one). If this test ever fails, the v0.3.0
     // DE fix 2.1 closure has been broken.
     val plan = ExecutionPlan[ParameterizedSql](
       engine = sampleEngine,

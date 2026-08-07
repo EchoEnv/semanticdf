@@ -28,7 +28,7 @@ package io.semanticdf.core.schema
   *     Row(fields)
   *   - **Special** (1): Json (JSON string)
   *
-  * The design's "round-2 phantom-ADT finding" removed a few
+  * The design's "v0.3.0 phantom-ADT finding" removed a few
   * speculative cases (Interval, Uuid, etc.) — those land via the
   * ExtensionValue mechanism instead.
   *
@@ -51,22 +51,20 @@ package io.semanticdf.core.schema
   * Zero Spark imports. Verifiable by:
   * `grep -r 'org.apache.spark' semanticdf-core/src/main/scala/io/semanticdf/core/schema/SealedDataType.scala`
   *
-  * ==Consolidation plan (NOT in this PR)==
+  * ==Reserved future cases (NOT in v0.3.0)==
   *
-  * Phase 2 follow-up PRs may add:
-  *   - `Decimal(precision, scale)` may add `Infinity` / `NaN`
-  *     sub-cases if needed for some engines (per the design's
-  *     "Trino decimal derivation is cast to declared precision/scale
-  *     only if lossless" note)
-  *   - `Interval(startType, endType)` was removed in v0.3.0 per
-  *     karpathy §2 + the round-2 phantom-ADT finding
-  *   - `Uuid` is a possible future addition; for now it's
-  *     represented as `Varchar` in portable form
-  *   - `Null` (nullable marker) is NOT a type — it's a value-level
-  *     concept handled by `Field.nullable: Boolean` for field-level
-  *     nullability and by expression-level `Expr.Null` (added in
-  *     a follow-up PR) for value-level nulls. The design's risk
-  *     "Empty string is normalized to null" is a value-level rule,
+  * Per design §11, the following are deliberately deferred:
+  *   - `Decimal(precision, scale)` `Infinity` / `NaN` sub-cases
+  *     (Trino decimal-overflow path; not portable yet)
+  *   - `Uuid` (represented as `Varchar` for portability)
+  *   - `Interval(startType, endType)` (removed per v0.2.x
+  *     phantom-ADT finding; not portable across engines)
+  *
+  * `Null` is NOT a type — it's a value-level concept handled by
+  * `Field.nullable: Boolean` and the `ResultValue.Null` ADT case
+  * (added in v0.3.0). The design's rule "empty string is not null;
+  * no engine may rewrite it" is enforced at the lowerer level, not
+  * here.
   *     not a type-level one
   */
 sealed trait SealedDataType extends Product with Serializable
