@@ -43,6 +43,16 @@ final class Query(
 
   /** Handle `query`: run the query, return rows. */
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
+    // PR 5b: 'request.engine' is parsed and stored on the
+    // request (schema property added), but the registry-routing
+    // path is intentionally NOT yet wired here. The full
+    // integration (registry lookup + PortableQueryResult →
+    // Envelope[Query.Data] translation + Main wiring + 13th
+    // queryToolSchema property) lands in PR 5c. The current
+    // scope is: request now carries the 'engine' field; the
+    // handler still uses the legacy 'Models' + 'SemanticTable'
+    // path. No break to existing callers (the field defaults
+    // to "" and is unused inside the handler).
     val raw = registry(request.model)
     // Attach the audit sink (if any) so the underlying `query()` +
     // `toDataFrame()` flow emits an event. `withAuditSink` is a pure
@@ -391,6 +401,10 @@ object Query {
     props.put("time_grain", strProp("string"))
     props.put("time_grains", strProp("array"))
     props.put("time_range", strProp("array"))
+    // PR 5b: the 12th property (the design's "13th property"
+    // when counting from 1). Empty = legacy path; non-empty =
+    // route through MCPEngineRegistry.
+    props.put("engine",     strProp("string"))
     new io.modelcontextprotocol.spec.McpSchema.JsonSchema(
       "object",
       props,
@@ -599,12 +613,25 @@ object Query {
           Some((jl.get(0).asInstanceOf[String], jl.get(1).asInstanceOf[String]))
         case _ => None
       },
+      engine = asOpt[String]("engine").getOrElse(""),
     )
   }
 }
 
 /** Top-level request DTO. Parsed from the MCP arguments map by the SDK
-  * adapter (registered via `Query.registerSpec`). */
+  * adapter (registered via `Query.registerSpec`).
+  *
+  * ==The `engine` field (PR 5b, the 12th queryToolSchema property)==
+  *
+  * When `engine.nonEmpty`, the Query handler routes through the
+  * `MCPEngineRegistry` (per design §6.4). When `engine.isEmpty`,
+  * the handler falls back to the legacy `Models` + `SemanticTable`
+  * path (backward-compat with PRs #1-#401).
+  *
+  * Per design §6.4 + the round-3 DE review's "MCP engine
+  * registry" finding: the engine field is the 12th property in
+  * `queryToolSchema` (the design's "13th property" is the
+  * `engine` field added in this PR — counting from 1). */
 final case class QueryRequest(
     model: String,
     measures: Seq[String],
@@ -621,6 +648,11 @@ final case class QueryRequest(
       * `Map[String, String]` the library expects. */
     time_grains: Option[Seq[(String, String)]] = None,
     time_range: Option[(String, String)] = None,
+    /** Engine to route the query through (per design §6.4). Empty
+      * means "use the legacy `Models` + `SemanticTable` path"
+      * (backward-compat with pre-PR-5b callers). Non-empty routes
+      * through the `MCPEngineRegistry` (this PR's path). */
+    engine: String = "",
 )
 
 /** One `order_by` entry. Direction defaults to `asc`. */
