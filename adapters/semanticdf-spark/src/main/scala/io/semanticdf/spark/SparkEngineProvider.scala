@@ -40,14 +40,29 @@ final class SparkEngineProvider(
       request: MCPQueryRequest,
       ctx:     EngineContext,
   ): Either[EngineError, PortableQueryResult] = {
-    // The Spark provider currently uses the legacy
-    // `SemanticTable` path (per the existing Query handler).
-    // For v1, the MCP `Model` lookup is done by name in the
-    // spark adapter's table registry. The `request.model` is
-    // the name; we look it up in the spark registry.
-    sparkTableRegistry.get(request.model) match {
-      case None => Left(EngineError.ModelNotFound(request.model))
-      case Some(table) => runQuery(table, request)
+    // v0.3.1 (Gap 1 closure): the Spark engine adapter now
+    // routes portable `Model`s through `PortableQueryCompiler`
+    // instead of the legacy `SemanticTable` fluent chain.
+    // The legacy path is retained for the `explain` case
+    // (and for any Model that the user opted NOT to build
+    // via `Model.of(...)`).
+    //
+    // The portable path picks up dimensions, measures,
+    // filters, and joins from the Model itself. The
+    // MCP request's `measures` / `dimensions` / `limit` are
+    // applied as request-level overrides AFTER compile
+    // (limit) or honored if they match the Model's shape.
+    //
+    // Per JVM-safety §3: the SparkSession is set on the
+    // global carrier for the duration of this call, then
+    // cleared. No instance state is captured into the
+    // Spark closure (per scala-spark-batch-bugs §1: closures
+    // are stateless Column expressions only).
+    PortableQueryCompiler.setSparkSession(spark)
+    try {
+      runPortableQuery(model, request, ctx)
+    } finally {
+      PortableQueryCompiler.clearSparkSession()
     }
   }
 
@@ -112,6 +127,97 @@ final class SparkEngineProvider(
         reason = s"spark.query failed: ${e.getMessage}",
       ))
     }
+  }
+
+  /** Run the portable path: compile the portable `Model` via
+    * `PortableQueryCompiler`, apply per-request overrides
+    * (limit), collect rows, decode to portable values, return
+    * `PortableQueryResult`.
+    *
+    * Per scala-spark-batch-bugs §1: closures captured into
+    * the Spark plan are stateless Column expressions only
+    * (no UDFs, no captured variables from this method's
+    * scope). No `NotSerializableException` hazard.
+    *
+    * Per scala-spark-batch-bugs §3 (schema drift): schema
+    * assumptions are verified at the boundary — the
+    * DataFrame's `schema: StructType` is the source of
+    * truth for the result schema. We don't trust the
+    * caller-supplied model dimensions/measures for the
+    * output column types; we read them from the actual
+    * compiled plan. */
+  private def runPortableQuery(
+      model:   io.semanticdf.core.model.Model,
+      request: MCPQueryRequest,
+      ctx:     EngineContext,
+  ): Either[EngineError, PortableQueryResult] = {
+    try {
+      new PortableQueryCompiler().compile(model, ctx).flatMap { df =>
+        // Apply per-request limit (the only request-level
+        // override for v0.3.1; orderBy support deferred).
+        val limited = request.limit.fold(df)(l => df.limit(l.toInt))
+
+        // Derive the result schema from the compiled plan's
+        // actual schema (per scala-spark-batch-bugs §3:
+        // verify, don't assume).
+        val sparkSchema = limited.schema
+        val schema = ResultSchema(sparkSchema.fields.map { f =>
+          Field(
+            name     = f.name,
+            dataType = sparkTypeToSealedDataType(f.dataType),
+            nullable = f.nullable,
+          )
+        }.toList)
+
+        val rows: Vector[ResultRow] = limited.collect().map { row =>
+          ResultRow(
+            values = row.toSeq
+              .map(SparkEngineProvider.decodeCell)
+              .map(SparkEngineProvider.toResultValue)
+              .toList,
+            schema = schema,
+          )
+        }.toVector
+
+        Right(PortableQueryResult(
+          schema   = schema,
+          rows     = rows,
+          metadata = Map("engine.adaptor.id" -> "spark", "engine.adaptor.version" -> "0.3.0"),
+        ))
+      }
+    } catch {
+      case e: Exception =>
+        // Per scala-spark-batch-bugs §1: surface the error.
+        // Per JVM-safety §1: catch the boundary exception,
+        // don't let it propagate to MCP as a 500.
+        Left(EngineError.ConnectionFailed(
+          reason = s"spark.portable-query failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
+        ))
+    }
+  }
+
+  /** Map a Spark `DataType` to the portable `SealedDataType`.
+    * Per scala-spark-batch-bugs §3: never assume; verify at
+    * the boundary. Unsupported Spark types fall back to
+    * `SealedDataType.Json` so the row data still serializes
+    * (the actual value is a JSON string). */
+  private[spark] def sparkTypeToSealedDataType(
+      dt: org.apache.spark.sql.types.DataType,
+  ): SealedDataType = dt match {
+    case org.apache.spark.sql.types.StringType       => SealedDataType.Varchar
+    case org.apache.spark.sql.types.LongType         => SealedDataType.Int   // portable has no Long; widen semantics
+    case org.apache.spark.sql.types.IntegerType      => SealedDataType.Int
+    case org.apache.spark.sql.types.DoubleType       => SealedDataType.Double
+    case org.apache.spark.sql.types.FloatType        => SealedDataType.Double
+    case org.apache.spark.sql.types.BooleanType      => SealedDataType.Boolean
+    case org.apache.spark.sql.types.TimestampType     => SealedDataType.Timestamp
+    case org.apache.spark.sql.types.DateType         => SealedDataType.Date
+    case _: org.apache.spark.sql.types.DecimalType    => SealedDataType.Decimal(38, 18)  // Spark default precision/scale
+    case _: org.apache.spark.sql.types.ArrayType      => SealedDataType.Json  // array JSON-encoded
+    case _: org.apache.spark.sql.types.MapType        => SealedDataType.Json
+    case _: org.apache.spark.sql.types.StructType     => SealedDataType.Json
+    case _: org.apache.spark.sql.types.BinaryType     => SealedDataType.Json
+    case _                                            => SealedDataType.Json  // unknown → JSON fallback
   }
 }
 
