@@ -1413,27 +1413,65 @@ cancellation, and Unity Catalog. Spark legacy lambdas enter only `SparkLambdaEva
 final case class CatalogRef(
     catalog: String, namespace: String, name: String, version: Int, digest: String,
 ) extends Serializable
+final case class CatalogIdentity(catalog: String, namespace: String, name: String)
+    extends Serializable
 sealed trait PublishMode extends Product with Serializable
 object PublishMode {
-  case object CreateOnly extends PublishMode; case object Upsert extends PublishMode
+  case object CreateOnly extends PublishMode
+  case object Upsert extends PublishMode
   final case class CompareAndSet(expectedDigest: String) extends PublishMode
+  // Smart constructor: rejects null/empty digest
+  def compareAndSet(expectedDigest: String): PublishMode
 }
 sealed trait PublishResult extends Product with Serializable
 object PublishResult {
   final case class Inserted(ref: CatalogRef) extends PublishResult
   final case class Updated(previous: CatalogRef, current: CatalogRef) extends PublishResult
-  final case class Conflict(current: Option[CatalogRef], reason: String) extends PublishResult
+  final case class Conflict(reason: String, current: Option[CatalogRef] = None) extends PublishResult
+}
+sealed trait CatalogError extends Product with Serializable
+object CatalogError {
+  // Plain conflict (no current visibility)
+  final case class Conflict(reason: String) extends CatalogError
+  // CAS rejection — always carries the current ref so the caller can retry
+  final case class StaleConflict(reason: String, current: CatalogRef) extends CatalogError
+  final case class Unauthorized(reason: String) extends CatalogError
+  final case class Network(reason: String) extends CatalogError
+  final case class Unsupported(reason: String) extends CatalogError
+  final case class MalformedManifest(reason: String) extends CatalogError
 }
 trait CatalogAdapter extends Serializable {
-  def publish(doc: ManifestDocument, as: CatalogEntity, mode: PublishMode):
+  type ManifestDocument = Any  // placeholder; PR 6 replaces with real ADT
+  def publish(identity: CatalogIdentity, doc: ManifestDocument,
+              as: CatalogEntity, mode: PublishMode):
       Either[CatalogError, PublishResult]
+  // Discover keys on `ref.identity`, compares full ref for stale detection.
   def discover(ref: CatalogRef): Either[CatalogError, Option[ManifestDocument]]
+  // List returns results in deterministic order (insertion order recommended).
   def list(filter: CatalogFilter): Either[CatalogError, List[CatalogEntry]]
 }
 ```
-Create-only conflicts if identity exists; upsert atomically increments version; CAS
-updates only at expected digest. Discovery verifies catalog ref, manifest, and extension
-blob digests. This closes finding 13; the prior design's adapter was unversioned.
+**Identity** is the stable `(catalog, namespace, name)` triple (extracted as
+`CatalogRef.identity`). **Ref** is identity + version + digest. Create-only
+conflicts if identity exists; upsert atomically increments version at the identity;
+CAS updates only at the expected digest at the identity. Discovery keys on
+identity, then compares the full ref to detect stale lookups (returns `Right(None)`
+for both stale and absent). This closes finding 13; the prior design's adapter was
+unversioned.
+
+**Atomicity contract (per PR #410 re-review N5)**: implementations MUST be
+server-side-atomic per identity. Concurrent `Upsert`/`CompareAndSet` calls on the
+same identity MUST NOT both succeed; exactly one returns success and the other
+returns `Conflict`. The mechanism (CAS, OCC, server-side locks) is
+implementation-defined; the contract is on the observable result.
+
+**`CompareAndSet` validation**: the smart constructor `PublishMode.compareAndSet`
+rejects null/empty digests with `IllegalArgumentException`. The primary constructor
+is still public but typed adapters cannot bypass the smart ctor.
+
+**`ManifestDocument` placeholder**: aliased to `Any` (not `Nothing`) for the
+reasons documented in `CatalogAdapter.scala`: `Nothing` is implementable but
+uncallable. PR 6 (Manifest v2 + dual reader) replaces with the real ADT.
 ### 5.4 Capability targets and dialect quirks
 
 | Capability | Spark portable | Trino | Databricks portable | Snowflake |
