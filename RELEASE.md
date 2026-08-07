@@ -45,11 +45,16 @@ remaining migration is complete.
 | Engine contract (`Engine[R]`, `EngineContext`, `ExecutionPlan`) | ✅ |
 | Catalog identity + CAS | ✅ |
 | MCP engine registry + routing | ✅ |
-| Spark adapter implements `Engine[R]` (with predicate-type split) | partial (predicate-type unification pending) |
+| Spark adapter implements `Engine[R]` (with predicate-type split) | partial (Spark routes through legacy `SemanticTable`; not through `compile(Model)`) — see [v0.3.1 backlog §Gap 1](docs/design/v0.3.1-feature-parity-backlog.md) |
 | Trino adapter implements `Engine[R]` | ✅ |
 | DuckDB adapter implements `Engine[R]` | ✅ |
-| `SemanticTableCore` emits portable IR + routes through `Engine[R]` | pending |
+| `SemanticTableCore` emits portable IR + routes through `Engine[R]` | pending (gated on Spark-on-portable migration) |
 | Manifest v2 (real `ManifestDocument` ADT) | pending |
+
+**For the full feature-parity gap analysis (7 gaps, prioritized P0–P3)
+between the v0.3.0 portable design and full feature parity with the
+legacy Spark library, see
+[`docs/design/v0.3.1-feature-parity-backlog.md`](docs/design/v0.3.1-feature-parity-backlog.md).**
 
 ### Test count
 
