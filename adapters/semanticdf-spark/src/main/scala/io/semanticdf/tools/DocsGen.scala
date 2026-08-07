@@ -47,8 +47,13 @@ class DocsGen {
 
   private def loadFile(path: String): Seq[ModelEntry] = {
     val yaml = new Yaml()
-    val raw = yaml.load[java.util.Map[String, java.util.Map[String, Any]]](
-      scala.io.Source.fromFile(path).mkString)
+    // Loan pattern: close the Source even on parse failure.
+    // SnakeYAML doesn't close it; per scala-data-driven-refacer §1
+    // we close it here to avoid a file-descriptor leak per load on a
+    // long-lived driver.
+    val src = scala.io.Source.fromFile(path)
+    val raw = try yaml.load[java.util.Map[String, java.util.Map[String, Any]]](src.mkString)
+            finally src.close()
     if (raw == null) return Nil
     raw.asScala.map { case (modelName, modelMap) =>
       ModelEntry(

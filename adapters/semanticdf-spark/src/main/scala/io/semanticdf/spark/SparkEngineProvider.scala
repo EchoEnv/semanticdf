@@ -46,10 +46,7 @@ final class SparkEngineProvider(
     // spark adapter's table registry. The `request.model` is
     // the name; we look it up in the spark registry.
     sparkTableRegistry.get(request.model) match {
-      case None => Left(EngineError.FeatureDeferred(
-        feature = s"spark.provider.model-not-found:${request.model}",
-        release = "v0.5.0",
-      ))
+      case None => Left(EngineError.ModelNotFound(request.model))
       case Some(table) => runQuery(table, request)
     }
   }
@@ -60,10 +57,7 @@ final class SparkEngineProvider(
       ctx:     EngineContext,
   ): Either[EngineError, String] = {
     sparkTableRegistry.get(request.model) match {
-      case None => Left(EngineError.FeatureDeferred(
-        feature = s"spark.provider.model-not-found:${request.model}",
-        release = "v0.5.0",
-      ))
+      case None => Left(EngineError.ModelNotFound(request.model))
       case Some(table) => Right(table.query(
         measures   = request.measures,
         dimensions = request.dimensions,

@@ -58,7 +58,7 @@ final class MCPEngineRegistry (
       case _                      => Left(EngineError.EngineUnavailable(
         name       = name,
         available  = available,
-        wasDefault = false,
+        wasDefault = (name == default),
       ))
     }
   }

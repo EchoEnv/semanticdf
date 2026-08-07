@@ -62,6 +62,7 @@ sealed trait EngineError extends Product with Serializable {
     * - [ProviderInvocationFailed]→ `PROVIDER_INVOCATION_FAILED`
     * - [SourceSchemaChanged]     → `SOURCE_SCHEMA_CHANGED`
     * - [EngineUnavailable]       → `ENGINE_UNAVAILABLE`
+    * - [ModelNotFound]           → `MODEL_NOT_FOUND`
     */
   def toErrorDetail: ErrorDetail = this match {
     case EngineError.UnsupportedCapability(name, reason) =>
@@ -149,6 +150,13 @@ sealed trait EngineError extends Product with Serializable {
           "was_default" -> wasDefault.toString,
         ),
       )
+    case EngineError.ModelNotFound(name) =>
+      ErrorDetail(
+        code    = "MODEL_NOT_FOUND",
+        message = s"Model '$name' was not found in the engine's model registry",
+        hint    = Some("Check the model name, or load the model before querying"),
+        details = Map("model" -> name),
+      )
   }
 }
 
@@ -231,4 +239,11 @@ object EngineError {
       available: Seq[String],
       wasDefault: Boolean,
   ) extends EngineError
+
+  /** The named model was not found in the engine's model registry.
+    * Distinct from [EngineUnavailable] (which is about engine name)
+    * and from [FeatureDeferred] (which means a feature is on the
+    * roadmap but not implemented). `name` is the requested model
+    * name. Added per the v0.3.0 pre-tag audit. */
+  final case class ModelNotFound(name: String) extends EngineError
 }

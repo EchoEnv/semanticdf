@@ -94,7 +94,13 @@ object DataConfig {
     * acceptance of typos leads to confusing runtime errors later. */
   def fromFile(path: String): DataConfig = {
     val yaml = new Yaml()
-    val rootRaw: JMap[String, AnyRef] = yaml.load(new FileInputStream(path))
+    // Loan pattern: close the FileInputStream even on parse failure.
+    // SnakeYAML doesn't close the input; without this, every parse
+    // leaks one file descriptor on a long-lived MCP server.
+    val stream = new FileInputStream(path)
+    val rootRaw: JMap[String, AnyRef] =
+      try yaml.load(stream)
+      finally stream.close()
     val dataBlock = Option(rootRaw.get("data"))
       .getOrElse(throw new IllegalArgumentException(s"data-config '$path' missing top-level 'data:' block"))
       .asInstanceOf[JMap[String, AnyRef]]
