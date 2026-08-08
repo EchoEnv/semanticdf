@@ -1,5 +1,6 @@
 package io.semanticdf
 
+import io.semanticdf.core.engine.EngineError
 import io.semanticdf.core.expr.Expr
 import io.semanticdf.core.model._
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn, JoinKind}
@@ -122,13 +123,11 @@ object ModelBridge {
     //     each filter's predicate.
     val filterSpecs: List[FilterSpec] = extractFilters(st) match {
       case Right(specs) => specs
-      case Left(err) =>
-        return Left(ModelValidationError.FilterConversionUnsupported(err))
+      case Left(err)     => return Left(err)
     }
     val havingSpecs: List[FilterSpec] = extractHaving(st) match {
       case Right(specs) => specs
-      case Left(err) =>
-        return Left(ModelValidationError.FilterConversionUnsupported(err))
+      case Left(err)     => return Left(err)
     }
 
     // v1: name resolution priority:
@@ -213,10 +212,10 @@ object ModelBridge {
     * `FilterSpec` (named "where_<op>" for each legacy compare op, or
     * "where_<n>" for compound predicates).
     *
-    * Returns `Right(Nil)` if the table has no `where`. Returns
-    * `Right(List[FilterSpec])` on success. Returns `Left(reason)` if
-    * the converter rejects an unsupported legacy predicate. */
-  private def extractFilters(st: SemanticTable): Either[String, List[FilterSpec]] = {
+    * Per `docs/design/error-handling-style.md`: internal helpers
+    * use `Either[L, X]` with the SAME `L` as the public API
+    * (`ModelValidationError` here). */
+  private def extractFilters(st: SemanticTable): Either[ModelValidationError, List[FilterSpec]] = {
     val filters = collectFilterPredicates(st.root)
     if (filters.isEmpty) Right(Nil)
     else convertAll(filters, namePrefix = "where")
@@ -224,7 +223,7 @@ object ModelBridge {
 
   /** Convert `postAggPredicates` (legacy `having`) to portable
     * `FilterSpec`s via [[PredicateToExprConverter.toExpr]]. */
-  private def extractHaving(st: SemanticTable): Either[String, List[FilterSpec]] = {
+  private def extractHaving(st: SemanticTable): Either[ModelValidationError, List[FilterSpec]] = {
     if (st.postAggPredicates.isEmpty) Right(Nil)
     else convertAll(st.postAggPredicates, namePrefix = "having")
   }
@@ -244,27 +243,29 @@ object ModelBridge {
   }
 
   /** Convert a list of legacy predicates to portable `FilterSpec`s.
-    * On conversion failure, returns `Left(reason)` with the
-    * converter's error message. */
+    * Per `docs/design/error-handling-style.md`: typed `Either` at
+    * the boundary; `EngineError.UnsupportedCapability` from the
+    * converter is converted to `ModelValidationError.FilterConversionUnsupported`
+    * here (public-API boundary). Fail-fast via flatMap. */
   private def convertAll(
       predicates: List[Predicate],
       namePrefix: String,
-  ): Either[String, List[FilterSpec]] = {
-    val results = predicates.zipWithIndex.map { case (pred, idx) =>
-      val expr = try Right(PredicateToExprConverter.toExpr(pred))
-      catch {
-        case e: UnsupportedOperationException => Left(e.getMessage)
-      }
-      expr.map { expr =>
-        val opName = pred match {
-          case p: io.semanticdf.predicate.Predicate.Compare => opNameOf(p)
-          case _                                         => s"$idx"
+  ): Either[ModelValidationError, List[FilterSpec]] = {
+    val initial: Either[ModelValidationError, List[FilterSpec]] = Right(Nil)
+    predicates.zipWithIndex.foldLeft(initial) { (acc, item) =>
+      acc.flatMap { specs =>
+        val (pred, idx) = item
+        PredicateToExprConverter.toExpr(pred).flatMap { expr =>
+          val opName = pred match {
+            case p: io.semanticdf.predicate.Predicate.Compare => opNameOf(p)
+            case _                                         => s"$idx"
+          }
+          Right(specs :+ FilterSpec(name = s"${namePrefix}_${opName}", predicate = expr))
+        }.left.map { unsupported =>
+          ModelValidationError.FilterConversionUnsupported(unsupported.reason)
         }
-        FilterSpec(name = s"${namePrefix}_${opName}", predicate = expr)
       }
     }
-    results.collectFirst { case Left(err) => Left(err) }
-      .getOrElse(Right(results.collect { case Right(fs) => fs }))
   }
 
   /** Map a legacy `Compare` instance to its op-string (`eq`, `gt`,
