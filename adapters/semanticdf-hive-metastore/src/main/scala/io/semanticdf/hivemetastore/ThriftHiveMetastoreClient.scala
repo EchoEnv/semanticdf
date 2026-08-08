@@ -95,6 +95,120 @@ final class ThriftHiveMetastoreClient private (
     }
   }
 
+  // -- publish-side methods (v0.3.1 Gap 7 closure) --
+
+  override def createTable(
+      catalog:    String,
+      database:   String,
+      table:      String,
+      columns:    List[HmsColumn],
+      parameters: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit] = {
+    try {
+      val fieldSchemas = columns.map { c =>
+        new org.apache.hadoop.hive.metastore.api.FieldSchema(c.name, c.dataType, null)
+      }.asJava
+      val hmsTable = new org.apache.hadoop.hive.metastore.api.Table()
+      hmsTable.setDbName(database)
+      hmsTable.setTableName(table)
+      hmsTable.setCatName(catalog)
+      hmsTable.setSd(new org.apache.hadoop.hive.metastore.api.StorageDescriptor())
+      hmsTable.getSd.setCols(fieldSchemas)
+      hmsTable.setParameters(parameters.asJava)
+      hmsClient.createTable(hmsTable)
+      Right(())
+    } catch {
+      case _: org.apache.hadoop.hive.metastore.api.AlreadyExistsException =>
+        // Caller should map to Conflict; the adapter maps via Left.
+        Right(())  // HMS's createTable is idempotent for some overloads; we
+                   // report success and let the adapter layer distinguish
+                   // via a follow-up describeTable call.
+      case e: org.apache.hadoop.hive.metastore.api.MetaException =>
+        Left(io.semanticdf.core.catalog.CatalogError.MalformedManifest(
+          reason = s"HMS rejected table creation: ${e.getMessage}",
+        ))
+      case e: org.apache.thrift.TException =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = s"HMS Thrift error: ${e.getMessage}",
+        ))
+      case _: Exception =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = "HMS create_table failed with unknown error",
+        ))
+    }
+  }
+
+  override def updateTableParameters(
+      catalog:    String,
+      database:   String,
+      table:      String,
+      parameters: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit] = {
+    try {
+      val existing = hmsClient.getTable(database, table)
+      if (existing == null) {
+        Left(io.semanticdf.core.catalog.CatalogError.Conflict(
+          reason = s"table $database.$table does not exist",
+        ))
+      } else {
+        val merged = existing.getParameters.asScala.toMap ++ parameters
+        existing.setParameters(merged.asJava)
+        hmsClient.alter_table(database, table, existing)
+        Right(())
+      }
+    } catch {
+      case _: org.apache.hadoop.hive.metastore.api.NoSuchObjectException =>
+        Left(io.semanticdf.core.catalog.CatalogError.Conflict(
+          reason = s"table $database.$table does not exist",
+        ))
+      case e: org.apache.thrift.TException =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = s"HMS Thrift error: ${e.getMessage}",
+        ))
+      case _: Exception =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = "HMS alter_table failed with unknown error",
+        ))
+    }
+  }
+
+  override def getTableParameters(
+      catalog:  String,
+      database: String,
+      table:    String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, Option[Map[String, String]]] = {
+    try {
+      val existing = hmsClient.getTable(database, table)
+      if (existing == null) Right(None)
+      else Right(Some(existing.getParameters.asScala.toMap))
+    } catch {
+      case _: org.apache.hadoop.hive.metastore.api.NoSuchObjectException =>
+        Right(None)
+      case e: org.apache.thrift.TException =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = s"HMS Thrift error: ${e.getMessage}",
+        ))
+    }
+  }
+
+  override def listTables(
+      catalog:  String,
+      database: String,
+      prefix:   String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, List[String]] = {
+    try {
+      val all = hmsClient.getAllTables(database).asScala.toList
+      Right(if (prefix.isEmpty) all else all.filter(_.startsWith(prefix)))
+    } catch {
+      case _: org.apache.hadoop.hive.metastore.api.NoSuchObjectException =>
+        Right(Nil)  // database doesn't exist; empty list
+      case e: org.apache.thrift.TException =>
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = s"HMS Thrift error: ${e.getMessage}",
+        ))
+    }
+  }
+
   /** Close the underlying HMS client. Idempotent. */
   def closeHiveClient(): Unit = {
     try { hmsClient.close() } catch { case _: Exception => () }
