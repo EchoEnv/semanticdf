@@ -25,6 +25,7 @@
     <module>adapters/semanticdf-unity-catalog</module>
     <module>adapters/semanticdf-duckdb</module>
     <module>adapters/semanticdf-hive-metastore</module>
+    <module>adapters/semanticdf-hera</module>
   </modules>
 
   <properties>
