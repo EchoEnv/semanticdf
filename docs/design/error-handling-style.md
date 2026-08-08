@@ -22,6 +22,25 @@ into executor-side code.
 
 ---
 
+## Three candidate styles (and why we picked A)
+
+Three styles were considered before this standard was written:
+
+- **A. Typed `Either[L, X]` + `flatMap` / for-comprehension + typed throws
+  at boundaries** — the standard below. Compiler-enforced exhaustiveness,
+  matches existing service-layer code (TrinoEngine, DuckDBEngine, MCP
+  Query handler, Model.of, QueryBuilder). Picked.
+- **B. Monadless (explicit `match` everywhere)** — forces every case to
+  be considered at the use site. Considered; rejected because very
+  verbose for chained ops and produces lots of temp vals.
+- **C. Direct + `throw` everywhere** — familiar to Java devs; concise.
+  Considered; rejected because throws escape (loss of type info) and
+  conflate "silence is a symptom" (scala-chaos-testing §2).
+
+This document describes style **A**. Apply it uniformly.
+
+---
+
 ## Why
 
 Errors are data. A typed sealed ADT (`EngineError`, `ModelValidationError`,
@@ -96,11 +115,21 @@ immediately or threaded further?
 ### Converter return types — example
 
 ```scala
-// Good:
-def toExpr(p: Predicate): Either[EngineError.UnsupportedCapability, Expr] = p match {
+// Good (current pattern in TrinoQueryCompiler / DuckDBQueryCompiler):
+def toExpr(p: Predicate, model: Model = null): Either[EngineError.UnsupportedCapability, Expr] = p match {
   case ... => Right(Expr.Equal(...))
   case Predicate.Compare.Contains(_, _) =>
     Left(EngineError.UnsupportedCapability(name = "Predicate.Contains", reason = "..."))
+  case Expr.All(name) =>
+    // Look up the measure; fail loud on programming error (unknown
+    // measure). Throw IllegalArgumentException at the boundary; the
+    // caller never catches this — the model's validator catches it
+    // earlier.
+    val _ = model.measures.find(_.name == name).getOrElse(
+      throw new IllegalArgumentException(
+        s"Expr.All('$name') references an unknown measure"))
+    )
+    Right(...)
 }
 
 // Bad (legacy pattern — do not copy):
@@ -114,6 +143,13 @@ catch { case e: UnsupportedOperationException => Left(e.getMessage) }
 // ^ loses the type info; returns Left(String) instead of
 //   Left(EngineError.UnsupportedCapability)
 ```
+
+**Replacement for the deprecated `throw new UnsupportedOperationException` at
+a converter boundary**: return `Either[EngineError.UnsupportedCapability, X]`
+directly. The exception-throw-and-catch round-trip loses the typed error that
+the standard exists to preserve. Real-world example: PR #420 (v0.3.1 SQL
+engine All lowerers) — the first draft used the throw pattern; the final
+version returned `Left(...)` directly per this rule.
 
 Default when unsure: plain function (bucket 1), not `Either`. Only promote
 to `Either` when a real `for`-comprehension needs it.
@@ -168,18 +204,43 @@ must use the same typed error ADT as the rest of the function.
 - `Either[Throwable, X]` — same problem, just boxed differently.
 - Catch-all exception wrapping — swallows the specific failure mode. Catch
   specific exception subtypes (`SQLException`, `IOException`, etc.)
-  individually instead:
-
-  ```scala
-  // Bad — don't do this
-  try { ... } catch { case e: Exception => Left(SomeError(e.getMessage)) }
-  ```
-
+  individually instead. See the worked example below.
 - Throwing inside a function whose signature returns `Either[L, X]`.
 - A `for`-comprehension with only 1-2 steps (unnecessary monad wrapping —
   use `match` or `.flatMap` instead per the chaining table).
 - Mixing two different `L` error types in the same `for`-comprehension
   without an explicit `.left.map(lift)` at the seam.
+
+### Worked example: catching failure modes at IO boundaries
+
+```scala
+// GOOD — distinguish failure modes (per scala-chaos-testing §2 "silence is a symptom")
+try {
+  compile(model, ctx)
+} catch {
+  case e: org.apache.spark.sql.AnalysisException =>
+    // Spark rejected the query at plan time — a query-runtime issue
+    Left(EngineError.QueryRuntimeFailed(
+      reason = s"spark analysis failed: ${e.getClass.getSimpleName}: ${e.getMessage}"))
+  case _: java.sql.SQLException =>
+    // Couldn't reach the engine's backend
+    Left(EngineError.ConnectionFailed(
+      reason = s"spark JDBC failed: ${_}"))
+}
+
+// BAD — catch-all that loses information (per scala-chaos-testing §2)
+try {
+  compile(model, ctx)
+} catch {
+  case e: Exception => Left(EngineError.ConnectionFailed(
+    reason = s"failed: ${e.getMessage}"))  // <- which failure mode is this?
+}
+```
+
+**Note**: legacy code may still have the catch-all pattern. PR #418 + #420 added
+`EngineError.QueryRuntimeFailed` to the `EngineError` ADT specifically so the
+catch-all could be refined into typed cases. The legacy `SparkEngineProvider.runQuery`
+still uses the catch-all (tracked for a separate refactor).
 
 ---
 
@@ -270,3 +331,29 @@ asked to fix it, split the catch by exception type.
 - **scala-chaos-testing** §2 (silence is a symptom)
 - **scala-jvm-safety** §1 (null is a liar — applies to catch-all `Exception` too)
 - **docs/design/v0.3.1-feature-parity-backlog.md** — gaps driving typed-Either adoption
+
+### Related skills (apply in parallel, not in sequence)
+
+This standard covers the error-handling layer. Five other skills cover
+adjacent concerns that often surface in the same PR. Apply them when
+relevant; cite the skill name in the PR's commit message when one of them
+catches a finding.
+
+- **scala-spark-batch-bugs** §1 (what you wrote isn't what runs) and §3
+  (schema drift) — directly relevant to `PortableQueryCompiler.compile()`
+  (window functions, partition pruning, lambda captures). Assert the
+  actual numeric result, not just compile success.
+- **scala-spark-streaming-bugs** (watermark / checkpoint / delivery /
+  state) — relevant if/when streaming support lands. N/A for batch-
+  only v0.3.1 work; list it in the PR's commit message if a finding
+  applies.
+- **scala-impact-analysis** §3 (binary compat) — directly relevant
+  whenever a sealed-trait `case class` is added or a public signature
+  changes (e.g. `Expr.All` in PR #419 added an exhaustive-match
+  burden; `renderExpr` signature change in PR #420 rippled to ~20
+  recursive call sites).
+- **scala-perf-testing** — out of scope unless a benchmark shows
+  regression. N/A for v0.3.1 v1.
+- **scala-chaos-testing** §2 (silence is a symptom) — directly relevant
+  when refactoring catch-alls. Worked example in the "Hard bans" section
+  above.
