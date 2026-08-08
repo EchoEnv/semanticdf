@@ -4,7 +4,7 @@ import java.time.Instant
 
 import io.semanticdf.core.engine.{ParameterizedSql, ResolvedSource}
 import io.semanticdf.core.expr.{Expr, LiteralValue}
-import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelStatus, SourceRef}
+import io.semanticdf.core.model.{Model, ModelPolicyDefaults, ModelStatus, OnStalePolicy, RollupFreshnessSpec, RollupSpec, SourceRef}
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn}
 
 /** Engine-specific DuckDB SQL compiler — Phase 7 second engine
@@ -63,24 +63,56 @@ class DuckDBQueryCompiler {
   /** Compile a portable [[Model]] to a DuckDB-specific
     * parameterized SQL statement.
     *
-    * @param model        the portable model
-    * @param modelSources resolved join sources by name (empty for
-    *                     single-source models)
-    * @param now          the current time (for rollup freshness;
-    *                     unused in v1 since rollups are deferred)
+    * v0.3.1 (Gap 6 closure): rollup selection now mirrors Trino.
+    * If `model.rollups` contains a covering fresh rollup with a
+    * registered source, the FROM clause points at the rollup's
+    * source and a `-- using rollup '<name>'` comment is prepended.
+    * Falls back to `model.source` when no rollup covers the query
+    * or all covering rollups are stale.
+    *
+    * Selection rules (engine-portable; mirrored from Trino):
+    *   1. The rollup must be at least as coarse as the query
+    *      (`queryDims ⊆ rollup.dimensions`) and answer the query
+    *      (`queryMeas ⊆ rollup.measures[].name`).
+    *   2. The rollup's `freshness` must permit use:
+    *      - `NoTracking` → always fresh
+    *      - `Track(maxStaleness, onStale)` → fresh iff
+    *        `now - maxStaleness <= watermark[rollup.name]`
+    *
+    * @param model            the portable model
+    * @param modelSources     resolved join sources by name (empty
+    *                         for single-source models)
+    * @param rollupSources    rollup name → rollup table's SourceRef;
+    *                         empty map disables rollup selection
+    * @param rollupWatermarks rollup name → last-refresh Instant;
+    *                         empty map makes `Track` rollups stale
+    * @param now              the current time (for the freshness
+    *                         comparison); defaults to `Instant.now()`
     * @return the parameterized SQL string + bind values */
   def compile(
-      model:        Model,
-      modelSources: Map[String, SourceRef] = Map.empty,
-      now:          Instant                = Instant.now(),
+      model:            Model,
+      modelSources:     Map[String, SourceRef]   = Map.empty,
+      rollupSources:    Map[String, SourceRef]   = Map.empty,
+      rollupWatermarks: Map[String, Instant]     = Map.empty,
+      now:              Instant                  = Instant.now(),
   ): ParameterizedSql = {
     val params = scala.collection.mutable.ListBuffer.empty[LiteralValue]
+
+    val selectedRollup = selectRollup(model, rollupSources, rollupWatermarks, now)
+    val (effectiveSource, rollupComment) = selectedRollup match {
+      case Some((rollup, rollupSource)) =>
+        (rollupSource, Some(s"-- using rollup '${rollup.name}'"))
+      case None =>
+        (model.source, None)
+    }
+
     val selectCols = renderSelectColumns(model, params)
-    val fromClause  = renderFromClause(model.source)
+    val fromClause  = renderFromClause(effectiveSource)
     val whereClause = renderWhereClause(model.filters, params)
     val groupByClause = renderGroupByClause(model, params)
 
     val parts = List(
+      rollupComment,
       Some(s"SELECT ${selectCols.mkString(", ")}"),
       Some(s"FROM $fromClause"),
       whereClause.map(w => s"WHERE $w"),
@@ -88,6 +120,51 @@ class DuckDBQueryCompiler {
     ).flatten
 
     ParameterizedSql(sql = parts.mkString(" "), parameters = params.toList)
+  }
+
+  /** Select a rollup that covers the query and is fresh.
+    *
+    * Returns `Some((rollup, source))` for the first covering
+    * fresh rollup; `None` if no rollup covers the query or all
+    * covering rollups are stale.
+    *
+    * Per scala-data-driven-refacer §3 (sealed ADT over Map):
+    * `RollupFreshnessSpec` and `OnStalePolicy` are exhaustively
+    * matched. Mirrors [[io.semanticdf.trino.TrinoQueryCompiler]]
+    * exactly so behavior is consistent across engines. */
+  private def selectRollup(
+      model:            Model,
+      rollupSources:    Map[String, SourceRef],
+      rollupWatermarks: Map[String, Instant],
+      now:              Instant,
+  ): Option[(RollupSpec, SourceRef)] = {
+    val queryDimNames  = model.dimensions.map(_.name).toSet
+    val queryMeasNames = model.measures.map(_.name).toSet
+
+    model.rollups.iterator.flatMap { rollup =>
+      val coversDims  = queryDimNames.forall(rollup.dimensions.contains)
+      val coversMeas  = queryMeasNames.forall(m => rollup.measures.exists(_.name == m))
+      if (!coversDims || !coversMeas) None
+      else if (isFresh(rollup, rollupWatermarks, now))
+        rollupSources.get(rollup.name).map(source => (rollup, source))
+      else None
+    }.toList.headOption
+  }
+
+  /** Check if a rollup is fresh per its `RollupFreshnessSpec`.
+    * Mirrors the Trino engine (PR #418 closed Gap 1's broader
+    * portable compile path). */
+  private def isFresh(
+      rollup:           RollupSpec,
+      rollupWatermarks: Map[String, Instant],
+      now:              Instant,
+  ): Boolean = rollup.freshness match {
+    case RollupFreshnessSpec.NoTracking => true
+    case RollupFreshnessSpec.Track(maxStaleness, _) =>
+      rollupWatermarks.get(rollup.name) match {
+        case Some(watermark) => watermark.isAfter(now.minus(maxStaleness))
+        case None            => false
+      }
   }
 
   // -- SELECT clause --
