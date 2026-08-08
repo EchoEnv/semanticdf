@@ -24,6 +24,24 @@ class CalculatorSpec extends AnyFunSuite with Matchers {
     Calculator.fieldNamesOf(e) shouldBe Set.empty
   }
 
+  test("fieldNamesOf: All does NOT contribute (it's a measure reference, not a field)") {
+    // Regression guard for PR #419 + #420: Expr.All references a
+    // measure (the named one's per-group sum), not a field. Per
+    // scala-data-driven-refacer §1, this is data-correct: fieldNamesOf
+    // collects FieldRef names only.
+    val e = Expr.All("total_passengers")
+    Calculator.fieldNamesOf(e) shouldBe Set.empty
+  }
+
+  test("fieldNamesOf: nested arithmetic containing All does not crash (PR #420 exhaustiveness)") {
+    // Regression guard for the bug surfaced by the v0.3.1 SocratiCode
+    // audit: a calculated measure like `amount / All(total)` walked
+    // through fieldNamesOf would have raised MatchError before the
+    // fix in Calculator.fieldNamesOf (PR #420 follow-up).
+    val e = Expr.Divide(Expr.FieldRef("amount"), Expr.All("total"))
+    Calculator.fieldNamesOf(e) shouldBe Set("amount")
+  }
+
   test("fieldNamesOf: Literal does NOT contribute") {
     val e = Expr.Literal(LiteralValue.IntValue(42), SealedDataType.Int)
     Calculator.fieldNamesOf(e) shouldBe Set.empty

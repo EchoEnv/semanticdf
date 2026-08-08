@@ -719,12 +719,12 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
 
   // -- v0.3.0 pre-tag fix (Gap 3): fail loud on RelOp.Join --
 
-  test("compileRelOp returns Left(UnsupportedCapability) when the plan contains a Join") {
-    // Per the v0.3.0 pre-tag audit: the previous
-    // `-- Joins deferred to a future PR` literal comment
-    // returned a syntactically-valid but semantically-empty
-    // SQL string (Trino parsed it as a comment-only statement
-    // and returned empty results). Replaced with fail-loud.
+  test("compileRelOp emits a JOIN clause when the right-side source is in modelSources (v0.3.1 Gap 3 closure)") {
+    // v0.3.1 closes Gap 3: hand-built RelOp plans with a Join node
+    // now compile to a working SQL query with the JOIN clause.
+    // The user must provide the source-resolution map (per the
+    // design doc, modelSources is the bridge between the IR and
+    // the underlying tables).
     val resolved: io.semanticdf.core.engine.ResolvedSource =
       io.semanticdf.core.engine.ResolvedSource.Scan(
         source = byName,
@@ -739,12 +739,36 @@ class TrinoQueryCompilerSpec extends AnyFunSuite with Matchers {
         io.semanticdf.core.expr.Expr.FieldRef("a"),
       ),
     )
-    val result = compiler.compileRelOp(plan)
+    val result = compiler.compileRelOp(plan, Map("byName" -> byName))
+    result match {
+      case Right(sql) => sql.sql should include ("INNER JOIN")
+      case other      => fail(s"expected Right with JOIN clause, got $other")
+    }
+  }
+
+  test("compileRelOp fails loud when the right-side source is NOT in modelSources") {
+    // Per the standard (error-handling-style.md): typed Either, no
+    // silent fallback. The IR doesn't carry the right-side table,
+    // so modelSources is the only ground truth.
+    val resolved: io.semanticdf.core.engine.ResolvedSource =
+      io.semanticdf.core.engine.ResolvedSource.Scan(
+        source = byName,
+        schema = io.semanticdf.core.engine.ResolvedSchema(Map.empty),
+      )
+    val plan: io.semanticdf.core.rel.RelOp = io.semanticdf.core.rel.RelOp.Join(
+      left      = io.semanticdf.core.rel.RelOp.Scan(resolved, Nil, Nil),
+      right     = io.semanticdf.core.rel.RelOp.Scan(resolved, Nil, Nil),
+      kind      = JoinKind.Inner,
+      condition = io.semanticdf.core.expr.Expr.Equal(
+        io.semanticdf.core.expr.Expr.FieldRef("a"),
+        io.semanticdf.core.expr.Expr.FieldRef("a"),
+      ),
+    )
+    val result = compiler.compileRelOp(plan)  // no modelSources provided
     result match {
       case Left(io.semanticdf.core.engine.EngineError.UnsupportedCapability(name, reason)) =>
         name shouldBe "RelOp.Join"
-        reason should include ("compileRelOp")
-        reason should include ("modelSources")
+        reason should include ("right-side must be a Scan with a ResolvedSource.Scan")
       case other =>
         fail(s"expected Left(UnsupportedCapability), got $other")
     }

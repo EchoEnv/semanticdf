@@ -105,14 +105,29 @@ class DuckDBQueryCompiler {
   /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
     * to a DuckDB SQL string. The engine-portable path per
     * `Engine.compile(plan, ctx)`. Mirrors `TrinoQueryCompiler.compileRelOp`. */
-  def compileRelOp(plan: io.semanticdf.core.rel.RelOp): ParameterizedSql = {
+  /** v0.3.1 (Gap 3 closure): thread `modelSources` through compileRelOp
+    * for parity with [[TrinoQueryCompiler.compileRelOp]]. Per scala-
+    * impact-analysis §1: the signature change ripples to every caller;
+    * both call sites in [[DuckDBEngine]] updated.
+    *
+    * Note: the DuckDB synthetic-model path (compileRelOp -> relOpToModel
+    * -> compile) doesn't currently emit JOIN clauses for `RelOp.Join`.
+    * Joins in DuckDB go through the model-level compile path
+    * (`compile(model, modelSources, ...)`), which reads `model.joins`.
+    * For hand-built RelOp plans with Join nodes, use Trino's
+    * compileRelOp (full support) or extend DuckDB's relOpToModel.
+    * Tracked in docs/design/v0.3.1-feature-parity-backlog.md Gap 3. */
+  def compileRelOp(
+      plan:         io.semanticdf.core.rel.RelOp,
+      modelSources: Map[String, SourceRef] = Map.empty,
+  ): ParameterizedSql = {
     val params = scala.collection.mutable.ListBuffer.empty[LiteralValue]
     // v1 scope: the same 7 RelOp cases as Trino. We re-use the
     // existing Model-walking renderers via a synthetic Model
     // reconstruction. Future PR: split the renderers into
     // RelOp-specific code.
     val synthetic = relOpToModel(plan)
-    compile(synthetic, Map.empty).copy(parameters = params.toList)
+    compile(synthetic, modelSources).copy(parameters = params.toList)
   }
 
   /** Build a `Model` view of a `RelOp` for the legacy renderers.
