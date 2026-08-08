@@ -64,6 +64,14 @@ object PortableExprCompiler {
         "PortableExprCompiler.toColumn: Expr.MeasureRef is not supported in v0.3.1 (deferred to v0.4.0 with Expr.All / pct-of-total).",
       )
 
+    case Expr.All(name) =>
+      // Lowered to a simple column reference. By the time
+      // calculated measures are evaluated, `applyAggregations`
+      // has already added the referenced measure as a window-
+      // aggregated column (when the model uses Expr.All). The
+      // column-name resolution is therefore straightforward.
+      col(name)
+
     case Expr.FunctionCall(name, args) =>
       // Engine-agnostic UDF resolution is out of scope for v0.3.1.
       // Future: route through a Spark UDF registry keyed by name.
