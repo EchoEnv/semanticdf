@@ -97,8 +97,8 @@ class DuckDBQueryCompiler {
       params: scala.collection.mutable.ListBuffer[LiteralValue],
   ): List[String] = {
     val dimCols   = model.dimensions.map(d => s""""${d.name}"""")
-    val measCols  = model.measures.map(m => renderMeasure(m, params))
-    val calcCols  = model.calculatedMeasures.map(c => s""""${c.name}" = ${renderExpr(c.expr)}""")
+    val measCols  = model.measures.map(m => renderMeasure(m, params, model))
+    val calcCols  = model.calculatedMeasures.map(c => s""""${c.name}" = ${renderExpr(c.expr, params, model)}""")
     (dimCols ++ measCols ++ calcCols).toList
   }
 
@@ -152,15 +152,16 @@ class DuckDBQueryCompiler {
   private def renderMeasure(
       m:      io.semanticdf.core.model.Measure,
       params: scala.collection.mutable.ListBuffer[LiteralValue],
+      model:  io.semanticdf.core.model.Model,
   ): String = {
     val alias = s""""${m.name}""""
     m.expr.fn match {
-      case AggregateFn.Sum     => s"SUM(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.Sum     => s"SUM(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
       case AggregateFn.Count   => s"COUNT(*) AS $alias"
-      case AggregateFn.CountDistinct => s"COUNT(DISTINCT ${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.Avg     => s"AVG(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.Min     => s"MIN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.Max     => s"MAX(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.CountDistinct => s"COUNT(DISTINCT ${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.Avg     => s"AVG(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.Min     => s"MIN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.Max     => s"MAX(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
       // -- v0.3.1 backward-compat: advanced aggregates --
       // DuckDB's syntax differs from the portable case-object names
       // (e.g. portable StddevPopulation → DuckDB STDDEV_POP; portable
@@ -175,23 +176,23 @@ class DuckDBQueryCompiler {
       // portable AggregateCall shape with a percentile arg so the
       // user's intended percentile is preserved. Tracked as a
       // follow-on.
-      case AggregateFn.StddevSample        => s"STDDEV_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.StddevPopulation    => s"STDDEV_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.VarianceSample      => s"VAR_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.VariancePopulation   => s"VAR_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.Median               => s"MEDIAN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.PercentileContinuous => s"QUANTILE_CONT(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
-      case AggregateFn.PercentileDiscrete   => s"QUANTILE_DISC(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
-      case AggregateFn.ApproxPercentile     => s"APPROX_QUANTILE(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}, 0.5) AS $alias"
-      case AggregateFn.First                => s"FIRST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
-      case AggregateFn.Last                 => s"LAST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+      case AggregateFn.StddevSample        => s"STDDEV_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.StddevPopulation    => s"STDDEV_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.VarianceSample      => s"VAR_SAMP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.VariancePopulation   => s"VAR_POP(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.Median               => s"MEDIAN(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.PercentileContinuous => s"QUANTILE_CONT(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}, 0.5) AS $alias"
+      case AggregateFn.PercentileDiscrete   => s"QUANTILE_DISC(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}, 0.5) AS $alias"
+      case AggregateFn.ApproxPercentile     => s"APPROX_QUANTILE(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}, 0.5) AS $alias"
+      case AggregateFn.First                => s"FIRST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
+      case AggregateFn.Last                 => s"LAST(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
       case other               =>
         // Truly unknown aggregate fn (future additions to the
         // sealed ADT). Fall back to the case-object name (uppercased).
         // If the rendered SQL is wrong, the user sees a DuckDB
         // syntax error at execute time — loud failure at the
         // engine boundary, not silent incorrect SQL.
-        s"${other.toString.toUpperCase}(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)))}) AS $alias"
+        s"${other.toString.toUpperCase}(${renderExpr(m.expr.input.getOrElse(Expr.FieldRef(m.name)), params, model)}) AS $alias"
     }
   }
 
@@ -234,7 +235,41 @@ class DuckDBQueryCompiler {
       params: scala.collection.mutable.ListBuffer[LiteralValue],
   ): Option[String] = {
     if (model.dimensions.isEmpty) None
-    else Some(model.dimensions.map(d => s""""${d.name}"""").mkString(", "))
+    else {
+      val dimExprs = model.dimensions.map(d => s""""${d.name}"""")
+      // Per scala-spark-batch-bugs §3 (schema drift): when a
+      // calculated measure references Expr.All, include the base
+      // measures' input expressions in GROUP BY so per-row data
+      // survives aggregation. Same pattern as TrinoQueryCompiler.
+      val usesAll = model.calculatedMeasures.exists { cm =>
+        def go(e: io.semanticdf.core.expr.Expr): Boolean = e match {
+          case io.semanticdf.core.expr.Expr.All(_) => true
+          case io.semanticdf.core.expr.Expr.Not(e1)             => go(e1)
+          case io.semanticdf.core.expr.Expr.IsNull(e1)          => go(e1)
+          case io.semanticdf.core.expr.Expr.IsNotNull(e1)       => go(e1)
+          case io.semanticdf.core.expr.Expr.Add(l, r)          => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Subtract(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Multiply(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Divide(l, r)       => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Modulo(l, r)       => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Equal(l, r)        => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.NotEqual(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.LessThan(l, r)    => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.LessOrEqual(l, r) => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.GreaterThan(l, r)    => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.GreaterOrEqual(l, r) => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.And(l, r)        => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Or(l, r)         => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.FunctionCall(_, args) => args.exists(go)
+          case _ => false
+        }
+        go(cm.expr)
+      }
+      val inputExprs: List[String] =
+        if (usesAll) model.measures.flatMap(_.expr.input).distinct.map(renderExpr(_, params, model))
+        else Nil
+      Some((dimExprs ++ inputExprs).mkString(", "))
+    }
   }
 
   // -- Expression rendering --
@@ -243,14 +278,15 @@ class DuckDBQueryCompiler {
   private def renderExpr(
       expr:   Expr,
       params: scala.collection.mutable.ListBuffer[LiteralValue] = scala.collection.mutable.ListBuffer.empty,
+      model:  Model = null,
   ): String = expr match {
     case Expr.FieldRef(name)        => s""""$name""""
     case Expr.MeasureRef(name)      => s""""$name""""
     case Expr.Literal(value, _)     => renderLiteral(value, params)
-    case Expr.Add(l, r)             => s"(${renderExpr(l, params)} + ${renderExpr(r, params)})"
-    case Expr.Subtract(l, r)        => s"(${renderExpr(l, params)} - ${renderExpr(r, params)})"
-    case Expr.Multiply(l, r)        => s"(${renderExpr(l, params)} * ${renderExpr(r, params)})"
-    case Expr.Divide(l, r)          => s"(${renderExpr(l, params)} / ${renderExpr(r, params)})"
+    case Expr.Add(l, r)             => s"(${renderExpr(l, params, model)} + ${renderExpr(r, params, model)})"
+    case Expr.Subtract(l, r)        => s"(${renderExpr(l, params, model)} - ${renderExpr(r, params, model)})"
+    case Expr.Multiply(l, r)        => s"(${renderExpr(l, params, model)} * ${renderExpr(r, params, model)})"
+    case Expr.Divide(l, r)          => s"(${renderExpr(l, params, model)} / ${renderExpr(r, params, model)})"
     case Expr.Modulo(l, r)          => s"(${renderExpr(l, params)} % ${renderExpr(r, params)})"
     case Expr.Equal(l, r)           => s"(${renderExpr(l, params)} = ${renderExpr(r, params)})"
     case Expr.NotEqual(l, r)        => s"(${renderExpr(l, params)} != ${renderExpr(r, params)})"
@@ -260,15 +296,20 @@ class DuckDBQueryCompiler {
     case Expr.GreaterOrEqual(l, r)  => s"(${renderExpr(l, params)} >= ${renderExpr(r, params)})"
     case Expr.And(l, r)             => s"(${renderExpr(l, params)} AND ${renderExpr(r, params)})"
     case Expr.Or(l, r)              => s"(${renderExpr(l, params)} OR ${renderExpr(r, params)})"
-    case Expr.Not(e)                => s"NOT (${renderExpr(e, params)})"
+    case Expr.Not(e)                => s"NOT (${renderExpr(e, params, model)})"
     case Expr.All(measureName) =>
-      // v0.3.1: portable Expr.All lowerer is implemented in the
-      // Spark adapter (window-injection before groupBy+agg). The SQL
-      // engines (Trino, DuckDB) defer this to a follow-up PR per
-      // `docs/design/v0.3.1-feature-parity-backlog.md` Gap 2's plan.
-      throw new UnsupportedOperationException(
-        s"DuckDBQueryCompiler.renderExpr: Expr.All('$measureName') is not supported in v0.3.1 (deferred to a follow-up PR; see Gap 2)."
+      // v0.3.1 (Gap 2 closure): portable Expr.All lowerer.
+      // Resolves to the alias of the named measure — the GROUP BY
+      // clause (extended to include measure inputs in
+      // renderGroupByClause when `All` is detected) computes the
+      // per-group measure value first, and the calculated-measure
+      // expression reads from that alias.
+      val _ = model.measures.find(_.name == measureName).getOrElse(
+        throw new IllegalArgumentException(
+          s"DuckDBQueryCompiler.renderExpr: Expr.All('$measureName') references an unknown measure",
+        ),
       )
+      "\"" + measureName + "\""
     case other                      => s"-- unsupported expr: ${other.getClass.getSimpleName}"
   }
 
