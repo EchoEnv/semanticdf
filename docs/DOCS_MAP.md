@@ -16,6 +16,7 @@ trying to do.
 | See all six runtime knobs applied together | [`examples/runtime-tuning/`](../examples/runtime-tuning/) — customer analytics dashboard |
 | See skew handling applied to a hot-key join | [`examples/skewed-join/`](../examples/skewed-join/) — 1M events, 90/10 split |
 | Connect an LLM agent to SemanticDF | [`semanticdf-mcp/README.md`](../semanticdf-mcp/README.md) and [`docs/agents/mcp-contract.md`](agents/mcp-contract.md) |
+| **Add a new engine / catalog adapter to the library** (write a `MyPlatform` adapter for a new SQL warehouse or REST catalog) | [`docs/agents/adding-a-new-adapter.md`](agents/adding-a-new-adapter.md) + [`templates/example-adapter/`](../templates/example-adapter/) skeleton |
 | Drive the framework as a CLI client over REST | [`examples/cli-consumer/README.md`](../examples/cli-consumer/README.md) |
 | Understand how a query compiles to a Spark plan | [`docs/guide.md`](../docs/guide.md) — narrative walkthrough, or [`DESIGN.md`](../DESIGN.md) §4 (architecture) for the formal version |
 | Implement or extend an engine adapter (Trino, DuckDB, custom) | [`docs/design/multi-engine-design.md`](design/multi-engine-design.md) — the `Engine[R]` contract, portable IR, capability surfaces | Engine-adapter authors |

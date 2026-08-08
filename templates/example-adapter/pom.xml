@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-myname — template adapter for the semanticdf library.
+
+  Generated from templates/example-adapter/. Copy this directory,
+  rename MyPlatform → MyName everywhere, and register the new module
+  in the parent pom.xml. See docs/agents/adding-a-new-adapter.md.
+
+  ==What this template provides==
+
+  - pom.xml (this file) — parent + semanticdf-core dep
+  - 6 main src files (boundary trait + impl + 3 port adapters + encoder)
+  - 5 test src files (fake + 4 specs)
+
+  ==What this template does NOT include==
+
+  - README.md (write your own — explain what your adapter does)
+  - Real integration tests against your platform (those need a
+    running instance; see docs/agents/adding-a-new-adapter.md §8)
+
+  ==Boundary contract==
+
+  Zero Spark imports. Verifiable by:
+  `grep -r 'org.apache.spark' src/main/scala/`
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.3.0</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-myname_${scala.binary.version}</artifactId>
+  <packaging>jar</packaging>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (Engine, SourceResolver, CatalogAdapter, ...) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_${scala.binary.version}</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
