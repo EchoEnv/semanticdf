@@ -287,7 +287,7 @@ class TrinoEngine extends Engine[Any] {
       case Some(resolver) =>
         // Resolver configured — use the new RelOp flow.
         io.semanticdf.core.query.QueryBuilder.build(model, resolver, engineId).flatMap { (plan: io.semanticdf.core.rel.RelOp) =>
-          TrinoQueryCompiler.instance.compileRelOp(plan).map { sql =>
+          TrinoQueryCompiler.instance.compileRelOp(plan, Map.empty).map { sql =>
             io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
               engine               = engineId,
               native               = sql,
@@ -318,7 +318,7 @@ class TrinoEngine extends Engine[Any] {
       nativeVersion        = "0.286",
       engineAdapterVersion = "0.3.0",
     )
-    TrinoQueryCompiler.instance.compileRelOp(plan).map { sql =>
+    TrinoQueryCompiler.instance.compileRelOp(plan, Map.empty).map { sql =>
       io.semanticdf.core.engine.ExecutionPlan[ParameterizedSql](
         engine               = engineId,
         native               = sql,

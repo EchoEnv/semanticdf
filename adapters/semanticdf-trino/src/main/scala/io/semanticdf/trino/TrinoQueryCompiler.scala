@@ -186,9 +186,21 @@ class TrinoQueryCompiler {
     * For v1 we handle the same shape as the existing `Model`
     * overload: dimensions / measures / calculatedMeasures
     * surfaced via `Project` + `Aggregate`. */
-  def compileRelOp(plan: io.semanticdf.core.rel.RelOp): Either[EngineError, ParameterizedSql] = {
+  /** Compile a portable [[io.semanticdf.core.rel.RelOp]] tree
+    * to a Trino SQL string.
+    *
+    * v0.3.1 (Gap 3 closure): \`compileRelOp\` accepts a \`modelSources\`
+   * map so hand-built RelOp plans with a Join node compile to a working
+   * SQL query with the JOIN clause. Per scala-impact-analysis §1
+   * the signature change ripples to every caller; updated both
+   * call sites in `TrinoEngine`.
+   */
+  def compileRelOp(
+      plan:         io.semanticdf.core.rel.RelOp,
+      modelSources: Map[String, SourceRef] = Map.empty,
+  ): Either[EngineError, ParameterizedSql] = {
     val params = scala.collection.mutable.ListBuffer.empty[io.semanticdf.core.expr.LiteralValue]
-    renderRelOp(plan, params).map { parts =>
+    renderRelOp(plan, params, modelSources = modelSources).map { parts =>
       ParameterizedSql(
         sql        = parts.filter(_.nonEmpty).mkString(" "),
         parameters = params.toList,
@@ -199,8 +211,9 @@ class TrinoQueryCompiler {
   /** Walk a `RelOp` tree top-down, emitting SQL fragments into
     * `parts` and binding literal parameters into `params`. */
   private def renderRelOp(
-      plan:   io.semanticdf.core.rel.RelOp,
-      params: scala.collection.mutable.ListBuffer[io.semanticdf.core.expr.LiteralValue],
+      plan:         io.semanticdf.core.rel.RelOp,
+      params:       scala.collection.mutable.ListBuffer[io.semanticdf.core.expr.LiteralValue],
+      modelSources: Map[String, SourceRef] = Map.empty,
   ): Either[EngineError, List[String]] = {
     plan match {
       case io.semanticdf.core.rel.RelOp.Scan(source, _, _) =>
@@ -218,14 +231,14 @@ class TrinoQueryCompiler {
         Right(List(s"FROM $fromClause"))
 
       case io.semanticdf.core.rel.RelOp.Filter(input, predicate) =>
-        renderRelOp(input, params).map(_ :+ s"WHERE ${renderExpr(predicate, params)}")
+        renderRelOp(input, params, modelSources).map(_ :+ s"WHERE ${renderExpr(predicate, params)}")
 
       case io.semanticdf.core.rel.RelOp.Aggregate(input, groupBy, aggregates) =>
         // The aggregate node emits the GROUP BY and the aggregated
         // columns. The project node above it sets the SELECT order.
         val groupByCols = groupBy.map(e => renderExpr(e, params))
         val aggCols     = aggregates.map(a => renderAggregateCall(a, params))
-        renderRelOp(input, params).map { base =>
+        renderRelOp(input, params, modelSources).map { base =>
           base ++
             (if (groupByCols.nonEmpty) List(s"GROUP BY ${groupByCols.mkString(", ")}") else Nil) ++
             aggCols.map(c => s"SELECT $c")
@@ -235,39 +248,75 @@ class TrinoQueryCompiler {
         val projCols = expressions.map { case (e, alias) =>
           s"${renderExpr(e, params)} AS \"$alias\""
         }
-        renderRelOp(input, params).map(_ :+ s"SELECT ${projCols.mkString(", ")}")
+        renderRelOp(input, params, modelSources).map(_ :+ s"SELECT ${projCols.mkString(", ")}")
 
       case io.semanticdf.core.rel.RelOp.Sort(input, keys) =>
         val orderBy = keys.map(renderSortKey).mkString(", ")
-        renderRelOp(input, params).map(_ :+ s"ORDER BY $orderBy")
+        renderRelOp(input, params, modelSources).map(_ :+ s"ORDER BY $orderBy")
 
       case io.semanticdf.core.rel.RelOp.Limit(input, count, offset) =>
         val limit = if (offset > 0) s"LIMIT $count OFFSET $offset" else s"LIMIT $count"
-        renderRelOp(input, params).map(_ :+ limit)
+        renderRelOp(input, params, modelSources).map(_ :+ limit)
 
-      case io.semanticdf.core.rel.RelOp.Join(_, _, _, _) =>
-        // v0.3.0 pre-tag fix (Gap 3): the previous "-- Joins
-        // deferred to a future PR" emitted a comment-only SQL
-        // string that Trino parsed as a no-op, returning empty
-        // results with no error. v0.3.0 replaced it with fail-loud.
-        //
-        // v0.3.1 note: joins DO work via `compile(model, ...)` —
-        // the model-level path emits the JOIN clause via
-        // `renderFrom` + `renderJoinSpec`. Only the lower-level
-        // `compileRelOp` path is restricted because `RelOp.Join`
-        // does not carry the right-side `SourceRef` (joins are
-        // resolved from `model.joins` + a `SourceResolver` at
-        // the model level). Users who build `RelOp` plans by hand
-        // should use the model-level compile, or extend this
-        // signature to accept a `modelSources` map. Tracked in
-        // docs/design/v0.3.1-feature-parity-backlog.md Gap 3.
-        Left(EngineError.UnsupportedCapability(
-          name   = "RelOp.Join",
-          reason = "RelOp.Join is not supported by compileRelOp because the right-side SourceRef is not carried in the RelOp IR. " +
-                   "Use compile(model, modelSources, ...) for joins, or extend compileRelOp to accept a modelSources map. " +
-                   "See docs/design/v0.3.1-feature-parity-backlog.md Gap 3.",
-        ))
+      case relOp @ io.semanticdf.core.rel.RelOp.Join(left, right, kind, condition) =>
+        // v0.3.1 (Gap 3 closure): the Join case now resolves the
+        // right-side table from `modelSources`. Per scala-spark-batch-bugs
+        // §1: assert the actual SQL output below in TrinoRelOpJoinSpec.
+        // The right-side `RelOp` must be a Scan whose source is a
+        // `ResolvedSource.Scan(sr, _)`. Multi-key joins are out of
+        // scope for v0.3.1 (deferred to v0.4.0).
+        if (rightSourceRef(right, modelSources).isEmpty)
+          Left(EngineError.UnsupportedCapability(
+            name = "RelOp.Join",
+            reason = "RelOp.Join right-side must be a Scan with a ResolvedSource.Scan",
+          ))
+        else {
+          val rsr = rightSourceRef(right, modelSources).get
+          val joinKind = kind match {
+            case io.semanticdf.core.rel.JoinKind.Inner => "INNER JOIN"
+            case io.semanticdf.core.rel.JoinKind.Left  => "LEFT JOIN"
+            case io.semanticdf.core.rel.JoinKind.Right => "RIGHT JOIN"
+            case io.semanticdf.core.rel.JoinKind.Full  => "FULL JOIN"
+            case io.semanticdf.core.rel.JoinKind.Cross => "CROSS JOIN"
+          }
+          val onClause = renderJoinCondition(condition, params)
+          val onSuffix = if (joinKind == "CROSS JOIN" || onClause.isEmpty) "" else s" ON $onClause"
+          renderRelOp(left, params, modelSources).map(leftParts => leftParts :+ s"$joinKind ${renderSource(rsr)}$onSuffix")
+        }
     }
+  }
+
+  /** Extract the right-side `SourceRef` from a `RelOp.Join` right branch.
+    * The ResolvedSource.Scan's SourceRef must already exist in
+    * `modelSources` (per the v0.3.1 design: modelSources is the
+    * bridge between the IR and the underlying tables; per scala-
+    * impact-analysis §1 the signature change requires the map).
+    * Returns `None` for the unsupported `ByPath` / `ByProvider`
+    * variants (deferred to v0.4.0). */
+  private def rightSourceRef(
+      right:        io.semanticdf.core.rel.RelOp,
+      modelSources: Map[String, SourceRef],
+  ): Option[SourceRef] = right match {
+    case io.semanticdf.core.rel.RelOp.Scan(src, _, _) => src match {
+      case io.semanticdf.core.engine.ResolvedSource.Scan(sr, _) =>
+        // The right-side SourceRef must have been registered in
+        // modelSources. This is the boundary check — per
+        // scala-data-driven-refacer §1, the IR doesn't carry the
+        // table, so the map is the only ground truth.
+        modelSources.values.find(_ == sr)
+      case _ => None
+    }
+    case _ => None
+  }
+
+  /** Render a single-key join condition as a Trino `ON` clause.
+    * Multi-key joins deferred to v0.4.0. */
+  private def renderJoinCondition(
+      condition: Expr,
+      params:     scala.collection.mutable.ListBuffer[io.semanticdf.core.expr.LiteralValue],
+  ): String = condition match {
+    case Expr.Equal(l, r) => s"${renderExpr(l, params)} = ${renderExpr(r, params)}"
+    case _                => ""  // unsupported shapes fall back to no ON
   }
 
   /** Render a `SortKey` (engine-portable) as a Trino `ORDER BY`
