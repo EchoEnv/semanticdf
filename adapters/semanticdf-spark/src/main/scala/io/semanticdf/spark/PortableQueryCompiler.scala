@@ -42,6 +42,12 @@ class PortableQueryCompiler {
 
   /** Compile a portable [[Model]] into a Spark [[DataFrame]].
     *
+    * For calculated measures that reference [[Expr.All]] (the
+    * `t.all` percent-of-total form), [[applyAggregations]] switches
+    * to the window-function path (preserves per-row data so
+    * `amount / All(total_amount)` makes sense). The legacy
+    * groupBy+agg path is used when no `All` reference exists.
+    *
     * @return `Right(DataFrame)` on success; `Left(EngineError)` if
     *         the source can't be resolved or a join references an
     *         unknown model. */
@@ -176,6 +182,47 @@ class PortableQueryCompiler {
     }
   }
 
+  /** Collect every distinct [[Expr.All]] reference in the
+    * calculated-measure expressions. Used by [[applyAggregations]]
+    * to decide whether to use the window-function path (preserves
+    * per-row data so `amount / All(total_amount)` makes sense)
+    * or the existing groupBy+agg path (per-group totals; loses
+    * per-row data).
+    *
+    * Per scala-data-driven-refacer §1: pure data walker, no
+    * behavior, returns `Set[String]`. */
+  private def collectAllReferences(
+      calcMeasures: List[io.semanticdf.core.model.CalculatedMeasure],
+  ): Set[String] = {
+    val out = scala.collection.mutable.Set.empty[String]
+    calcMeasures.foreach { cm =>
+      def go(e: Expr): Unit = e match {
+        case Expr.All(name) => out += name
+        case Expr.Not(e) => go(e)
+        case Expr.IsNull(e) => go(e)
+        case Expr.IsNotNull(e) => go(e)
+        case Expr.Add(l, r) => go(l); go(r)
+        case Expr.Subtract(l, r) => go(l); go(r)
+        case Expr.Multiply(l, r) => go(l); go(r)
+        case Expr.Divide(l, r) => go(l); go(r)
+        case Expr.Modulo(l, r) => go(l); go(r)
+        case Expr.Equal(l, r) => go(l); go(r)
+        case Expr.NotEqual(l, r) => go(l); go(r)
+        case Expr.LessThan(l, r) => go(l); go(r)
+        case Expr.LessOrEqual(l, r) => go(l); go(r)
+        case Expr.GreaterThan(l, r) => go(l); go(r)
+        case Expr.GreaterOrEqual(l, r) => go(l); go(r)
+        case Expr.And(l, r) => go(l); go(r)
+        case Expr.Or(l, r) => go(l); go(r)
+        case Expr.Cast(e, _) => go(e)
+        case Expr.FunctionCall(_, args) => args.foreach(go)
+        case _ => ()
+      }
+      go(cm.expr)
+    }
+    out.toSet
+  }
+
   // -- aggregation application --
 
   private def applyAggregations(
@@ -183,19 +230,61 @@ class PortableQueryCompiler {
       model: Model,
   ): DataFrame = {
     if (model.measures.isEmpty) return df
-    // Aggregations
-    val aggCols: List[Column] = model.measures.map { m =>
-      renderAggregate(m.expr).as(m.name)
-    }
-    // groupBy on dimensions (if any); else aggregate over the whole df
     val dimCols: Array[Column] = model.dimensions.map { d =>
       PortableExprCompiler.toColumn(d.expr)
     }.toArray
-    if (dimCols.isEmpty) {
-      // No dimensions → aggregate over the whole df (single-row result).
-      df.agg(aggCols.head, aggCols.tail: _*)
+
+    // Per scala-spark-batch-bugs §1: two code paths depending on
+    // whether any calculated measure references Expr.All. The window-
+    // function path preserves per-row data (so `amount / All(total)`
+    // makes sense); the groupBy+agg path drops per-row data (the
+    // existing behavior, retained when All is unused).
+    if (collectAllReferences(model.calculatedMeasures).nonEmpty) {
+      applyWithWindows(df, model, dimCols)
     } else {
-      df.groupBy(dimCols: _*).agg(aggCols.head, aggCols.tail: _*)
+      applyGroupByAgg(df, model, dimCols)
+    }
+  }
+
+  /** Existing groupBy+agg path. Per-group totals; loses per-row data.
+    * Used when no calculated measure references Expr.All. */
+  private def applyGroupByAgg(
+      df:      DataFrame,
+      model:   Model,
+      dimCols: Array[Column],
+  ): DataFrame = {
+    val aggCols: List[Column] = model.measures.map { m =>
+      renderAggregate(m.expr).as(m.name)
+    }
+    if (dimCols.isEmpty) df.agg(aggCols.head, aggCols.tail: _*)
+    else df.groupBy(dimCols: _*).agg(aggCols.head, aggCols.tail: _*)
+  }
+
+  /** Window-function path. Computes each measure via a window
+    * aggregation (sum / avg / etc. over partitionBy dimensions)
+    * so the per-row input columns remain in scope for calculated
+    * measures that reference `Expr.All(name)`. */
+  private def applyWithWindows(
+      df:      DataFrame,
+      model:   Model,
+      dimCols: Array[Column],
+  ): DataFrame = {
+    import org.apache.spark.sql.expressions.Window
+    val withMeasures = model.measures.foldLeft(df) { (acc, m) =>
+      val input   = m.expr.input.getOrElse(Expr.FieldRef(m.name))
+      val inputC  = PortableExprCompiler.toColumn(input)
+      val windowSpec =
+        if (dimCols.isEmpty) Window.partitionBy()
+        else Window.partitionBy(dimCols: _*)
+      acc.withColumn(
+        m.name,
+        renderAggregate(m.expr).over(windowSpec),
+      )
+    }
+    // Calculated measures: `All(name)` lowers to `col(name)` because
+    // the measure column now exists in scope.
+    model.calculatedMeasures.foldLeft(withMeasures) { (acc, calc) =>
+      acc.withColumn(calc.name, PortableExprCompiler.toColumn(calc.expr))
     }
   }
 
