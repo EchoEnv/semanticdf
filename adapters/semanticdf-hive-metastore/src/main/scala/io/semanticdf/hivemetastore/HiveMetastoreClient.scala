@@ -48,6 +48,66 @@ trait HiveMetastoreClient extends Serializable {
       database: String,
       table:   String,
   ): Option[HmsTableSchema]
+
+  /** Create a table in HMS with the given columns and parameters.
+    *
+    * v0.3.1 (Gap 7 closure): publish-side method for
+    * [[HiveMetastoreCatalogAdapter]]. Parameters are stored in
+    * HMS's `Table.parameters` map (the only mutable metadata
+    * HMS 3.x exposes); the [[HiveMetastoreCatalogAdapter]] uses
+    * three reserved keys for CAS:
+    *
+    *   - `semanticdf_kind`    : "model" | "rollup" | "extension_blob"
+    *   - `semanticdf_version` : the entity version (Int, stringified)
+    *   - `semanticdf_digest`  : the entity digest
+    *
+    * @return `Right(())` on success, `Left(CatalogError.Unauthorized)`
+    *         on permission failure, `Left(CatalogError.Network)` on
+    *         transport failure, `Left(CatalogError.MalformedManifest)`
+    *         on schema validation failure */
+  def createTable(
+      catalog:    String,
+      database:   String,
+      table:      String,
+      columns:    List[HmsColumn],
+      parameters: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit]
+
+  /** Update a table's parameters in HMS (used for atomic CAS —
+    * overwriting the `semanticdf_*` keys is the commit step).
+    *
+    * @return `Right(())` on success, `Left(CatalogError.Conflict)`
+    *         if the table doesn't exist, `Left(CatalogError.Network)`
+    *         on transport failure */
+  def updateTableParameters(
+      catalog:    String,
+      database:   String,
+      table:      String,
+      parameters: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit]
+
+  /** Get a table's current parameters. Returns `None` if the table
+    * doesn't exist.
+    *
+    * Used by [[HiveMetastoreCatalogAdapter]] to read the current
+    * `semanticdf_digest` for CAS verification. */
+  def getTableParameters(
+      catalog:  String,
+      database: String,
+      table:    String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, Option[Map[String, String]]]
+
+  /** List tables in a database, optionally filtered by a name prefix.
+    * Returns `Right(Nil)` if the database is empty or doesn't exist
+    * (matches the trait's "may not exist" semantics).
+    *
+    * Used by [[HiveMetastoreCatalogAdapter]] to implement the
+    * `list(filter)` method. */
+  def listTables(
+      catalog:  String,
+      database: String,
+      prefix:   String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, List[String]]
 }
 
 /** Engine-portable description of a table returned by
