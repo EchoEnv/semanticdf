@@ -1,8 +1,10 @@
 package io.semanticdf
 
+import io.semanticdf.core.engine.EngineError
 import io.semanticdf.core.expr.Expr
 import io.semanticdf.core.model._
 import io.semanticdf.core.rel.{AggregateCall, AggregateFn, JoinKind}
+import io.semanticdf.predicate.{Predicate, PredicateToExprConverter}
 import io.semanticdf.{SemanticOp, SemanticFilterOp}
 
 /** Engine-portable partial-bridge from the legacy [SemanticTable]
@@ -106,32 +108,26 @@ object ModelBridge {
     * Returns `Right(Model)` on success. */
   def toModel(st: SemanticTable): Either[ModelValidationError, Model] = {
     // v0.3.0 pre-tag fix (Gap 4): fail loud if the legacy table
-    // v0.3.0 pre-tag fix (Gap 4): fail loud if the legacy table
-    // carries a `where` or `having` predicate. The v1 bridge
-    // can't yet convert them; silently dropping them was a
-    // data-hygiene regression (the portable model would run
-    // queries against unfiltered rows). Close the bridge until
-    // the predicate-converter PR lands in v0.3.1.
+    // v0.3.1 (Gap 4 closure): convert legacy `where` and `having`
+    // predicates to portable `FilterSpec(name, predicate = Expr)` via
+    // `PredicateToExprConverter`. If a legacy predicate has no
+    // portable counterpart yet (Contains / StartsWith / EndsWith /
+    // ArrayContains, or unsupported literal types), fail loud with
+    // `FilterConversionUnsupported` so the consumer knows.
     //
     // Detection:
     //   - `having` lives in `st.postAggPredicates: List[Predicate]`
     //     (set by `.having(pred)` in SemanticTableCore).
     //   - `where` wraps the root op tree in `SemanticFilterOp`
-    //     chains (set by `.where(pred)`). Walk the tree to find
-    //     any filter node.
-    if (st.postAggPredicates.nonEmpty) {
-      return Left(ModelValidationError.FilterConversionUnsupported(
-        s"SemanticTable '${nameOrUnknown(st)}' carries a `having` predicate that the v0.3.0 bridge cannot yet convert. " +
-        "Port the predicate to a calc measure + FilterSpec manually, " +
-        "or wait for v0.3.1 (see docs/design/v0.3.1-feature-parity-backlog.md Gap 4).",
-      ))
+    //     chains (set by `.where(pred)`). Walk the tree to extract
+    //     each filter's predicate.
+    val filterSpecs: List[FilterSpec] = extractFilters(st) match {
+      case Right(specs) => specs
+      case Left(err)     => return Left(err)
     }
-    if (hasPreAggFilter(st.root)) {
-      return Left(ModelValidationError.FilterConversionUnsupported(
-        s"SemanticTable '${nameOrUnknown(st)}' carries a `where` predicate that the v0.3.0 bridge cannot yet convert. " +
-        "Port the predicate to the portable `FilterSpec(name, predicate = Expr)` shape manually, " +
-        "or wait for v0.3.1 (see docs/design/v0.3.1-feature-parity-backlog.md Gap 4).",
-      ))
+    val havingSpecs: List[FilterSpec] = extractHaving(st) match {
+      case Right(specs) => specs
+      case Left(err)     => return Left(err)
     }
 
     // v1: name resolution priority:
@@ -170,6 +166,7 @@ object ModelBridge {
         keys       = ji.keys.toList.map(k => k -> k),
       )
     }
+    val filters: List[FilterSpec] = filterSpecs ++ havingSpecs
     Model.of(
       name               = name,
       source             = source,
@@ -177,7 +174,7 @@ object ModelBridge {
       measures           = measures,
       calculatedMeasures = Nil,
       joins              = joins,
-      filters            = Nil,
+      filters            = filters,
       rollups            = Nil,
       defaultPolicies    = ModelPolicyDefaults.none,
       extensions         = Map.empty,
@@ -207,6 +204,84 @@ object ModelBridge {
   private def hasPreAggFilter(op: SemanticOp): Boolean = op match {
     case _: SemanticFilterOp => true
     case _ => false
+  }
+
+  /** Collect `SemanticFilterOp` predicates from the op tree (top-down),
+    * convert each to a portable `FilterSpec` via
+    * [[PredicateToExprConverter.toExpr]]. Each filter becomes its own
+    * `FilterSpec` (named "where_<op>" for each legacy compare op, or
+    * "where_<n>" for compound predicates).
+    *
+    * Per `docs/design/error-handling-style.md`: internal helpers
+    * use `Either[L, X]` with the SAME `L` as the public API
+    * (`ModelValidationError` here). */
+  private def extractFilters(st: SemanticTable): Either[ModelValidationError, List[FilterSpec]] = {
+    val filters = collectFilterPredicates(st.root)
+    if (filters.isEmpty) Right(Nil)
+    else convertAll(filters, namePrefix = "where")
+  }
+
+  /** Convert `postAggPredicates` (legacy `having`) to portable
+    * `FilterSpec`s via [[PredicateToExprConverter.toExpr]]. */
+  private def extractHaving(st: SemanticTable): Either[ModelValidationError, List[FilterSpec]] = {
+    if (st.postAggPredicates.isEmpty) Right(Nil)
+    else convertAll(st.postAggPredicates, namePrefix = "having")
+  }
+
+  /** Walk the op tree and collect every `SemanticFilterOp.predicate`
+    * in pre-order. Returns them in source order (top filter first). */
+  private def collectFilterPredicates(op: SemanticOp): List[Predicate] = op match {
+    case f: SemanticFilterOp =>
+      f.predicate +: collectFilterPredicates(f.source)
+    case j: io.semanticdf.SemanticJoinOp =>
+      // Filters may live inside a join. Recurse into both sides.
+      // (Per scala-spark-batch-bugs §3: don't assume; verify.)
+      collectFilterPredicates(j.left) ++ collectFilterPredicates(j.right)
+    case _ =>
+      // Other ops don't carry filters.
+      Nil
+  }
+
+  /** Convert a list of legacy predicates to portable `FilterSpec`s.
+    * Per `docs/design/error-handling-style.md`: typed `Either` at
+    * the boundary; `EngineError.UnsupportedCapability` from the
+    * converter is converted to `ModelValidationError.FilterConversionUnsupported`
+    * here (public-API boundary). Fail-fast via flatMap. */
+  private def convertAll(
+      predicates: List[Predicate],
+      namePrefix: String,
+  ): Either[ModelValidationError, List[FilterSpec]] = {
+    val initial: Either[ModelValidationError, List[FilterSpec]] = Right(Nil)
+    predicates.zipWithIndex.foldLeft(initial) { (acc, item) =>
+      acc.flatMap { specs =>
+        val (pred, idx) = item
+        PredicateToExprConverter.toExpr(pred).flatMap { expr =>
+          val opName = pred match {
+            case p: io.semanticdf.predicate.Predicate.Compare => opNameOf(p)
+            case _                                         => s"$idx"
+          }
+          Right(specs :+ FilterSpec(name = s"${namePrefix}_${opName}", predicate = expr))
+        }.left.map { unsupported =>
+          ModelValidationError.FilterConversionUnsupported(unsupported.reason)
+        }
+      }
+    }
+  }
+
+  /** Map a legacy `Compare` instance to its op-string (`eq`, `gt`,
+    * etc.). Mirrors the canonical op vocabulary used by the legacy
+    * `Compare.apply(op, field, value)` factory. */
+  private def opNameOf(p: io.semanticdf.predicate.Predicate.Compare): String = p match {
+    case _: Predicate.Compare.Eq           => "eq"
+    case _: Predicate.Compare.Ne           => "ne"
+    case _: Predicate.Compare.Lt           => "lt"
+    case _: Predicate.Compare.Le           => "le"
+    case _: Predicate.Compare.Gt           => "gt"
+    case _: Predicate.Compare.Ge           => "ge"
+    case _: Predicate.Compare.Contains     => "contains"
+    case _: Predicate.Compare.StartsWith   => "startswith"
+    case _: Predicate.Compare.EndsWith     => "endswith"
+    case _: Predicate.Compare.ArrayContains => "arraycontains"
   }
 
   private def deriveName(st: SemanticTable): String = {

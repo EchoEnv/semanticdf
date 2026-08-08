@@ -187,12 +187,24 @@ final class SparkEngineProvider(
       }
     } catch {
       case e: Exception =>
-        // Per scala-spark-batch-bugs §1: surface the error.
-        // Per JVM-safety §1: catch the boundary exception,
-        // don't let it propagate to MCP as a 500.
-        Left(EngineError.ConnectionFailed(
-          reason = s"spark.portable-query failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
-        ))
+        // Per `docs/design/error-handling-style.md` ("catch-all cleanup"
+        // section): distinguish query runtime errors from connection
+        // failures. Spark's DataFrame operations throw
+        // `AnalysisException` (and similar) for query runtime issues
+        // — those map to `QueryRuntimeFailed`. Anything else
+        // (network, classloading, etc.) maps to `ConnectionFailed`.
+        // This is the "start small" piece; legacy `runQuery` still
+        // uses the coarse catch-all (tracked for follow-up).
+        e match {
+          case _: org.apache.spark.sql.AnalysisException =>
+            Left(EngineError.QueryRuntimeFailed(
+              reason = s"spark.portable-query analysis failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
+            ))
+          case _ =>
+            Left(EngineError.ConnectionFailed(
+              reason = s"spark.portable-query failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
+            ))
+        }
     }
   }
 

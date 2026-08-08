@@ -128,6 +128,13 @@ sealed trait EngineError extends Product with Serializable {
         hint    = Some("Check the provider's underlying data source and credentials"),
         details = Map("provider" -> name, "reason" -> reason),
       )
+    case EngineError.QueryRuntimeFailed(reason) =>
+      ErrorDetail(
+        code    = "QUERY_RUNTIME_FAILED",
+        message = s"Query runtime failed: $reason",
+        hint    = Some("Check the query syntax, column names, and types; the engine accepted the query but failed during execution"),
+        details = Map("reason" -> reason),
+      )
     case EngineError.SourceSchemaChanged(source) =>
       ErrorDetail(
         code    = "SOURCE_SCHEMA_CHANGED",
@@ -203,6 +210,15 @@ object EngineError {
   /** Could not connect to the engine's backend. \`reason\` is the
     * raw error from the JDBC/HTTP/Thrift client. */
   final case class ConnectionFailed(
+      reason: String,
+  ) extends EngineError
+
+  /** The query was dispatched to the engine but failed at runtime
+    * (e.g. unknown column, unresolved expression, type mismatch).
+    * Distinct from [[ConnectionFailed]] (couldn't reach the engine)
+    * per `docs/design/error-handling-style.md` (catch-all cleanup):
+    * the catch-all should distinguish the two. */
+  final case class QueryRuntimeFailed(
       reason: String,
   ) extends EngineError
 

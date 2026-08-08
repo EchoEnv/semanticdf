@@ -248,36 +248,75 @@ class ModelBridgeSpec extends AnyFunSuite with Matchers {
     result.isLeft shouldBe true
   }
 
-  // -- v0.3.0 pre-tag fix (Gap 4): fail loud on legacy filters --
+  // -- v0.3.1 (Gap 4 closure): predicate unification --
 
-  test("toModel returns Left(FilterConversionUnsupported) when legacy table carries a `where` predicate") {
+  test("toModel converts legacy `where` Eq predicate to a portable FilterSpec") {
+    val st = buildSimpleTable()
+      .where(io.semanticdf.predicate.Predicate.Compare("eq", "region", "AA"))
+    val Right(model) = ModelBridge.toModel(st)
+    model.filters should have size 1
+    val fs = model.filters.head
+    fs.name shouldBe "where_eq"
+    fs.predicate shouldBe io.semanticdf.core.expr.Expr.Equal(
+      io.semanticdf.core.expr.Expr.FieldRef("region"),
+      io.semanticdf.core.expr.Expr.Literal(
+        io.semanticdf.core.expr.LiteralValue.StringValue("AA"),
+        io.semanticdf.core.schema.SealedDataType.Varchar,
+      ),
+    )
+  }
+
+  test("toModel converts legacy `where` Gt predicate (numeric) to portable FilterSpec") {
     val st = buildSimpleTable()
       .where(io.semanticdf.predicate.Predicate.Compare("gt", "amount", 50))
-    val result = ModelBridge.toModel(st)
-    result match {
-      case Left(ModelValidationError.FilterConversionUnsupported(reason)) =>
-        reason should include ("where")
-        reason should include ("orders")
-      case other =>
-        fail(s"expected Left(FilterConversionUnsupported), got $other")
-    }
+    val Right(model) = ModelBridge.toModel(st)
+    model.filters should have size 1
+    model.filters.head.predicate shouldBe io.semanticdf.core.expr.Expr.GreaterThan(
+      io.semanticdf.core.expr.Expr.FieldRef("amount"),
+      io.semanticdf.core.expr.Expr.Literal(
+        io.semanticdf.core.expr.LiteralValue.IntValue(50),
+        io.semanticdf.core.schema.SealedDataType.Int,
+      ),
+    )
   }
 
-  test("toModel returns Left(FilterConversionUnsupported) when legacy table carries a `having` predicate") {
+  test("toModel converts legacy `where` And compound predicate to portable nested And") {
+    val st = buildSimpleTable()
+      .where(io.semanticdf.predicate.Predicate.And(
+        io.semanticdf.predicate.Predicate.Compare("eq", "region", "us"),
+        io.semanticdf.predicate.Predicate.Compare("gt", "amount", 100),
+      ))
+    val Right(model) = ModelBridge.toModel(st)
+    model.filters should have size 1
+    val pred = model.filters.head.predicate
+    pred shouldBe a [io.semanticdf.core.expr.Expr.And]
+  }
+
+  test("toModel converts legacy `having` predicate to portable FilterSpec") {
     val st = buildSimpleTable()
       .having(io.semanticdf.predicate.Predicate.Compare("gt", "row_count", 0))
+    val Right(model) = ModelBridge.toModel(st)
+    model.filters should have size 1
+    val fs = model.filters.head
+    fs.name shouldBe "having_gt"
+    fs.predicate shouldBe io.semanticdf.core.expr.Expr.GreaterThan(
+      io.semanticdf.core.expr.Expr.FieldRef("row_count"),
+      io.semanticdf.core.expr.Expr.Literal(
+        io.semanticdf.core.expr.LiteralValue.IntValue(0),
+        io.semanticdf.core.schema.SealedDataType.Int,
+      ),
+    )
+  }
+
+  test("toModel still fails loud on legacy Contains predicate (deferred to v0.4.0)") {
+    val st = buildSimpleTable()
+      .where(io.semanticdf.predicate.Predicate.Compare.Contains("region", "us"))
     val result = ModelBridge.toModel(st)
     result match {
       case Left(ModelValidationError.FilterConversionUnsupported(reason)) =>
-        reason should include ("having")
+        reason should include ("Contains")
       case other =>
         fail(s"expected Left(FilterConversionUnsupported), got $other")
     }
-  }
-
-  test("toModel succeeds for tables WITHOUT where/having (regression guard)") {
-    val st = buildSimpleTable()
-    val result = ModelBridge.toModel(st)
-    result.isRight shouldBe true
   }
 }
