@@ -123,4 +123,79 @@ class CalcGraphSpec extends AnyFunSuite with Matchers {
       Set("total_revenue"), List(total), maxDepthBound = 5,
     ) shouldBe Right(0)
   }
+
+  // -- Expr.All (v0.3.1 PR #419/#420) — regression guard --
+  //
+  // The reindex (post-#425) found a soft gap: `collectCalcRefs` has
+  // a `case Expr.All(name) => acc + name` arm (added in PR #420's
+  // follow-up) but no test exercises it. Per scala-spark-batch-bugs §1,
+  // an untested code path is a blind spot. These tests pin the
+  // contract: `Expr.All(name)` contributes the named measure to the
+  // DAG (because it references the measure, even though it doesn't
+  // *consume* its value at the model level — it consumes it at query
+  // time via window functions).
+  //
+  // Why this matters: if someone removes the `Expr.All` case from
+  // `collectCalcRefs` (or renames the case in the sealed trait), the
+  // compiler would catch it. But the BEHAVIORAL correctness — that
+  // `Expr.All(name)` is treated as referencing `name` in the DAG —
+  // needs a runtime test.
+
+  test("Expr.All(name) contributes the named measure to the calc-refs set") {
+    // p_of_total = amount / All(total_amount)
+    //   - the calculator walks the tree
+    //   - All(total_amount) is in the tree, so total_amount is a dep
+    //   - amount is a FieldRef (not a calc measure), so it doesn't count
+    val pOfTotal = CalculatedMeasure(
+      name = "p_of_total",
+      expr = Expr.Divide(
+        Expr.FieldRef("amount"),
+        Expr.All("total_amount"),
+      ),
+    )
+    // total_amount is a BASE measure (not in the calc set).
+    // p_of_total is the only calc measure; it has no calc-deps,
+    // so depth is 0.
+    CalcGraph.checkAcyclicAndDepth(
+      Set("p_of_total"), List(pOfTotal), maxDepthBound = 5,
+    ) shouldBe Right(0)
+  }
+
+  test("Expr.All that references a CALC measure creates a depth-1 dep") {
+    // p_of_total = amount / All(grand_total)
+    //   - All(grand_total) is in the tree
+    //   - grand_total IS a calc measure, so it counts as a dep
+    //   - depth = 1 (p_of_total depends on grand_total)
+    val grandTotal = CalculatedMeasure(
+      name = "grand_total",
+      expr = Expr.Add(measureRef("sum"), measureRef("cnt")),
+    )
+    val pOfTotal = CalculatedMeasure(
+      name = "p_of_total",
+      expr = Expr.Divide(
+        Expr.FieldRef("amount"),
+        Expr.All("grand_total"),
+      ),
+    )
+    CalcGraph.checkAcyclicAndDepth(
+      Set("grand_total", "p_of_total"),
+      List(grandTotal, pOfTotal),
+      maxDepthBound = 5,
+    ) shouldBe Right(1)
+  }
+
+  test("Expr.All does not propagate through MeasureRef depth counts (it IS the measure ref)") {
+    // p_of_total = All(total) - it's literally a reference to total.
+    // collectCalcRefs should add 'total' to the set. If a future
+    // refactor accidentally adds the entire expression tree (instead
+    // of just the name), this test catches it.
+    val pOfTotal = CalculatedMeasure(
+      name = "p_of_total",
+      expr = Expr.All("total"),
+    )
+    // 'total' is a base measure, so p_of_total has no calc-deps.
+    CalcGraph.checkAcyclicAndDepth(
+      Set("p_of_total"), List(pOfTotal), maxDepthBound = 5,
+    ) shouldBe Right(0)
+  }
 }
