@@ -1,6 +1,6 @@
 package io.semanticdf.myplatform
 
-import io.semanticdf.core.engine.{EngineIdentity, ResolvedSource}
+import io.semanticdf.core.engine.{EngineIdentity, ResolvedSource, SourceResolver}
 import io.semanticdf.core.model.SourceRef
 
 /** Implements the engine-portable `SourceResolver` contract against

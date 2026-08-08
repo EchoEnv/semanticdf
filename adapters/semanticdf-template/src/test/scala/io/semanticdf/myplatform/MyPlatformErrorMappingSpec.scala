@@ -1,7 +1,7 @@
 package io.semanticdf.myplatform
 
 import io.semanticdf.core.catalog.{CatalogError, CatalogIdentity, CatalogRef, PublishMode, PublishResult}
-import io.semanticdf.core.model.CatalogEntity
+import io.semanticdf.core.catalog.CatalogEntity
 
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers

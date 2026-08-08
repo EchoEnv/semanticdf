@@ -46,14 +46,11 @@ final class HttpMyPlatformClient(
   // Per error-handling-style.md "Hard bans": auth tokens belong in
   // the trait constructor (not hardcoded). The caller is expected
   // to inject them via a header builder. For v1 we use Bearer.
-  private val authHeader: String = ""  // populated via withAuth or constructor
+  private var authHeader: String = ""  // set by the secondary constructor
 
   /** Smart constructor with explicit auth. */
   def this(baseUrl: String, authToken: String) = {
     this(baseUrl)
-    // Per scala-data-driven-refacer §1: pure data, behavior lives
-    // elsewhere. We set the auth header as a side-effect of
-    // construction; for v0.4.0 we'd thread this via a builder.
     this.authHeader = s"Bearer $authToken"
   }
 

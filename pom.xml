@@ -26,6 +26,7 @@
     <module>adapters/semanticdf-duckdb</module>
     <module>adapters/semanticdf-hive-metastore</module>
     <module>adapters/semanticdf-hera</module>
+    <module>adapters/semanticdf-template</module>
   </modules>
 
   <properties>

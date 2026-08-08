@@ -22,14 +22,17 @@ import scala.collection.mutable
   * spurious failures): using `def` ensures each test gets a fresh
   * un-polluted fake. CRITICAL for mutable fakes that support
   * publish-side behavior. */
-final class FakeMyPlatformClient(
+class FakeMyPlatformClient(
     initialTables: Map[String, MyPlatformTableMeta] = Map.empty,
     initialResults: Map[String, MyPlatformResult] = Map.empty,
+    initialRealms: Map[String, String]        = Map.empty,
 ) extends MyPlatformClient {
 
   // Mutable state — tests pre-populate, adapter tests mutate this.
   private val tables = mutable.Map.from(initialTables)
   private val results = mutable.Map.from(initialResults)
+  // Catalog → realm mapping (per the template's resolver contract).
+  private val realms = mutable.Map.from(initialRealms)
 
   // Recorded calls — for assertion in tests.
   val executedQueries: mutable.ListBuffer[(String, String, Int)] = mutable.ListBuffer.empty
@@ -117,7 +120,13 @@ final class FakeMyPlatformClient(
   }
 
   override def resolveRealmId(catalogName: String): Option[String] = {
-    if (catalogName.isEmpty) None else Some(catalogName)
+    if (catalogName.isEmpty) None else realms.get(catalogName)
+  }
+
+  // Mutable: register a catalog → realm mapping. Returns `this` for fluent chaining.
+  def addRealm(catalog: String, realm: String): FakeMyPlatformClient = {
+    realms += (catalog -> realm)
+    this
   }
 
   // -- inspection helpers --
@@ -147,4 +156,8 @@ object FakeMyPlatformClient {
       sql:    String,
       result: MyPlatformResult,
   ): FakeMyPlatformClient = new FakeMyPlatformClient(initialResults = Map(sql -> result))
+
+  /** Build a fake with the given catalog → realm mappings. */
+  def withRealms(realms: (String, String)*): FakeMyPlatformClient =
+    new FakeMyPlatformClient(initialRealms = realms.toMap)
 }

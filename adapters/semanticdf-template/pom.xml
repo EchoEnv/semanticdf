@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  semanticdf-myname — template adapter for the semanticdf library.
+  semanticdf-template — template adapter for the semanticdf library.
 
   Generated from templates/example-adapter/. Copy this directory,
   rename MyPlatform → MyName everywhere, and register the new module
@@ -35,7 +35,7 @@
     <relativePath>../../pom.xml</relativePath>
   </parent>
 
-  <artifactId>semanticdf-myname_${scala.binary.version}</artifactId>
+  <artifactId>semanticdf-template_${scala.binary.version}</artifactId>
   <packaging>jar</packaging>
 
   <dependencies>

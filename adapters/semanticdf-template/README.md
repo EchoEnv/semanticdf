@@ -1,8 +1,12 @@
 # semanticdf-myname — Template adapter skeleton
 
-**This is a working skeleton** for adding a new engine / source-resolver /
-catalog adapter to the semanticdf library. See
-[`docs/agents/adding-a-new-adapter.md`](../../docs/agents/adding-a-new-adapter.md)
+> **Dev-zone content.** This module is the canonical skeleton for adding
+> a new engine / source-resolver / catalog adapter to the semanticdf
+> library. It lives in `adapters/` (parallel to the 6 real adapter
+> modules) so the build verifies the template still compiles against the
+> current `Engine` / `SourceResolver` / `CatalogAdapter` contracts.
+
+See [`docs/agents/adding-a-new-adapter.md`](../../docs/agents/adding-a-new-adapter.md)
 for the full guide.
 
 ## What's in this skeleton
@@ -37,6 +41,8 @@ sed -i 's|package io.semanticdf.myplatform|package io.semanticdf.myname|g' $(fin
 
 # 4. Register the module in parent pom.xml
 echo '<module>adapters/semanticdf-myname</module>' >> ../../pom.xml
+#    (The template at adapters/semanticdf-template/ is already registered;
+#     you only need to register your new copy.)
 
 # 5. Implement the JSON parsing in HttpMyPlatformClient
 #    (the template has TODO stubs that return placeholders)

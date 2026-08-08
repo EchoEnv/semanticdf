@@ -33,8 +33,11 @@ class MyPlatformSourceResolverSpec extends AnyFunSuite with Matchers {
   }
 
   test("resolve(ByName) returns Scan with the table's columns when the table exists") {
-    val fake = FakeMyPlatformClient.withTables(
-      ("orders", "myplatform_realm", 1L),
+    val fake = new FakeMyPlatformClient(
+      initialTables = Map(
+        "myplatform_realm:orders" -> MyPlatformTableMeta("orders", "myplatform_realm", 1L, active = true),
+      ),
+      initialRealms = Map("myplatform_realm" -> "myplatform_realm"),
     )
     val resolver = MyPlatformSourceResolver(fake)
 
@@ -55,7 +58,10 @@ class MyPlatformSourceResolverSpec extends AnyFunSuite with Matchers {
   // -- not-found --
 
   test("resolve(ByName) returns NotFound when the table doesn't exist") {
-    val resolver = MyPlatformSourceResolver(FakeMyPlatformClient.empty)
+    val fake = new FakeMyPlatformClient(
+      initialRealms = Map("myplatform_realm" -> "myplatform_realm"),
+    )
+    val resolver = MyPlatformSourceResolver(fake)
 
     val source = SourceRef.ByName(
       catalog   = Some("myplatform_realm"),

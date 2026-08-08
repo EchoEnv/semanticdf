@@ -7,7 +7,7 @@ adapter (`CatalogAdapter`) to the semanticdf library.
 **The TL;DR:**
 
 1. Create a new module under `adapters/semanticdf-<name>/` (copy the
-   [`templates/example-adapter/`](../templates/example-adapter/) skeleton).
+   [`adapters/semanticdf-template/`](../adapters/semanticdf-template/) skeleton).
 2. Add `extends Engine[Any]` + `extends SourceResolver` + `extends CatalogAdapter`
    for whichever ports you need. **Additive** — you never have to
    implement all three.
@@ -60,7 +60,7 @@ catalog adapter test.
 
 ## Step 1: Copy the skeleton
 
-The [`templates/example-adapter/`](../templates/example-adapter/) directory
+The [`adapters/semanticdf-template/`](../adapters/semanticdf-template/) directory
 contains a working skeleton for a fictional `MyPlatform` adapter. It
 includes:
 
@@ -77,7 +77,7 @@ includes:
 Copy the directory:
 
 ```bash
-cp -r templates/example-adapter/ adapters/semanticdf-myname/
+cp -r adapters/semanticdf-template/ adapters/semanticdf-myname/
 cd adapters/semanticdf-myname/
 # Then sed-rename MyPlatform → MyName everywhere
 find . -type f -name "*.scala" -exec sed -i 's/MyPlatform/MyName/g' {} +
@@ -413,7 +413,7 @@ mirror `semanticdf-duckdb`.
   architectural design doc
 - [`v0.3.1-feature-parity-backlog.md`](../design/v0.3.1-feature-parity-backlog.md) —
   historical context on why these patterns were chosen
-- The [`templates/example-adapter/`](../templates/example-adapter/) skeleton
+- The [`adapters/semanticdf-template/`](../adapters/semanticdf-template/) skeleton
 - The `scala-data-driven-refactor` skill — read it once before writing
   any ADT
 
