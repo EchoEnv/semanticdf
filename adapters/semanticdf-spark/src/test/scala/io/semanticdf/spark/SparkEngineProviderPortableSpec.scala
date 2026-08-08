@@ -146,10 +146,12 @@ class SparkEngineProviderPortableSpec
     val provider = makeProvider
     val request = MCPQueryRequest("orders", Nil, Nil, None)
     val result = provider.query(broken, request, EngineContext.defaultContext)
-    // Spark throws AnalysisException at execution; the portable
-    // path catches it at the boundary and returns Left
-    // (ConnectionFailed with the underlying exception class + msg).
-    result.isLeft shouldBe true
+    // Per `docs/design/error-handling-style.md` ("catch-all cleanup"
+    // section): Spark's `AnalysisException` for query runtime issues
+    // (unknown column, unresolved expr) maps to `QueryRuntimeFailed`,
+    // NOT `ConnectionFailed`. This is the regression guard for
+    // the catch-all refinement done in PR #418.
+    result.swap.toOption.get shouldBe a [EngineError.QueryRuntimeFailed]
   }
 
   // -- serialization regression: verify the SparkEngineProvider

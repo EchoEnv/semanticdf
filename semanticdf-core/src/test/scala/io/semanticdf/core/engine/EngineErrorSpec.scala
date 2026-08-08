@@ -85,7 +85,7 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
 
   // -- sealed exhaustiveness + Product with Serializable --
 
-  test("Sealed exhaustiveness: pattern-match over all 11 cases") {
+  test("Sealed exhaustiveness: pattern-match over all 12 cases") {
     val examples: Seq[EngineError] = Seq(
       EngineError.UnsupportedCapability("a", "b"),
       EngineError.IncompatibleExprShape("a", "b"),
@@ -93,6 +93,7 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
       EngineError.FeatureDeferred("a", "b"),
       EngineError.CancellationFailed("a"),
       EngineError.ConnectionFailed("a"),
+      EngineError.QueryRuntimeFailed("a"),
       EngineError.QueryTimedOut("a"),
       EngineError.AuditSinkUnavailable("a"),
       EngineError.ProviderInvocationFailed("a", "b"),
@@ -107,6 +108,7 @@ class EngineErrorSpec extends AnyFunSuite with Matchers {
       case EngineError.FeatureDeferred(_, _)            => ()
       case EngineError.CancellationFailed(_)            => ()
       case EngineError.ConnectionFailed(_)              => ()
+      case EngineError.QueryRuntimeFailed(_)            => ()
       case EngineError.QueryTimedOut(_)                 => ()
       case EngineError.AuditSinkUnavailable(_)         => ()
       case EngineError.ProviderInvocationFailed(_, _)  => ()

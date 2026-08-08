@@ -96,6 +96,17 @@ class EngineErrorToErrorDetailSpec extends AnyFunSuite with Matchers {
     detail.details("reason") shouldBe "ECONNREFUSED 10.0.0.1:8080"
   }
 
+  // -- QueryRuntimeFailed --
+
+  test("QueryRuntimeFailed maps to QUERY_RUNTIME_FAILED") {
+    val detail = EngineError.QueryRuntimeFailed(
+      reason = "AnalysisException: column 'foo' not found",
+    ).toErrorDetail
+    detail.code shouldBe "QUERY_RUNTIME_FAILED"
+    detail.message should include ("column 'foo' not found")
+    detail.details("reason") should include ("column 'foo' not found")
+  }
+
   // -- QueryTimedOut --
 
   test("QueryTimedOut maps to QUERY_TIMED_OUT") {
