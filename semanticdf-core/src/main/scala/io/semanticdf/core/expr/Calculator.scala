@@ -70,6 +70,7 @@ object Calculator {
     case Expr.Literal(_, _)                   => Set.empty
     case Expr.FieldRef(name)                   => Set(name)
     case Expr.MeasureRef(name)                => Set.empty
+    case Expr.All(name)                       => Set.empty  // All references a measure, not a field (PR #419 fix)
     case Expr.Add(left, right)                 => fieldNamesOf(left) ++ fieldNamesOf(right)
     case Expr.Subtract(left, right)            => fieldNamesOf(left) ++ fieldNamesOf(right)
     case Expr.Multiply(left, right)            => fieldNamesOf(left) ++ fieldNamesOf(right)
