@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-postgresql — PostgreSQL adapter for the semanticdf library.
+
+  First JDBC warehouse adapter. Implements the engine-portable
+  contract against PostgreSQL via the standard JDBC API.
+
+  ==Scope (v1)==
+
+  - SELECT queries via Engine.compile + executePortable
+  - DatabaseMetaData.getColumns for source resolution
+  - CREATE TABLE / DROP TABLE for catalog publish
+  - CAS via PostgreSQL's `xmin` system column (transaction ID)
+
+  ==Scope (deferred to v0.4.0+)==
+
+  - INSERT / UPDATE / DELETE (mutation) — out of engine-portable scope
+  - COPY FROM (PG-specific bulk import) — not portable
+  - LISTEN / NOTIFY (pub-sub) — out of scope
+  - Streaming cursors — separate StreamingSupport trait, not in core yet
+
+  ==Why a separate module==
+
+  Per the multi-engine design §4.6 ("catalog/engine layer separation"),
+  each engine adapter is its own module. PostgreSQL is the first
+  true JDBC warehouse adapter (vs. Spark's JDBC-via-DataFrame or
+  Trino's REST+JDBC).
+
+  ==Test strategy==
+
+  - Unit tests: H2 in PostgreSQL compatibility mode (no Docker needed)
+  - Integration tests: Testcontainers (Docker required, runs in CI)
+  - Both: the FakePostgreSqlClient (hand-driven test fixture)
+
+  ==Boundary contract==
+
+  Zero Spark imports. Verifiable by:
+  `grep -r 'org.apache.spark' adapters/semanticdf-postgresql/src/main/scala/`
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.3.0</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-postgresql_${scala.binary.version}</artifactId>
+  <packaging>jar</packaging>
+
+  <dependencies>
+    <!-- Engine-portable ADTs -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_${scala.binary.version}</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- PostgreSQL JDBC driver -->
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <version>42.7.3</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+
+    <!-- H2 in PostgreSQL compatibility mode for unit tests (no Docker needed) -->
+    <dependency>
+      <groupId>com.h2database</groupId>
+      <artifactId>h2</artifactId>
+      <version>2.2.224</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
