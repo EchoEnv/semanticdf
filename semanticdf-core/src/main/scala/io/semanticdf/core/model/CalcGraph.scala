@@ -124,6 +124,7 @@ private[model] object CalcGraph {
       case Expr.IsNotNull(expr)             => go(expr, acc)
       case Expr.Cast(expr, _)               => go(expr, acc)
       case Expr.FunctionCall(_, args)       => args.foldLeft(acc)((a, arg) => go(arg, a))
+      case Expr.All(name)                   => acc + name
     }
     go(e, Set.empty)
   }

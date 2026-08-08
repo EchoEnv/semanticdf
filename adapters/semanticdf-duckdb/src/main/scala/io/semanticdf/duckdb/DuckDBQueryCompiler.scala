@@ -261,6 +261,14 @@ class DuckDBQueryCompiler {
     case Expr.And(l, r)             => s"(${renderExpr(l, params)} AND ${renderExpr(r, params)})"
     case Expr.Or(l, r)              => s"(${renderExpr(l, params)} OR ${renderExpr(r, params)})"
     case Expr.Not(e)                => s"NOT (${renderExpr(e, params)})"
+    case Expr.All(measureName) =>
+      // v0.3.1: portable Expr.All lowerer is implemented in the
+      // Spark adapter (window-injection before groupBy+agg). The SQL
+      // engines (Trino, DuckDB) defer this to a follow-up PR per
+      // `docs/design/v0.3.1-feature-parity-backlog.md` Gap 2's plan.
+      throw new UnsupportedOperationException(
+        s"DuckDBQueryCompiler.renderExpr: Expr.All('$measureName') is not supported in v0.3.1 (deferred to a follow-up PR; see Gap 2)."
+      )
     case other                      => s"-- unsupported expr: ${other.getClass.getSimpleName}"
   }
 

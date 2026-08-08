@@ -6,7 +6,8 @@ import org.scalatest.matchers.should.Matchers
 import io.semanticdf.core.schema.{Field, SealedDataType}
 
 /** Phase 2 contract: prove `Expr` is a usable, Spark-free data
-  * record + the closed 18-variant enumeration. Per scala-data-
+  * record + the closed 21-variant enumeration (added `Expr.All`
+  * in v0.3.1 per the Gap 2 feature-parity backlog). Per scala-data-
   * driven-refactor, this is pure data: the EXPRESSION SHAPE is
   * engine-portable; the engine-specific compile (Spark's
   * `Expr.eval`, Trino's compile, Databricks' value) is behavior
@@ -174,5 +175,25 @@ class ExprSpec extends AnyFunSuite with Matchers {
     val ois = new java.io.ObjectInputStream(bis)
     val restored = ois.readObject().asInstanceOf[Expr]
     restored shouldBe e
+  }
+
+  // -- Percent-of-total (Gap 2 closure) --
+
+  test("All carries the measure name (percent-of-total / t.all form)") {
+    Expr.All("total_amount").measureName shouldBe "total_amount"
+  }
+
+  test("Expr.All within a Divide tree round-trips through Java serialization") {
+    val pct = Expr.Divide(
+      Expr.FieldRef("amount"),
+      Expr.All("total_amount"),
+    )
+    val bos = new java.io.ByteArrayOutputStream()
+    val oos = new java.io.ObjectOutputStream(bos)
+    oos.writeObject(pct)
+    oos.close()
+    val bis = new java.io.ByteArrayInputStream(bos.toByteArray)
+    val ois = new java.io.ObjectInputStream(bis)
+    ois.readObject().asInstanceOf[Expr] shouldBe pct
   }
 }

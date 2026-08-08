@@ -598,6 +598,15 @@ class TrinoQueryCompiler {
     // Cast (target type is engine-portable; render as Trino type name)
     case Expr.Cast(inner, targetType) => s"CAST(${renderExpr(inner, params)} AS ${renderType(targetType)})"
 
+    // v0.3.1: portable Expr.All lowerer is implemented in the
+    // Spark adapter (window-injection before groupBy+agg). The SQL
+    // engines (Trino, DuckDB) defer this to a follow-up PR per
+    // `docs/design/v0.3.1-feature-parity-backlog.md` Gap 2's plan.
+    case Expr.All(measureName) =>
+      throw new UnsupportedOperationException(
+        s"TrinoQueryCompiler.renderExpr: Expr.All('$measureName') is not supported in v0.3.1 (deferred to a follow-up PR; see Gap 2)."
+      )
+
     // Function call
     case Expr.FunctionCall(name, args) =>
       s"${quoteName(name)}(${args.map(a => renderExpr(a, params)).mkString(", ")})"

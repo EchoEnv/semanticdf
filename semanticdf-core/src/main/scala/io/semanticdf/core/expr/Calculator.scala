@@ -127,5 +127,6 @@ object Calculator {
     case Expr.IsNotNull(expr)                  => measureNamesOf(expr)
     case Expr.Cast(expr, _)                    => measureNamesOf(expr)
     case Expr.FunctionCall(_, args)            => args.flatMap(measureNamesOf).toSet
+    case Expr.All(name)                        => Set(name)
   }
 }
