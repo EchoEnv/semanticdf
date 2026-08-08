@@ -57,6 +57,198 @@ final class HttpUnityCatalogClient(
     .connectTimeout(Duration.ofSeconds(10))
     .build()
 
+  // -- publish-side methods (v0.3.1 Gap 7 closure) --
+
+  override def createTable(
+      catalog:    String,
+      schema:     String,
+      table:      String,
+      properties: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit] = {
+    // UC REST: POST /api/{ver}/unity-catalog/tables
+    // Body: { name, catalog_name, schema_name, table_type: "EXTERNAL",
+    //         columns: [...], properties: {...} }
+    // We create a minimal "marker" table with a single dummy column
+    // (UC requires at least one column). The manifest content lives
+    // in `properties`, not in the column data.
+    val url = s"$baseUrl/api/$apiVersion/unity-catalog/tables"
+    val body = buildCreateTableJson(catalog, schema, table, properties)
+    val req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .header("Content-Type", "application/json")
+      .header("Accept", "application/json")
+      .POST(HttpRequest.BodyPublishers.ofString(body))
+      .build()
+    try {
+      val resp = http.send(req, HttpResponse.BodyHandlers.ofString())
+      resp.statusCode() match {
+        case 200 | 201 =>
+          // UC returns 200 on update or 201 on create; both succeed.
+          // If the table already exists, UC returns 409 — caller
+          // distinguishes via a follow-up describeTable.
+          Right(())
+        case 409 =>
+          // Already exists — caller should detect via describeTable
+          // and report Conflict for CreateOnly mode.
+          Right(())
+        case 401 | 403 =>
+          Left(io.semanticdf.core.catalog.CatalogError.Unauthorized(
+            reason = s"UC rejected table creation: HTTP ${resp.statusCode()}",
+          ))
+        case 400 =>
+          Left(io.semanticdf.core.catalog.CatalogError.MalformedManifest(
+            reason = s"UC rejected table creation: ${resp.body().take(200)}",
+          ))
+        case _ =>
+          Left(io.semanticdf.core.catalog.CatalogError.Network(
+            reason = s"UC create_table failed: HTTP ${resp.statusCode()}",
+          ))
+      }
+    } catch {
+      case _: java.io.IOException   => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC create_table: network error"))
+      case _: InterruptedException  => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC create_table: timeout"))
+    }
+  }
+
+  override def updateTableProperties(
+      catalog:    String,
+      schema:     String,
+      table:      String,
+      properties: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit] = {
+    // UC REST: PATCH /api/{ver}/unity-catalog/tables/{full_name}
+    // Body: { properties: {...} } — merges the new properties
+    // onto existing table metadata.
+    val url = s"$baseUrl/api/$apiVersion/unity-catalog/tables/$catalog.$schema.$table"
+    val body = buildUpdatePropertiesJson(properties)
+    val req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .header("Content-Type", "application/json")
+      .header("Accept", "application/json")
+      .method("PATCH", HttpRequest.BodyPublishers.ofString(body))
+      .build()
+    try {
+      val resp = http.send(req, HttpResponse.BodyHandlers.ofString())
+      resp.statusCode() match {
+        case 200 =>
+          Right(())
+        case 404 =>
+          Left(io.semanticdf.core.catalog.CatalogError.Conflict(
+            reason = s"table $catalog.$schema.$table does not exist",
+          ))
+        case 401 | 403 =>
+          Left(io.semanticdf.core.catalog.CatalogError.Unauthorized(
+            reason = s"UC rejected table update: HTTP ${resp.statusCode()}",
+          ))
+        case _ =>
+          Left(io.semanticdf.core.catalog.CatalogError.Network(
+            reason = s"UC update_table_properties failed: HTTP ${resp.statusCode()}",
+          ))
+      }
+    } catch {
+      case _: java.io.IOException   => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC update_table_properties: network error"))
+      case _: InterruptedException  => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC update_table_properties: timeout"))
+    }
+  }
+
+  override def getTableProperties(
+      catalog: String,
+      schema:  String,
+      table:   String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, Option[Map[String, String]]] = {
+    describeTable(catalog, schema, table) match {
+      case Some(_) =>
+        // Re-fetch the full table info to extract properties.
+        // For now, return the describe response — properties
+        // extraction happens via parseTableInfo's extended
+        // sibling method `parseTableProperties` (added below).
+        val url = s"$baseUrl/api/$apiVersion/unity-catalog/tables/$catalog.$schema.$table"
+        val req = HttpRequest.newBuilder()
+          .uri(URI.create(url))
+          .timeout(Duration.ofSeconds(10))
+          .header("Accept", "application/json")
+          .GET()
+          .build()
+        try {
+          val resp = http.send(req, HttpResponse.BodyHandlers.ofString())
+          if (resp.statusCode() == 200) {
+            Right(Some(HttpUnityCatalogClient.parseTableProperties(resp.body())))
+          } else Right(None)
+        } catch {
+          case _: java.io.IOException | _: InterruptedException => Right(None)
+        }
+      case None => Right(None)
+    }
+  }
+
+  override def listTables(
+      catalog: String,
+      schema:  String,
+      prefix:  String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, List[String]] = {
+    // UC REST: GET /api/{ver}/unity-catalog/tables?catalog_name=...&schema_name=...
+    val url = s"$baseUrl/api/$apiVersion/unity-catalog/tables" +
+              s"?catalog_name=$catalog&schema_name=$schema"
+    val req = HttpRequest.newBuilder()
+      .uri(URI.create(url))
+      .timeout(Duration.ofSeconds(10))
+      .header("Accept", "application/json")
+      .GET()
+      .build()
+    try {
+      val resp = http.send(req, HttpResponse.BodyHandlers.ofString())
+      if (resp.statusCode() == 200) {
+        val names = HttpUnityCatalogClient.parseTableNames(resp.body())
+        Right(if (prefix.isEmpty) names else names.filter(_.startsWith(prefix)))
+      } else {
+        Left(io.semanticdf.core.catalog.CatalogError.Network(
+          reason = s"UC list_tables failed: HTTP ${resp.statusCode()}",
+        ))
+      }
+    } catch {
+      case _: java.io.IOException   => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC list_tables: network error"))
+      case _: InterruptedException  => Left(io.semanticdf.core.catalog.CatalogError.Network(reason = "UC list_tables: timeout"))
+    }
+  }
+
+  /** Hand-rolled JSON for `POST /tables`. Minimal schema to satisfy
+    * UC's "at least one column" requirement. The manifest content
+    * lives in `properties`, not in the columns. */
+  private def buildCreateTableJson(
+      catalog: String,
+      schema:  String,
+      table:   String,
+      properties: Map[String, String],
+  ): String = {
+    val propsJson = properties.map { case (k, v) =>
+      s""""$k":"${escapeJson(v)}""""
+    }.mkString(",")
+    s"""{"name":"$table","catalog_name":"$catalog","schema_name":"$schema",""" +
+      s""""table_type":"EXTERNAL","columns":[{"name":"_marker","type_name":"STRING","nullable":true}],""" +
+      s""""properties":{$propsJson}}"""
+  }
+
+  /** Hand-rolled JSON for `PATCH /tables/{full_name}` (properties merge). */
+  private def buildUpdatePropertiesJson(properties: Map[String, String]): String = {
+    val propsJson = properties.map { case (k, v) =>
+      s""""$k":"${escapeJson(v)}""""
+    }.mkString(",")
+    s"""{"properties":{$propsJson}}"""
+  }
+
+  /** Escape a string for inclusion in a JSON value. */
+  private def escapeJson(s: String): String =
+    s.flatMap {
+      case '"'  => "\\\""
+      case '\\' => "\\\\"
+      case '\n' => "\\n"
+      case '\r' => "\\r"
+      case '\t' => "\\t"
+      case c    => c.toString
+    }
+
   override def describeTable(
       catalog: String,
       schema:  String,
@@ -227,6 +419,57 @@ object HttpUnityCatalogClient {
     val q2 = obj.indexOf('"', q1 + 1)
     if (q2 < 0) return None
     Some(obj.substring(q1 + 1, q2))
+  }
+
+  /** Parse the `properties` map from a UC table-info response.
+    * Returns empty Map if `properties` is missing or malformed. */
+  private[unitycatalog] def parseTableProperties(json: String): Map[String, String] = {
+    val propsStart = json.indexOf("\"properties\"")
+    if (propsStart < 0) return Map.empty
+    val objStart = json.indexOf('{', propsStart)
+    if (objStart < 0) return Map.empty
+    val objEnd = findMatchingBracket(json, objStart)
+    if (objEnd < 0) return Map.empty
+    val objText = json.substring(objStart + 1, objEnd)
+    extractStringPairs(objText)
+  }
+
+  /** Parse the list of table names from a UC `GET /tables` response. */
+  private[unitycatalog] def parseTableNames(json: String): List[String] = {
+    val arrStart = json.indexOf("\"tables\"")
+    if (arrStart < 0) return Nil
+    val arrayStart = json.indexOf('[', arrStart)
+    if (arrayStart < 0) return Nil
+    val arrayEnd = findMatchingBracket(json, arrayStart)
+    if (arrayEnd < 0) return Nil
+    val arrayText = json.substring(arrayStart + 1, arrayEnd)
+    splitTopLevelObjects(arrayText).flatMap { obj =>
+      extractStringField(obj, "name")
+    }
+  }
+
+  /** Extract all `"key":"value"` string pairs from a JSON object text. */
+  private def extractStringPairs(objText: String): Map[String, String] = {
+    val out = scala.collection.mutable.LinkedHashMap.empty[String, String]
+    val len = objText.length
+    var i = 0
+    while (i < len) {
+      val q1 = objText.indexOf('"', i)
+      if (q1 < 0) return out.toMap
+      val q2 = objText.indexOf('"', q1 + 1)
+      if (q2 < 0) return out.toMap
+      val key = objText.substring(q1 + 1, q2)
+      val colon = objText.indexOf(':', q2 + 1)
+      if (colon < 0) return out.toMap
+      val vq1 = objText.indexOf('"', colon + 1)
+      if (vq1 < 0) return out.toMap
+      val vq2 = objText.indexOf('"', vq1 + 1)
+      if (vq2 < 0) return out.toMap
+      val value = objText.substring(vq1 + 1, vq2)
+      out += (key -> value)
+      i = vq2 + 1
+    }
+    out.toMap
   }
 
   private def extractBooleanField(obj: String, field: String): Option[Boolean] = {

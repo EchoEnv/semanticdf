@@ -68,6 +68,63 @@ trait UnityCatalogClient extends Serializable {
       schema:  String,
       table:   String,
   ): Option[UcTableSchema]
+
+  /** Create a table in UC with the given properties.
+    *
+    * v0.3.1 (Gap 7 closure): publish-side method for
+    * [[UnityCatalogCatalogAdapter]]. The manifest's metadata
+    * is stored in the UC table's `properties` map (the only
+    * mutable metadata UC exposes for application use):
+    *
+    *   - `semanticdf_kind`    : "model" | "rollup" | "extension_blob"
+    *   - `semanticdf_version` : the entity version (Int, stringified)
+    *   - `semanticdf_digest`  : the entity digest
+    *
+    * @return `Right(())` on success, `Left(CatalogError.Unauthorized)`
+    *         on permission failure, `Left(CatalogError.Network)` on
+    *         transport failure, `Left(CatalogError.MalformedManifest)`
+    *         on schema validation failure */
+  def createTable(
+      catalog:    String,
+      schema:     String,
+      table:      String,
+      properties: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit]
+
+  /** Update a table's properties in UC (used for atomic CAS —
+    * overwriting the `semanticdf_*` keys is the commit step).
+    *
+    * @return `Right(())` on success, `Left(CatalogError.Conflict)`
+    *         if the table doesn't exist, `Left(CatalogError.Network)`
+    *         on transport failure */
+  def updateTableProperties(
+      catalog:    String,
+      schema:     String,
+      table:      String,
+      properties: Map[String, String],
+  ): Either[io.semanticdf.core.catalog.CatalogError, Unit]
+
+  /** Get a table's current properties. Returns `None` if the table
+    * doesn't exist.
+    *
+    * Used by [[UnityCatalogCatalogAdapter]] to read the current
+    * `semanticdf_digest` for CAS verification. */
+  def getTableProperties(
+      catalog: String,
+      schema:  String,
+      table:   String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, Option[Map[String, String]]]
+
+  /** List tables in a schema, optionally filtered by a name prefix.
+    * Returns `Right(Nil)` if the schema is empty or doesn't exist.
+    *
+    * Used by [[UnityCatalogCatalogAdapter]] to implement the
+    * `list(filter)` method. */
+  def listTables(
+      catalog: String,
+      schema:  String,
+      prefix:  String,
+  ): Either[io.semanticdf.core.catalog.CatalogError, List[String]]
 }
 
 /** Engine-portable description of a table returned by
