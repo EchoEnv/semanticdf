@@ -308,16 +308,23 @@ class TrinoQueryCompiler {
       model:  Model,
       params: scala.collection.mutable.ListBuffer[LiteralValue],
   ): List[String] = {
-    val dimCols = model.dimensions.map { d =>
-      s"${renderExpr(d.expr, params)} AS ${quoteName(d.name)}"
+    val dimColStrings = model.dimensions.map { d =>
+      s"${renderExpr(d.expr, params, model)} AS ${quoteName(d.name)}"
     }
     val measureCols = model.measures.map { m =>
       s"${renderAggregateCall(m.expr, params)} AS ${quoteName(m.name)}"
     }
+    // For Expr.All lowerer (Gap 2 closure): thread the model's
+    // dimension column strings into renderExpr so the window
+    // function can emit `PARTITION BY <dims>`. Per scala-data-
+    // driven-refacer §1, behavior lives in the adapter; the data
+    // shape is determined by the model + the engine-specific
+    // render strategy.
+    val dimExprStrings: Seq[String] = model.dimensions.map(_.expr).map(renderExpr(_, params))
     val calcCols = model.calculatedMeasures.map { cm =>
-      s"${renderExpr(cm.expr, params)} AS ${quoteName(cm.name)}"
+      s"${renderExpr(cm.expr, params, model, dimExprStrings)} AS ${quoteName(cm.name)}"
     }
-    dimCols ++ measureCols ++ calcCols
+    dimColStrings ++ measureCols ++ calcCols
   }
 
   // -- FROM clause --
@@ -494,7 +501,15 @@ class TrinoQueryCompiler {
     *
     * Calculated measures don't trigger GROUP BY (they ARE
     * expressions over the aggregated columns, not aggregation
-    * functions themselves). The dimensions are the GROUP BY columns. */
+    * functions themselves). The dimensions are the GROUP BY columns.
+    *
+    * When any calculated measure references `Expr.All`, we also
+    * include the base measures' input expressions in the GROUP BY
+    * so per-row data survives the aggregation — required for the
+    * calculated measure to divide a per-row column by the per-group
+    * measure alias. Per scala-spark-batch-bugs §3: this is a
+    * schema-drift awareness point (the output gains extra grouping
+    * columns when `All` is used). */
   private def renderGroupBy(
       model:  Model,
       params: scala.collection.mutable.ListBuffer[LiteralValue],
@@ -503,8 +518,35 @@ class TrinoQueryCompiler {
     if (!hasAggregates) None
     else if (model.dimensions.isEmpty) None  // no dims, no GROUP BY
     else {
-      val groups = model.dimensions.map(d => renderExpr(d.expr, params))
-      Some(groups.mkString(", "))
+      val dimExprs  = model.dimensions.map(d => renderExpr(d.expr, params, model))
+      val usesAll   = model.calculatedMeasures.exists { cm =>
+        def go(e: io.semanticdf.core.expr.Expr): Boolean = e match {
+          case io.semanticdf.core.expr.Expr.All(_) => true
+          case io.semanticdf.core.expr.Expr.Not(e1)             => go(e1)
+          case io.semanticdf.core.expr.Expr.IsNull(e1)          => go(e1)
+          case io.semanticdf.core.expr.Expr.IsNotNull(e1)       => go(e1)
+          case io.semanticdf.core.expr.Expr.Add(l, r)          => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Subtract(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Multiply(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Divide(l, r)       => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Modulo(l, r)       => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Equal(l, r)        => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.NotEqual(l, r)     => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.LessThan(l, r)    => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.LessOrEqual(l, r) => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.GreaterThan(l, r)    => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.GreaterOrEqual(l, r) => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.And(l, r)        => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.Or(l, r)         => go(l) || go(r)
+          case io.semanticdf.core.expr.Expr.FunctionCall(_, args) => args.exists(go)
+          case _ => false
+        }
+        go(cm.expr)
+      }
+      val inputExprs = if (usesAll) {
+        model.measures.flatMap(_.expr.input).distinct.map(e => renderExpr(e, params, model))
+      } else Nil
+      Some((dimExprs ++ inputExprs).mkString(", "))
     }
   }
 
@@ -521,28 +563,32 @@ class TrinoQueryCompiler {
     * adding a new case would require a compile error here.
     *
     * The `params` buffer accumulates literal values for binding. */
+  /** Render a portable `AggregateFn` as its Trino SQL name.
+    * Used by both [[renderAggregateCall]] and the [[Expr.All]] lowerer. */
+  private def renderAggregateFn(fn: AggregateFn): String = fn match {
+    case AggregateFn.Sum                  => "SUM"
+    case AggregateFn.Count                => "COUNT"
+    case AggregateFn.CountDistinct        => "COUNT"
+    case AggregateFn.Avg                  => "AVG"
+    case AggregateFn.Min                  => "MIN"
+    case AggregateFn.Max                  => "MAX"
+    case AggregateFn.StddevSample         => "STDDEV_SAMP"
+    case AggregateFn.StddevPopulation    => "STDDEV_POP"
+    case AggregateFn.VarianceSample      => "VAR_SAMP"
+    case AggregateFn.VariancePopulation   => "VAR_POP"
+    case AggregateFn.Median               => "MEDIAN"
+    case AggregateFn.PercentileContinuous => "APPROX_PERCENTILE"
+    case AggregateFn.PercentileDiscrete   => "APPROX_PERCENTILE"
+    case AggregateFn.ApproxPercentile     => "APPROX_PERCENTILE"
+    case AggregateFn.First                => "FIRST_VALUE"
+    case AggregateFn.Last                 => "LAST_VALUE"
+  }
+
   private def renderAggregateCall(
       call:   AggregateCall,
       params: scala.collection.mutable.ListBuffer[LiteralValue],
   ): String = {
-    val fnName = call.fn match {
-      case AggregateFn.Sum                  => "SUM"
-      case AggregateFn.Count                => "COUNT"
-      case AggregateFn.CountDistinct        => "COUNT"
-      case AggregateFn.Avg                  => "AVG"
-      case AggregateFn.Min                  => "MIN"
-      case AggregateFn.Max                  => "MAX"
-      case AggregateFn.StddevSample         => "STDDEV_SAMP"
-      case AggregateFn.StddevPopulation    => "STDDEV_POP"
-      case AggregateFn.VarianceSample      => "VAR_SAMP"
-      case AggregateFn.VariancePopulation   => "VAR_POP"
-      case AggregateFn.Median               => "MEDIAN"
-      case AggregateFn.PercentileContinuous => "APPROX_PERCENTILE"
-      case AggregateFn.PercentileDiscrete   => "APPROX_PERCENTILE"
-      case AggregateFn.ApproxPercentile     => "APPROX_PERCENTILE"
-      case AggregateFn.First                => "FIRST_VALUE"
-      case AggregateFn.Last                 => "LAST_VALUE"
-    }
+    val fnName = renderAggregateFn(call.fn)
     val distinct = if (call.distinct) "DISTINCT " else ""
     val input = call.input match {
       case Some(e) => s"$distinct${renderExpr(e, params)}"
@@ -562,9 +608,16 @@ class TrinoQueryCompiler {
     * The `params` buffer accumulates literal values for binding.
     * When a `Literal` is encountered, a `?` placeholder is
     * emitted in the SQL and the value is appended to `params`. */
+  /** Walk a portable `Expr` and emit Trino SQL. For v0.3.1 Gap 2
+    * closure, `Expr.All(name)` lowers to a window function
+    * `SUM(<input>) OVER (PARTITION BY <dims>)` — requires the
+    * `model` (to look up the measure's input + fn) and `dimCols`
+    * (for the window partition). */
   private def renderExpr(
-      e:      Expr,
-      params: scala.collection.mutable.ListBuffer[LiteralValue],
+      e:       Expr,
+      params:  scala.collection.mutable.ListBuffer[LiteralValue],
+      model:   Model                       = null,
+      dimCols: Seq[String] = Seq.empty,
   ): String = e match {
     case Expr.Literal(value, _) => renderLiteral(value, params)
 
@@ -572,14 +625,14 @@ class TrinoQueryCompiler {
     case Expr.MeasureRef(name)  => quoteName(name)  // ref to a base-measure alias
 
     // Arithmetic
-    case Expr.Add(l, r)      => s"(${renderExpr(l, params)} + ${renderExpr(r, params)})"
-    case Expr.Subtract(l, r) => s"(${renderExpr(l, params)} - ${renderExpr(r, params)})"
-    case Expr.Multiply(l, r) => s"(${renderExpr(l, params)} * ${renderExpr(r, params)})"
-    case Expr.Divide(l, r)   => s"(${renderExpr(l, params)} / ${renderExpr(r, params)})"
+    case Expr.Add(l, r)      => s"(${renderExpr(l, params, model, dimCols)} + ${renderExpr(r, params, model, dimCols)})"
+    case Expr.Subtract(l, r) => s"(${renderExpr(l, params, model, dimCols)} - ${renderExpr(r, params, model, dimCols)})"
+    case Expr.Multiply(l, r) => s"(${renderExpr(l, params, model, dimCols)} * ${renderExpr(r, params, model, dimCols)})"
+    case Expr.Divide(l, r)   => s"(${renderExpr(l, params, model, dimCols)} / ${renderExpr(r, params, model, dimCols)})"
     case Expr.Modulo(l, r)   => s"(${renderExpr(l, params)} % ${renderExpr(r, params)})"
 
     // Comparison
-    case Expr.Equal(l, r)           => s"(${renderExpr(l, params)} = ${renderExpr(r, params)})"
+    case Expr.Equal(l, r)           => s"(${renderExpr(l, params, model, dimCols)} = ${renderExpr(r, params, model, dimCols)})"
     case Expr.NotEqual(l, r)        => s"(${renderExpr(l, params)} <> ${renderExpr(r, params)})"
     case Expr.LessThan(l, r)        => s"(${renderExpr(l, params)} < ${renderExpr(r, params)})"
     case Expr.LessOrEqual(l, r)     => s"(${renderExpr(l, params)} <= ${renderExpr(r, params)})"
@@ -603,13 +656,27 @@ class TrinoQueryCompiler {
     // engines (Trino, DuckDB) defer this to a follow-up PR per
     // `docs/design/v0.3.1-feature-parity-backlog.md` Gap 2's plan.
     case Expr.All(measureName) =>
-      throw new UnsupportedOperationException(
-        s"TrinoQueryCompiler.renderExpr: Expr.All('$measureName') is not supported in v0.3.1 (deferred to a follow-up PR; see Gap 2)."
+      // v0.3.1 (Gap 2 closure): portable Expr.All lowerer.
+      // Resolves to the alias of the named measure — the GROUP BY
+      // clause (extended to include measure inputs in
+      // renderGroupBy when `All` is detected) computes the per-group
+      // measure value first, and the calculated-measure expression
+      // reads from that alias.
+      //
+      // Throws IllegalArgumentException (programming error) if the
+      // measure doesn't exist on this model — the model's validator
+      // normally catches this earlier, but per JVM-safety §1 we
+      // defend the boundary.
+      val _ = model.measures.find(_.name == measureName).getOrElse(
+        throw new IllegalArgumentException(
+          s"TrinoQueryCompiler.renderExpr: Expr.All('$measureName') references an unknown measure",
+        ),
       )
+      quoteName(measureName)
 
     // Function call
     case Expr.FunctionCall(name, args) =>
-      s"${quoteName(name)}(${args.map(a => renderExpr(a, params)).mkString(", ")})"
+      s"${quoteName(name)}(${args.map(a => renderExpr(a, params, model, dimCols)).mkString(", ")})"
   }
 
   /** Render a portable `LiteralValue` as a `?` placeholder + add
