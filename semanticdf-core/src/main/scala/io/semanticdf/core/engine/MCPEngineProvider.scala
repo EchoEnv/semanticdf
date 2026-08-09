@@ -86,7 +86,31 @@ trait MCPEngineProvider {
   * handler in `semanticdf-mcp` keeps its own filter logic on
   * the legacy path. A future PR aligns the predicate types
   * (per the design's "Predicate consolidation" plan in
-  * design §6.2). */
+  * design §6.2).
+  *
+  * ==Why v0.3.2 adds `where` (raw SQL)==
+  *
+  * The Platform's `QueryService` (PR #443's design doc) needs
+  * to pass a raw-SQL `where` from its wire DTO through the
+  * engine registry. v0.3.2 Phase 1 introduces this field as
+  * an engine-specific raw filter:
+  *
+  *   - Spark: applies via `df.filter(where)`.
+  *   - Other engines (Trino / DuckDB / PG / Hera / UC / HMS):
+  *     may convert raw SQL to their native syntax, apply as-is
+  *     if compatible, or return `EngineError.FeatureDeferred`
+  *     if they don't support the syntax. The field is
+  *     deliberately named `where` to match the platform's
+  *     wire DTO; it is NOT promoted to a fully-portable
+  *     typed `FilterSpec` yet (that's deferred to a follow-up
+  *     PR per the design doc).
+  *
+  * ==Semantic caveat==
+  *
+  * Adding raw SQL to an otherwise-typed request shape is a
+  * pragmatic compromise for Phase 1. The long-term shape
+  * (typed FilterSpec) is documented as future work in
+  * `docs/design/v0.3.2-platform-core-model-design.md` §6. */
 final case class MCPQueryRequest(
     model:      String,
     dimensions: Seq[String] = Seq.empty,
@@ -94,6 +118,13 @@ final case class MCPQueryRequest(
     limit:      Option[Long] = None,
     timeGrain:  Option[String] = None,
     timeRange:  Option[(String, String)] = None,
+    /** Raw SQL filter, applied after compile + before limit
+      * (matches the legacy `CacheBridge.executeQuery` order).
+      * `None` = no additional filter beyond the model's typed
+      * `filters`. Some `Seq[String]` — applies the raw SQL
+      * via `df.filter(where)` on Spark; engines decide how to
+      * handle it (see trait doc above). */
+    where:      Option[String] = None,
 ) extends Product with Serializable
 
 object MCPQueryRequest {

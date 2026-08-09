@@ -39,8 +39,17 @@ class QueryServiceStructuralTest {
 
   /** A registry that throws on every call \u2014 we never invoke it. */
   private final ModelRegistry throwingReg =
-      name -> {
-        throw new UnsupportedOperationException("not used");
+      // v0.3.2 Phase 3: ModelRegistry is no longer a functional
+      // interface (added `getModel`); replace the lambda.
+      new ModelRegistry() {
+        @Override
+        public io.semanticdf.SemanticTable get(String name) {
+          throw new UnsupportedOperationException("not used");
+        }
+        @Override
+        public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+          return java.util.Optional.empty();
+        }
       };
 
   @Test

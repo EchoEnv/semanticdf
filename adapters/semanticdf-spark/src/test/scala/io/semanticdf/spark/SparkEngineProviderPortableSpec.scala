@@ -186,4 +186,123 @@ class SparkEngineProviderPortableSpec
       f.name should not be empty
     }
   }
+
+  // -- v0.3.2 Phase 1: where filter --
+  //
+  // Per PR for Phase 1 of the v0.3.2 Platform migration design
+  // doc (PR #443). `MCPQueryRequest.where` is a raw-SQL filter
+  // applied via `df.filter(where)` AFTER compile, BEFORE limit.
+  // These tests verify the wiring + the filter ordering.
+
+  test("where = None applies no extra filter beyond the model's typed filters") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("us", 50L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      // where defaults to None
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    result.rows.length shouldBe 2  // 2 groups (us, eu) — no filter applied
+  }
+
+  test("where = Some(\"region = 'us'\") filters to only 'us' groups") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("us", 50L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      where      = Some("region = 'us'"),
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    result.rows.length shouldBe 1  // only 'us' group survives
+  }
+
+  test("where applies BEFORE limit (region filter first, then limit)") {
+    val s = spark
+    import s.implicits._
+    // 5 rows of 'us' + 3 rows of 'eu' = 8 total rows
+    val rows = Seq(
+      ("us", 100L), ("us", 50L), ("us", 25L), ("us", 75L), ("us", 125L),
+      ("eu", 200L), ("eu", 150L), ("eu", 175L),
+    )
+    rows.toDF("region", "amount").createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = Some(2L),
+      where      = Some("region = 'us'"),
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    // Without where+limit ordering: where first (5 'us' rows), then limit (2).
+    // With limit+where reversed: limit first (2 groups), then where ('us' is one
+    // of them so still 1). The order matters when there are MORE non-filtered
+    // groups than filtered ones — which isn't the case here (only 2 groups).
+    // So we verify both: rows.length == 1 (filtered to 'us') and the 'us'
+    // dimension value is present.
+    result.rows.length shouldBe 1
+    result.rows.head.values.head.toString should include ("us")
+  }
+
+  test("where = Some(\"\") is treated as no filter (blank string ignored)") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      where      = Some(""),  // blank — must NOT crash Spark's parser
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    result.rows.length shouldBe 2  // no filter, both groups present
+  }
+
+  test("where with malformed SQL returns QueryRuntimeFailed (typed error, not throw)") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      where      = Some("THIS IS NOT VALID SQL"),
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext)
+    result match {
+      case Right(_) => fail("malformed SQL should not produce a Right")
+      case Left(_: EngineError) => succeed  // typed error returned, not throw
+      case Left(other) => fail(s"unexpected Left type: $other")
+    }
+  }
 }

@@ -117,7 +117,20 @@ class StreamingServiceIntegrationTest {
   final ControllableLauncher launcher = new ControllableLauncher();
   final AtomicInteger registryPutCount = new AtomicInteger(0);
   final WrappedRegistry registry = new WrappedRegistry();
-  final ModelRegistry models = name -> null;
+  // v0.3.2 Phase 3: ModelRegistry is no longer a functional interface
+  // (added `getModel`); replace the `name -> null` lambda with an
+  // anonymous subclass that returns null on `get` and empty on
+  // `getModel`. The integration test doesn't actually exercise `get`.
+  final ModelRegistry models = new ModelRegistry() {
+    @Override
+    public io.semanticdf.SemanticTable get(String name) {
+      return null;
+    }
+    @Override
+    public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+      return java.util.Optional.empty();
+    }
+  };
 
   @BindService
   final StreamingService service = new StreamingService(models, launcher, registry);

@@ -82,6 +82,17 @@
             <version>${semanticdf.version}</version>
         </dependency>
 
+        <!-- semanticdf-portable-loader — YAML → core.Model portable reader.
+             Used by YamlModelRegistry to load models as the journal-safe
+             core.Model type instead of Spark-coupled SemanticTable. The
+             dual reader (DualManifestReader) lives in semanticdf-spark and
+             is reused for backwards compat with legacy YAML manifests. -->
+        <dependency>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf-portable-loader_2.13</artifactId>
+            <version>${semanticdf.version}</version>
+        </dependency>
+
         <!--
           Restate SDK — durable async/await runtime.
 
