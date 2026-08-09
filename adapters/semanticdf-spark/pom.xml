@@ -50,6 +50,15 @@
       <version>${project.parent.version}</version>
     </dependency>
 
+    <!-- Portable YAML manifest loader (Step 3 PR #B.1).
+         Adds the dual reader support: portable YAML → core.Model directly,
+         bypassing the legacy SemanticTable → ModelBridge path. -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-portable-loader_${scala.binary.version}</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
     <!-- Spark: default scope — needed on the compile classpath for the Scala plugin.
          At runtime, semanticdf-spark is shipped INTO a Spark job (users add it as
          a library in their cluster), so Spark is implicitly present and doesn't need
