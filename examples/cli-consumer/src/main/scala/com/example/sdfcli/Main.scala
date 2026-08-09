@@ -123,23 +123,29 @@ object Main {
     * [[extractGlobals]]. */
   private def withGlobalConfig(args: List[String])(f: (Config, List[String]) => Int): Int =
     extractGlobals(args) match {
-      case Left(err) => System.err.println(s"sdf: $err"); 2
+      case Left(err) => System.err.println(s"sdf: ${err.message}"); 2
       case Right((cfg, rem)) => f(cfg, rem)
     }
 
   /** Two-pass extraction: walk the whole arg list, pulling out --url/--json
-    * wherever they appear, leaving everything else in declaration order. */
-  private def extractGlobals(args: List[String]): Either[String, (Config, List[String])] = {
+    * wherever they appear, leaving everything else in declaration order.
+    *
+    * Per docs/design/error-handling-style.md hard ban #1: returns
+    * `Either[CliParseError, _]` (the existing ADT from PR #433) — no
+    * `Either[String, X]`. The single failure mode (`--url` without a
+    * value) maps to `CliParseError.MissingFlagValue(flag = "--url")`,
+    * reusing the case the `QueryArgs` parser already uses. */
+  private def extractGlobals(args: List[String]): Either[CliParseError, (Config, List[String])] = {
     @tailrec def loop(
         in: List[String],
         url: Option[String],
         json: Boolean,
         kept: List[String],
-    ): Either[String, (Config, List[String])] = in match {
+    ): Either[CliParseError, (Config, List[String])] = in match {
       case Nil =>
         Right((Config(url.getOrElse(defaultUrl), json), kept.reverse))
       case ("--url" :: u :: rest) => loop(rest, Some(u), json, kept)
-      case ("--url" :: Nil)       => Left("--url requires a value")
+      case ("--url" :: Nil)       => Left(CliParseError.MissingFlagValue(flag = "--url"))
       case ("--json" :: rest)     => loop(rest, url, json = true, kept)
       case other :: rest          => loop(rest, url, json, other :: kept)
     }

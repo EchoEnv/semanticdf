@@ -487,6 +487,15 @@ class CliIntegrationSpec
       err.toLowerCase should include("unknown")
     }
 
+    it("`--url` (no value) returns exit 2 with typed CliParseError.MissingFlagValue message") {
+      // PR #434 (v0.3.1): extractGlobals now returns Either[CliParseError, _]
+      // (was Either[String, _]). The single failure mode is the
+      // existing `CliParseError.MissingFlagValue(flag = "--url")` case.
+      val (exit, _, err) = runCli(args("query", "flights", "--url"))
+      exit shouldBe 2
+      err should include("--url requires a value")
+    }
+
     it("transport error (server down) returns exit 3") {
       // Point at a port nothing is listening on. `--url` must come AFTER
       // the subcommand for the CLI's existing dispatch to extract it.
