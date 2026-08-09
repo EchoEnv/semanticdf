@@ -388,6 +388,89 @@ class CliIntegrationSpec
   }
 
   // ============================================================================
+  // 2b. `--engine` flag on query/explain (PR #432 — v0.3.1 Step 2)
+  // ============================================================================
+  //
+  // Exposes the MCP server's engine-routing field (added server-side in
+  // PR #431). The CLI omits the field when not passed (backward compat);
+  // when present, server routes through MCPEngineRegistry if configured.
+  describe("`--engine` flag on query/explain") {
+
+    it("query: --engine spark sends \"engine\":\"spark\" in the request body") {
+      respondWith("/query", 200, """{
+        |  "status": "ok",
+        |  "data": {"columns": [], "rows": [], "row_count": 0, "truncated": false},
+        |  "warnings": [], "meta": {}
+        |}""".stripMargin)
+
+      runCli(args("query", "flights", "--engine", "spark", "-m", "flight_count"))
+      val sent = received("/query")
+      sent should include("\"engine\":\"spark\"")
+      sent should include("\"model\":\"flights\"")
+    }
+
+    it("query: no --engine flag OMITS the engine field (backward compat)") {
+      respondWith("/query", 200, """{
+        |  "status": "ok",
+        |  "data": {"columns": [], "rows": [], "row_count": 0, "truncated": false},
+        |  "warnings": [], "meta": {}
+        |}""".stripMargin)
+
+      runCli(args("query", "flights", "-m", "flight_count"))
+      val sent = received("/query")
+      sent should not include "\"engine\""
+      sent should include("\"model\":\"flights\"")
+    }
+
+    it("query: --engine \"\" (explicit empty) also OMITS the engine field") {
+      // Per the design doc (PR #432): omitting the field is the same as
+      // sending empty — both signal "server decides routing". A user who
+      // really needs to force the legacy path should use a non-empty
+      // sentinel (e.g. `--engine legacy`).
+      respondWith("/query", 200, """{
+        |  "status": "ok",
+        |  "data": {"columns": [], "rows": [], "row_count": 0, "truncated": false},
+        |  "warnings": [], "meta": {}
+        |}""".stripMargin)
+
+      runCli(args("query", "flights", "--engine", "", "-m", "flight_count"))
+      val sent = received("/query")
+      sent should not include "\"engine\""
+    }
+
+    it("query: --engine (no value) returns exit 2 with typed error message") {
+      // No server response registered — should fail at the CLI before any HTTP.
+      val (exit, _, err) = runCli(args("query", "flights", "--engine"))
+      exit shouldBe 2
+      err should include("--engine requires a value")
+    }
+
+    it("explain: --engine spark also sends the engine field") {
+      respondWith("/explain", 200, """{
+        |  "status": "ok",
+        |  "data": {"plan": "SELECT 1", "warnings": []},
+        |  "warnings": [], "meta": {}
+        |}""".stripMargin)
+
+      runCli(args("explain", "flights", "--engine", "spark"))
+      val sent = received("/explain")
+      sent should include("\"engine\":\"spark\"")
+    }
+
+    it("query: --engine parses anywhere in the arg list (not just before flags)") {
+      respondWith("/query", 200, """{
+        |  "status": "ok",
+        |  "data": {"columns": [], "rows": [], "row_count": 0, "truncated": false},
+        |  "warnings": [], "meta": {}
+        |}""".stripMargin)
+
+      runCli(args("query", "flights", "-m", "flight_count", "--engine", "trino"))
+      val sent = received("/query")
+      sent should include("\"engine\":\"trino\"")
+    }
+  }
+
+  // ============================================================================
   // 4. Exit codes and global flags
   // ============================================================================
 
