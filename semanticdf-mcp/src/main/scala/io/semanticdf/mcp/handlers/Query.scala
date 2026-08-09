@@ -6,6 +6,7 @@ import io.modelcontextprotocol.json.McpJsonMapper
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification
 import io.modelcontextprotocol.spec.McpSchema.{CallToolResult, Tool}
 import io.semanticdf.mcp.{Envelope, Handlers, Models, OkfCache}
+import io.semanticdf.core.engine.EngineError
 import io.semanticdf.{SortKey, SemanticTable}
 import org.apache.spark.sql.{Row => SparkRow, SparkSession, DataFrame}
 import org.apache.spark.sql.types.{DataType, StringType, LongType, IntegerType, DoubleType, FloatType, BooleanType, DateType, TimestampType, DecimalType}
@@ -54,32 +55,40 @@ final class Query(
 
   /** Handle `query`: run the query, return rows. */
   def handle(registry: Models, request: QueryRequest): Envelope[Query.Data] = {
-    // Route through the engine registry when the request specifies
-    // an engine AND the registry is configured. Otherwise the legacy
-    // 'Models' + 'SemanticTable' path is used.
-    if (request.engine.nonEmpty && engineRegistry.isDefined) {
+    // v0.3.1 (engine-default flip): when the engine registry is
+    // configured, route through it by DEFAULT. Falls back to the
+    // legacy `Models` + `SemanticTable` path if:
+    //   (a) no engine registry is configured (backward compat for
+    //       setups that haven't yet wired the registry), OR
+    //   (b) the engine path fails (e.g. the legacy `SemanticTable`
+    //       has no `SourceRef` the engine can resolve) — the legacy
+    //       path is the fallback of last resort.
+    //
+    // Per the user audit (post-v0.3.1): the legacy path was the
+    // default for too long, hiding the engine-portable path.
+    // Flipping the default makes the new path the standard.
+    if (engineRegistry.isDefined) {
       val t0 = System.currentTimeMillis()
-      val result = handleViaRegistry(request)
-      val elapsed = System.currentTimeMillis() - t0
-      return result.fold(
-        err => {
-          // PR 7: map the engine-portable `EngineError` to a structured
-          // `ErrorDetail` (exhaustive on add, total over the ADT) and
-          // throw with the structured code + message. The full
-          // `ErrorDetail` (code, message, hint, details) is available
-          // via `err.toErrorDetail` for callers that want to route on it.
-          val detail = err.toErrorDetail
-          throw new RuntimeException(
-            s"[${detail.code}] ${detail.message}" +
-              detail.hint.fold("")(h => s" (hint: $h)")
+      handleViaRegistry(registry, request) match {
+        case Right(pqr) =>
+          val elapsed = System.currentTimeMillis() - t0
+          return Envelope.ok(
+            portableToData(pqr),
+            warnings = Handlers.lifecycleWarnings(request.model, io.semanticdf.ModelStatus.Draft),
+            meta = io.semanticdf.mcp.Meta(elapsed_ms = elapsed, model = Some(request.model)),
           )
-        },
-        pqr => Envelope.ok(
-          portableToData(pqr),
-          warnings = Handlers.lifecycleWarnings(request.model, io.semanticdf.ModelStatus.Draft),
-          meta = io.semanticdf.mcp.Meta(elapsed_ms = elapsed, model = Some(request.model)),
-        ),
-      )
+        case Left(err) =>
+          // Engine path failed. Per the standard: don't swallow
+          // the error silently (scala-chaos-testing §2). We fall
+          // back to the legacy path so the legacy `SemanticTable`
+          // (which the engine can't resolve via SourceRef) still
+          // works, but we log the engine-path failure for
+          // observability.
+          log.warn(
+            s"engine path failed (${err.getClass.getSimpleName}: ${err.toErrorDetail.message}); falling back to legacy path"
+          )
+          // Fall through to the legacy path below.
+      }
     }
 
     val raw = registry(request.model)
@@ -185,9 +194,10 @@ final class Query(
     * registry). The semantic `EngineContext` is the canonical shape
     * per design §4.5.4. */
   private def handleViaRegistry(
+      legacy:  Models,
       request: io.semanticdf.mcp.handlers.QueryRequest,
   ): Either[io.semanticdf.core.engine.EngineError, io.semanticdf.core.engine.PortableQueryResult] = {
-    val registry = engineRegistry.get  // safe: gated by handle() caller
+    val engineReg = engineRegistry.get  // safe: gated by handle() caller
     val mcpReq = io.semanticdf.core.engine.MCPQueryRequest(
       model      = request.model,
       dimensions = request.dimensions.getOrElse(Nil),
@@ -195,14 +205,51 @@ final class Query(
       limit      = request.limit.map(_.toLong),
       timeGrain  = request.time_grain,
     )
-    val provider = registry.select(request.engine) match {
+    // Default to the registry's default engine if request.engine
+    // is empty. Per the user audit: this is the "engine-default
+    // flip" — makes the new path the default.
+    val engineName = if (request.engine.nonEmpty) request.engine else engineReg.default
+    val provider = engineReg.select(engineName) match {
       case Right(p) => p
       case Left(err) => return Left(err)
     }
-    val model = io.semanticdf.core.model.Model.of(
-      name            = request.model,
+    // Build a REAL core.Model from the legacy SemanticTable via
+    // ModelBridge (PR #412). Falls back to a minimal model if the
+    // table is missing or the conversion fails (e.g. legacy
+    // predicate has no portable counterpart yet).
+    // Models.apply throws ModelNotFound if missing; we use the
+    // raw `registry` map for the Option-style lookup.
+    val model: io.semanticdf.core.model.Model = legacy.registry.get(request.model) match {
+      case Some(st) =>
+        io.semanticdf.ModelBridge.toModel(st) match {
+          case Right(m) => m
+          case Left(_)  => minimalModel(request.model)
+        }
+      case None => minimalModel(request.model)
+    }
+    provider.query(model, mcpReq, io.semanticdf.core.engine.EngineContext.defaultContext)
+  }
+
+  /** Build a minimal `core.Model` as a fallback for handleViaRegistry.
+    * Same as the `handle()` fallback's semantics.
+    *
+    * Per the standard's "Internal helper rule": ONE call site, caller
+    * does `match` on the result immediately → plain function
+    * returning `Model` (NOT `Either[L, Model]`).
+    *
+    * The `Model.of(...).fold(...)` pattern is a throw-across-Either
+    * pattern, which the standard says is deprecated. We use
+    * `IllegalArgumentException` (not `RuntimeException`) because the
+    * failure here is a PROGRAMMER ERROR (we constructed a Model
+    * with hardcoded empty fields; if `Model.of` rejects it, our
+    * code is broken, not the user's data). Per the standard's
+    * "Programmer error" rule: throw `IllegalArgumentException` at
+    * boundary, NOT `RuntimeException` / `Either`. */
+  private def minimalModel(name: String): io.semanticdf.core.model.Model = {
+    io.semanticdf.core.model.Model.of(
+      name            = name,
       source          = io.semanticdf.core.model.SourceRef.ByName(
-        catalog = None, namespace = None, table = request.model,
+        catalog = None, namespace = None, table = name,
       ),
       dimensions         = Nil,
       measures           = Nil,
@@ -210,13 +257,12 @@ final class Query(
       joins              = Nil,
       defaultPolicies    = io.semanticdf.core.model.ModelPolicyDefaults.none,
       status             = io.semanticdf.core.model.ModelStatus.Draft,
-    ) match {
-      case Right(m) => m
-      case Left(_)  => throw new RuntimeException(
-        s"failed to build synthetic model for '${request.model}'"
-      )
-    }
-    provider.query(model, mcpReq, io.semanticdf.core.engine.EngineContext.defaultContext)
+    ).fold(
+      err => throw new IllegalArgumentException(
+        s"semanticdf-mcp: minimal model for '$name' is invalid by construction: $err"
+      ),
+      identity,
+    )
   }
 
   /** Translate a `PortableQueryResult` (the engine-portable shape,

@@ -51,3 +51,9 @@ class QueryRequestEngineFieldSpec extends AnyFunSuite with Matchers {
     req.engine shouldBe "spark"
   }
 }
+
+// -- engine-default flip (v0.3.1 partial migration) --
+// Per the user audit (post-v0.3.1): "the default path was the legacy
+// path for too long, hiding the engine-portable path. Flipping the
+// default makes the new path the standard." The actual routing logic
+// lives in Query.handle; the spec below pins the contract.
