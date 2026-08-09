@@ -231,7 +231,20 @@ final class Query(
   }
 
   /** Build a minimal `core.Model` as a fallback for handleViaRegistry.
-    * Same as the `handle()` fallback's semantics. */
+    * Same as the `handle()` fallback's semantics.
+    *
+    * Per the standard's "Internal helper rule": ONE call site, caller
+    * does `match` on the result immediately → plain function
+    * returning `Model` (NOT `Either[L, Model]`).
+    *
+    * The `Model.of(...).fold(...)` pattern is a throw-across-Either
+    * pattern, which the standard says is deprecated. We use
+    * `IllegalArgumentException` (not `RuntimeException`) because the
+    * failure here is a PROGRAMMER ERROR (we constructed a Model
+    * with hardcoded empty fields; if `Model.of` rejects it, our
+    * code is broken, not the user's data). Per the standard's
+    * "Programmer error" rule: throw `IllegalArgumentException` at
+    * boundary, NOT `RuntimeException` / `Either`. */
   private def minimalModel(name: String): io.semanticdf.core.model.Model = {
     io.semanticdf.core.model.Model.of(
       name            = name,
@@ -245,7 +258,9 @@ final class Query(
       defaultPolicies    = io.semanticdf.core.model.ModelPolicyDefaults.none,
       status             = io.semanticdf.core.model.ModelStatus.Draft,
     ).fold(
-      err => throw new RuntimeException(s"failed to build minimal model for '$name': $err"),
+      err => throw new IllegalArgumentException(
+        s"semanticdf-mcp: minimal model for '$name' is invalid by construction: $err"
+      ),
       identity,
     )
   }
