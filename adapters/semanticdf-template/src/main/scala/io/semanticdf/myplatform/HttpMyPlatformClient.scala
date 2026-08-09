@@ -63,7 +63,7 @@ final class HttpMyPlatformClient(
     val body = s"""{"sql":"${escapeJson(sql)}","limit":$limit,"realm":"$realmId"}"""
     val req = basePost(url, body)
     sendJson(req).flatMap { json =>
-      HttpMyPlatformClient.parseQueryResult(json).left.map(MyPlatformError.MalformedResponse(_))
+      HttpMyPlatformClient.parseQueryResult(json)
     }
   }
 
@@ -74,7 +74,7 @@ final class HttpMyPlatformClient(
     val url = s"$baseUrl/api/tables/$table?realm=$realmId"
     val req = baseGet(url)
     sendJson(req).flatMap { json =>
-      HttpMyPlatformClient.parseDescribeTable(json).left.map(MyPlatformError.MalformedResponse(_))
+      HttpMyPlatformClient.parseDescribeTable(json)
     }
   }
 
@@ -85,7 +85,7 @@ final class HttpMyPlatformClient(
     val url = s"$baseUrl/api/tables/$table?realm=$realmId"
     val req = baseGet(url)
     sendJson(req).flatMap { json =>
-      HttpMyPlatformClient.parseTableMeta(json, table, realmId).left.map(MyPlatformError.MalformedResponse(_))
+      HttpMyPlatformClient.parseTableMeta(json, table, realmId)
     }
   }
 
@@ -131,7 +131,7 @@ final class HttpMyPlatformClient(
     val url = s"$baseUrl/api/tables?realm=$realmId"
     val req = baseGet(url)
     sendJson(req).flatMap { json =>
-      HttpMyPlatformClient.parseTableNames(json, prefix).left.map(MyPlatformError.MalformedResponse(_))
+      HttpMyPlatformClient.parseTableNames(json, prefix)
     }
   }
 
@@ -216,22 +216,35 @@ object HttpMyPlatformClient {
     new HttpMyPlatformClient(baseUrl, authToken)
 
   // -- JSON helpers (hand-rolled; no new dep) --
+  //
+  // Per docs/design/error-handling-style.md hard ban #1: NO
+  // `Either[String, X]` in any code path. Parse helpers return
+  // `Either[MyPlatformError, X]` directly — using the existing
+  // `MyPlatformError.MalformedResponse` case for any parse
+  // failure. The caller (the matching HTTP method above) no longer
+  // needs to `.left.map(MyPlatformError.MalformedResponse(_))`.
 
   /** Parse a MyPlatform query response into a [[MyPlatformResult]].
     *
-    * Per error-handling-style.md "Converter return types": returns
-    * `Either[String, X]` HERE because this is a PRIVATE helper
-    * (not exposed); the caller wraps `Left(...)` into
-    * `Either[MyPlatformError, ...]`. */
-  private[myplatform] def parseQueryResult(json: String): Either[String, MyPlatformResult] = {
+    * Returns `Left(MyPlatformError.MalformedResponse(reason))` if the
+    * response JSON is malformed, missing required fields, or has the
+    * wrong shape.
+    *
+    * Per docs/design/error-handling-style.md "Converter return
+    * types": the helper returns `Either[L, X]` directly so the type
+    * info is preserved across the boundary. */
+  private[myplatform] def parseQueryResult(json: String): Either[MyPlatformError, MyPlatformResult] = {
     // TODO: implement based on your platform's actual response shape.
     // For now, return a placeholder — real impl depends on the
     // MyPlatform JSON contract.
     Right(MyPlatformResult(Nil, Nil))
   }
 
-  /** Parse a describe-table response into a [[ResolvedSchema]]. */
-  private[myplatform] def parseDescribeTable(json: String): Either[String, ResolvedSchema] = {
+  /** Parse a describe-table response into a [[ResolvedSchema]].
+    *
+    * Per docs/design/error-handling-style.md "Converter return
+    * types": returns `Either[L, X]` directly. */
+  private[myplatform] def parseDescribeTable(json: String): Either[MyPlatformError, ResolvedSchema] = {
     // Per the existing UC/Hera pattern: ResolvedSchema takes
     // Map[String, String] (name -> type-string).
     Right(ResolvedSchema(Map.empty))
@@ -242,13 +255,13 @@ object HttpMyPlatformClient {
       json:    String,
       table:   String,
       realmId: String,
-  ): Either[String, MyPlatformTableMeta] = {
+  ): Either[MyPlatformError, MyPlatformTableMeta] = {
     // TODO: implement based on your platform's actual response shape.
     Right(MyPlatformTableMeta(table, realmId, version = 1L, active = true))
   }
 
   /** Parse a listTables response, applying the prefix filter. */
-  private[myplatform] def parseTableNames(json: String, prefix: String): Either[String, List[String]] = {
+  private[myplatform] def parseTableNames(json: String, prefix: String): Either[MyPlatformError, List[String]] = {
     Right(Nil)
   }
 }
