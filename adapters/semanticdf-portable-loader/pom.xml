@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  semanticdf-portable-loader — the portable YAML reader for semanticdf.
+
+  Per the v0.3.2 design doc (PR #437) + Step 3 PR #A.2:
+  Loads a portable YAML manifest → core.Model directly, bypassing
+  the legacy SemanticTable path.
+
+  ==What this module provides==
+
+  - PortableManifestLoader — single public API:
+      load(path: Path): Either[ManifestError, core.Model]
+      loadString(yaml: String): Either[ManifestError, core.Model]
+
+  ==What this module does NOT do==
+
+  - Does NOT load legacy YAML format (use the existing
+    `semanticdf-spark.YamlLoader` for that; legacy format will
+    be migrated in Step 3 PR #B "dual reader")
+  - Does NOT register as an Engine / SourceResolver / CatalogAdapter
+    (it's a one-shot loader, not a runtime adapter)
+
+  ==Dependencies==
+
+  - semanticdf-core (the portable types + ModelValidator)
+  - jackson-databind + jackson-module-scala + jackson-dataformat-yaml
+    (for the YAML reader; managed in parent pom at 2.15.2)
+
+  ==Boundary contract==
+
+  Zero Spark imports. Verifiable by:
+  `grep -r 'org.apache.spark' src/main/scala/`
+
+  ==Standard compliance==
+
+  Per docs/design/error-handling-style.md: public API returns
+  Either[ManifestError, Model]. ManifestError is a sealed ADT with
+  SPECIFIC cases. No Either[String, _]. No catch-all Exception.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>io.semanticdf</groupId>
+    <artifactId>semanticdf-parent</artifactId>
+    <version>0.3.0</version>
+    <relativePath>../../pom.xml</relativePath>
+  </parent>
+
+  <artifactId>semanticdf-portable-loader_${scala.binary.version}</artifactId>
+  <packaging>jar</packaging>
+
+  <name>semanticdf-portable-loader</name>
+  <description>
+    Reads portable YAML manifests into engine-portable core.Model.
+    Companion to Step 3 of the v0.3.2 migration (Manifest → core.Model).
+  </description>
+
+  <dependencies>
+    <!-- Engine-portable ADTs (PortableModel, Model, ModelValidator) -->
+    <dependency>
+      <groupId>io.semanticdf</groupId>
+      <artifactId>semanticdf-core_${scala.binary.version}</artifactId>
+      <version>${project.parent.version}</version>
+    </dependency>
+
+    <!-- Jackson for YAML parsing (managed in parent pom at 2.15.2) -->
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId>
+      <artifactId>jackson-databind</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.module</groupId>
+      <artifactId>jackson-module-scala_${scala.binary.version}</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.dataformat</groupId>
+      <artifactId>jackson-dataformat-yaml</artifactId>
+      <version>2.15.2</version>
+    </dependency>
+
+    <!-- Test scope -->
+    <dependency>
+      <groupId>org.scalatest</groupId>
+      <artifactId>scalatest_${scala.binary.version}</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>net.alchim31.maven</groupId>
+        <artifactId>scala-maven-plugin</artifactId>
+      </plugin>
+      <plugin>
+        <groupId>org.scalatest</groupId>
+        <artifactId>scalatest-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>

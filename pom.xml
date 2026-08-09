@@ -27,6 +27,7 @@
     <module>adapters/semanticdf-hive-metastore</module>
     <module>adapters/semanticdf-hera</module>
     <module>adapters/semanticdf-template</module>
+    <module>adapters/semanticdf-portable-loader</module>
     <module>adapters/semanticdf-postgresql</module>
   </modules>
 
