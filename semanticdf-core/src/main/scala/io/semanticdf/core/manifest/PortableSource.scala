@@ -35,8 +35,8 @@ object PortableSource {
   /** Reference by table name in a catalog.
     *
     * Examples:
-    *   - `{catalog: "hive", namespace: "sales", table: "orders"}`
-    *   - `{catalog: null, namespace: null, table: "orders"}` */
+    *   - `{type: "ByName", catalog: "hive", namespace: "sales", table: "orders"}`
+    *   - `{type: "ByName", catalog: null, namespace: null, table: "orders"}` */
   final case class ByName(
       catalog:   Option[String],
       namespace: Option[String],
@@ -46,8 +46,8 @@ object PortableSource {
   /** Reference by a file path.
     *
     * Examples:
-    *   - `{path: "s3://bucket/orders.parquet", format: "parquet"}`
-    *   - `{path: "/tmp/orders.csv", format: "csv", options: {header: "true"}}` */
+    *   - `{type: "ByPath", path: "s3://bucket/orders.parquet", format: "parquet"}`
+    *   - `{type: "ByPath", path: "/tmp/orders.csv", format: "csv", options: {header: "true"}}` */
   final case class ByPath(
       path:    String,
       format:  String,
@@ -57,7 +57,10 @@ object PortableSource {
   /** Reference by a provider (e.g. Iceberg table, Kafka topic).
     *
     * `provider` is the provider name (e.g. "iceberg", "kafka",
-    * "delta"). `identifier` is the provider-specific handle. */
+    * "delta"). `identifier` is the provider-specific handle.
+    *
+    * Examples:
+    *   - `{type: "ByProvider", provider: "iceberg", identifier: "orders"}` */
   final case class ByProvider(
       provider:   String,
       identifier: String,

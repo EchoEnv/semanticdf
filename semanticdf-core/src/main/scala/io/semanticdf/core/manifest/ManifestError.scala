@@ -102,4 +102,22 @@ object ManifestError {
         s"$header\n$body"
     }
   }
+
+  /** Filter conversion deferred to a future PR.
+    *
+    * Per the v0.3.2 design doc: portable YAML holds raw SQL strings
+    * for filter expressions. The current `core.expr.Expr` ADT has
+    * no `SqlString` variant — all variants are structured (FieldRef,
+    * Literal, Equal, etc.). A future PR will add raw-SQL support
+    * (either as a new Expr variant or a parser). Until then, manifests
+    * with `filters:` entries fail loud with this typed error.
+    *
+    * Per the standard's "fail loud" pattern: never silently drop
+    * user data. Surface the limitation so users know to remove or
+    * migrate the filters. */
+  final case class FilterConversionUnsupported(filterCount: Int) extends ManifestError {
+    val message: String =
+      s"filter conversion is not supported yet ($filterCount filter(s) in YAML); " +
+      s"either remove them or wait for v0.3.3 (see v0.3.2 design doc)"
+  }
 }
