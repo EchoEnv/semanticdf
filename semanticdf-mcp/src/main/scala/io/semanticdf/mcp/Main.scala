@@ -37,7 +37,7 @@ object Main {
     val parsed = parseArgs(args) match {
       case Right(c) => c
       case Left(err) =>
-        System.err.println(s"semanticdf-mcp: $err")
+        System.err.println(s"semanticdf-mcp: ${err.message}")
         System.err.println(usage)
         sys.exit(1)
     }
@@ -125,7 +125,7 @@ object Main {
   // dependency surface for three flags.
   // ---------------------------------------------------------------------------
 
-  private case class Config(
+  private[mcp] case class Config(
       modelsDir: String,
       dataConfig: String,
       okfBundleDir: String,
@@ -136,9 +136,54 @@ object Main {
       remote: Option[String] = None,
   )
 
-  private def parseArgs(args: Seq[String]): Either[String, Config] = {
+  // -------------------------------------------------------------------
+  // Typed CLI parse errors (per docs/design/error-handling-style.md).
+  //
+  // Per the standard's hard bans:
+  //   - No `Either[String, X]` in any code path.
+  //   - All sealed error ADTs use SPECIFIC cases (no generic `ParseError`).
+  //
+  // Each case carries the data needed to format a stable, programmatic
+  // human-readable message via `.message`. Mirrors the CLI consumer's
+  // `CliParseError` pattern (PR #433) and the adapter parse-helper
+  // pattern (PR #434).
+  //
+  // Made `private[mcp]` so the test spec (in the same package) can
+  // assert on the cases directly — per scala-impact-analysis, the
+  // blast radius is minimal (test surface only).
+  // -------------------------------------------------------------------
+  sealed trait McpParseError extends Product with Serializable {
+    /** Stable human-readable message for stderr / logs. */
+    def message: String
+  }
+  object McpParseError {
+    final case class MissingFlagValue(flag: String) extends McpParseError {
+      val message: String = s"$flag requires a value"
+    }
+    final case class MissingRequiredArgument(flag: String, usage: String) extends McpParseError {
+      val message: String = s"$flag $usage is required"
+    }
+    final case class InvalidIntRange(flag: String, value: String, min: Int, max: Int)
+        extends McpParseError {
+      val message: String = s"$flag must be $min-$max, got '$value'"
+    }
+    final case class InvalidScheme(flag: String, value: String, expectedScheme: String)
+        extends McpParseError {
+      val message: String = s"$flag must use the '$expectedScheme' scheme, got: $value"
+    }
+    final case class InvalidEnumValue(flag: String, value: String, allowedValues: Set[String])
+        extends McpParseError {
+      val message: String =
+        s"$flag must be one of [${allowedValues.mkString(", ")}], got '$value'"
+    }
+    final case class UnknownArgument(arg: String) extends McpParseError {
+      val message: String = s"unknown argument: $arg"
+    }
+  }
+
+  private[mcp] def parseArgs(args: Seq[String]): Either[McpParseError, Config] = {
     @scala.annotation.tailrec
-    def loop(it: List[String], acc: Config): Either[String, Config] = it match {
+    def loop(it: List[String], acc: Config): Either[McpParseError, Config] = it match {
       case Nil => Right(acc)
       case "--models"     :: v :: rest if v.nonEmpty => loop(rest, acc.copy(modelsDir = v))
       case "--data"       :: v :: rest if v.nonEmpty => loop(rest, acc.copy(dataConfig = v))
@@ -147,30 +192,40 @@ object Main {
       case "--rest-port"  :: v :: rest if v.nonEmpty =>
         v.toIntOption match {
           case Some(n) if n > 0 && n < 65536 => loop(rest, acc.copy(restPort = n))
-          case _ => Left(s"--rest-port must be 1-65535, got '$v'")
+          case _ => Left(McpParseError.InvalidIntRange(
+            flag = "--rest-port", value = v, min = 1, max = 65535
+          ))
         }
       case "--remote"     :: v :: rest if v.nonEmpty =>
         if (!v.startsWith("sc://"))
-          Left(s"--remote must use the 'sc://' scheme, got: $v")
+          Left(McpParseError.InvalidScheme(
+            flag = "--remote", value = v, expectedScheme = "sc://"
+          ))
         else
           loop(rest, acc.copy(remote = Some(v)))
-      case "--remote"     :: Nil => Left("--remote requires a value")
-      case "--models"     :: Nil => Left("--models requires a value")
-      case "--data"       :: Nil => Left("--data requires a value")
-      case "--okf-bundle" :: Nil => Left("--okf-bundle requires a value")
-      case "--transport"  :: Nil => Left("--transport requires a value")
-      case "--rest-port"  :: Nil => Left("--rest-port requires a value")
-      case "--remote"     :: Nil => Left("--remote requires a value")
-      case other :: _ => Left(s"unknown argument: $other")
+      case ("--remote"     :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--remote"))
+      case ("--models"     :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--models"))
+      case ("--data"       :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--data"))
+      case ("--okf-bundle" :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--okf-bundle"))
+      case ("--transport"  :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--transport"))
+      case ("--rest-port"  :: Nil) => Left(McpParseError.MissingFlagValue(flag = "--rest-port"))
+      case other :: _ => Left(McpParseError.UnknownArgument(arg = other))
     }
     val init = Config(modelsDir = "", dataConfig = "", okfBundleDir = "",
                       transport = "stdio", restPort = 8080)
     loop(args.toList, init).flatMap { c =>
-      if (c.modelsDir.isEmpty) Left("--models <dir> is required")
-      else if (c.dataConfig.isEmpty) Left("--data <file> is required")
-      else if (c.okfBundleDir.isEmpty) Left("--okf-bundle <dir> is required")
+      if (c.modelsDir.isEmpty)
+        Left(McpParseError.MissingRequiredArgument(flag = "--models", usage = "<dir>"))
+      else if (c.dataConfig.isEmpty)
+        Left(McpParseError.MissingRequiredArgument(flag = "--data", usage = "<file>"))
+      else if (c.okfBundleDir.isEmpty)
+        Left(McpParseError.MissingRequiredArgument(flag = "--okf-bundle", usage = "<dir>"))
       else if (c.transport != "stdio" && c.transport != "rest")
-        Left(s"--transport must be 'stdio' or 'rest', got '${c.transport}'")
+        Left(McpParseError.InvalidEnumValue(
+          flag = "--transport",
+          value = c.transport,
+          allowedValues = Set("stdio", "rest"),
+        ))
       else Right(c)
     }
   }
