@@ -78,6 +78,45 @@ object Main {
 
   private case class Config(baseUrl: String, json: Boolean)
 
+  // -------------------------------------------------------------------
+  // Typed CLI parse errors (per docs/design/error-handling-style.md).
+  //
+  // Per the standard's hard bans:
+  //   - No `Either[String, X]` in any new code path.
+  //   - All sealed error ADTs use SPECIFIC cases (no generic `ParseError`).
+  //
+  // Each case carries the data needed to format a stable, programmatic
+  // human-readable message via `.message`. We don't format eagerly (no
+  // s-strings at construction) because the caller may want to log or
+  // surface the case structurally before showing it.
+  // -------------------------------------------------------------------
+  private sealed trait CliParseError extends Product with Serializable {
+    /** Stable human-readable message for stderr / logs. */
+    def message: String
+  }
+  private object CliParseError {
+    final case class MissingFlagValue(flag: String) extends CliParseError {
+      val message: String = s"$flag requires a value"
+    }
+    final case class MissingModel(usage: String) extends CliParseError {
+      val message: String = s"missing <model>. $usage"
+    }
+    final case class InvalidOrderFormat(value: String) extends CliParseError {
+      val message: String = s"--order must be <field:asc|desc>, got '$value'"
+    }
+    final case class InvalidLimit(value: String) extends CliParseError {
+      val message: String = s"--limit must be a non-negative integer, got '$value'"
+    }
+    final case class UnknownFlag(flag: String) extends CliParseError {
+      val message: String = s"unknown flag: $flag"
+    }
+    final case class UnexpectedPositional(value: String, existingModel: String)
+        extends CliParseError {
+      val message: String =
+        s"unexpected argument: $value (model already given as $existingModel)"
+    }
+  }
+
   /** Pull `--url` / `--json` out of the arg list (they can appear anywhere),
     * then hand the remaining args (and the resolved config) to the
     * subcommand handler. Implemented as a single two-pass walk in
@@ -203,7 +242,7 @@ object Main {
 
   private def cmdQuery(cfg: Config, args: List[String], explain: Boolean): Int = {
     QueryArgs.parse(args) match {
-      case Left(err) => System.err.println(s"sdf: $err"); 2
+      case Left(err) => System.err.println(s"sdf: ${err.message}"); 2
       case Right(qa) =>
         val body = qa.toJson
         val endpoint = if (explain) "/explain" else "/query"
@@ -261,11 +300,26 @@ object Main {
       measures: List[String],
       order: List[(String, String)],
       limit: Option[Int],
+      /**
+       * Engine routing hint (per docs/design/multi-engine-design.md §6.4,
+       * landed in PR #431). The server interprets this:
+       *   - absent   -> server decides routing (default, backward compat)
+       *   - empty    -> legacy `Models` + `SemanticTable` path
+       *   - non-empty -> route through the `MCPEngineRegistry`
+       *
+       * The CLI omits the field when empty (per karpathy §2: minimum code).
+       * If a user passes `--engine ""` literally, they get the same
+       * behavior as omitting the field — which is the right default.
+       * Users who need to *force* the legacy path with the field present
+       * can pass a non-empty sentinel (e.g. `--engine legacy`).
+       */
+      engine: String = "",
   ) {
     /** Build the JSON request body for /query and /explain. */
     def toJson: String = {
       val sb = new StringBuilder
       sb.append('{').append("\"model\":").append(mapper.writeValueAsString(model))
+      if (engine.nonEmpty) sb.append(",\"engine\":").append(mapper.writeValueAsString(engine))
       if (measures.nonEmpty) sb.append(",\"measures\":").append(mapper.writeValueAsString(measures.toArray))
       if (dims.nonEmpty)     sb.append(",\"dimensions\":").append(mapper.writeValueAsString(dims.toArray))
       if (order.nonEmpty) {
@@ -278,7 +332,7 @@ object Main {
   }
 
   private object QueryArgs {
-    def parse(args: List[String]): Either[String, QueryArgs] = {
+    def parse(args: List[String]): Either[CliParseError, QueryArgs] = {
       @tailrec def loop(
           in: List[String],
           model: Option[String],
@@ -286,36 +340,57 @@ object Main {
           measures: List[String],
           order: List[(String, String)],
           limit: Option[Int],
-      ): Either[String, QueryArgs] = in match {
+          engine: String,
+      ): Either[CliParseError, QueryArgs] = in match {
         case Nil =>
           model match {
-            case Some(m) => Right(QueryArgs(m, dims.reverse, measures.reverse, order.reverse, limit))
-            case None => Left("missing <model>. Usage: sdf query <model> -d <dim> -m <measure>")
+            case Some(m) =>
+              Right(QueryArgs(
+                model    = m,
+                dims     = dims.reverse,
+                measures = measures.reverse,
+                order    = order.reverse,
+                limit    = limit,
+                engine   = engine,
+              ))
+            case None =>
+              Left(CliParseError.MissingModel(
+                usage = "Usage: sdf query <model> -d <dim> -m <measure>"
+              ))
           }
-        case ("-d" | "--dim") :: v :: rest => loop(rest, model, v :: dims, measures, order, limit)
-        case ("-d" | "--dim") :: Nil => Left("--dim requires a value")
-        case ("-m" | "--measure") :: v :: rest => loop(rest, model, dims, v :: measures, order, limit)
-        case ("-m" | "--measure") :: Nil => Left("--measure requires a value")
+        case ("-d" | "--dim") :: v :: rest => loop(rest, model, v :: dims, measures, order, limit, engine)
+        case ("-d" | "--dim") :: Nil => Left(CliParseError.MissingFlagValue(flag = "--dim"))
+        case ("-m" | "--measure") :: v :: rest => loop(rest, model, dims, v :: measures, order, limit, engine)
+        case ("-m" | "--measure") :: Nil => Left(CliParseError.MissingFlagValue(flag = "--measure"))
         case ("-o" | "--order") :: v :: rest =>
           v.split(":", 2) match {
-            case Array(f, d) if d == "asc" || d == "desc" => loop(rest, model, dims, measures, (f, d) :: order, limit)
-            case Array(f) => loop(rest, model, dims, measures, (f, "asc") :: order, limit)
-            case _ => Left(s"--order must be <field:asc|desc>, got '$v'")
+            case Array(f, d) if d == "asc" || d == "desc" =>
+              loop(rest, model, dims, measures, (f, d) :: order, limit, engine)
+            case Array(f) =>
+              loop(rest, model, dims, measures, (f, "asc") :: order, limit, engine)
+            case _ => Left(CliParseError.InvalidOrderFormat(value = v))
           }
-        case ("-o" | "--order") :: Nil => Left("--order requires a value")
+        case ("-o" | "--order") :: Nil => Left(CliParseError.MissingFlagValue(flag = "--order"))
         case "--limit" :: v :: rest =>
           v.toIntOption match {
-            case Some(n) if n >= 0 => loop(rest, model, dims, measures, order, Some(n))
-            case _ => Left(s"--limit must be a non-negative integer, got '$v'")
+            case Some(n) if n >= 0 => loop(rest, model, dims, measures, order, Some(n), engine)
+            case _ => Left(CliParseError.InvalidLimit(value = v))
           }
-        case "--limit" :: Nil => Left("--limit requires a value")
-        case flag :: _ if flag.startsWith("-") => Left(s"unknown flag: $flag")
+        case "--limit" :: Nil => Left(CliParseError.MissingFlagValue(flag = "--limit"))
+        // PR #432 (v0.3.1 Step 2): expose the MCP server's engine-routing
+        // field on the CLI. Omitted by default (server decides routing per
+        // PR #431); when present, server routes through MCPEngineRegistry
+        // if configured.
+        case ("--engine") :: v :: rest => loop(rest, model, dims, measures, order, limit, engine = v)
+        case ("--engine") :: Nil => Left(CliParseError.MissingFlagValue(flag = "--engine"))
+        case flag :: _ if flag.startsWith("-") => Left(CliParseError.UnknownFlag(flag = flag))
         case v :: rest => model match {
-          case Some(_) => Left(s"unexpected argument: $v (model already given as ${model.get})")
-          case None => loop(rest, Some(v), dims, measures, order, limit)
+          case Some(existing) =>
+            Left(CliParseError.UnexpectedPositional(value = v, existingModel = existing))
+          case None => loop(rest, Some(v), dims, measures, order, limit, engine)
         }
       }
-      loop(args, None, Nil, Nil, Nil, None)
+      loop(args, None, Nil, Nil, Nil, None, engine = "")
     }
   }
 

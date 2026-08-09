@@ -59,6 +59,7 @@ sdf explain <model> -d <dim> -m <m> show the semantic plan (no execution)
   -m, --measure <name>            measure (repeatable)
   -o, --order <field[:asc|desc]>  order by field (repeatable; asc default)
   --limit <n>                     row limit
+  --engine <name>                 engine routing hint (v0.3.1+, server-side PR #431)
 
 # global options:
   --url <base>                    server URL (default $SDF_URL or http://localhost:8080)
@@ -126,6 +127,32 @@ PLAN SUMMARY
   compute:  flight_count
 ...
 ```
+
+## Engine routing: `--engine <name>`
+
+(Available since v0.3.1 — server-side: PR #431, CLI side: PR #432.)
+
+By default the server decides which engine compiles a query (engine-portable
+path when an `MCPEngineRegistry` is configured, legacy `Models` +
+`SemanticTable` path otherwise — see `docs/design/multi-engine-design.md` §6.4).
+
+Pass `--engine <name>` on `query` or `explain` to force the engine-portable
+path and pick a specific engine (e.g. `spark`, `trino`, `duckdb`,
+`postgresql`):
+
+```bash
+# Route through the Spark engine provider
+sdf query flights -d carrier -m flight_count --engine spark
+
+# Route through the PostgreSQL engine provider
+sdf query flights -d carrier -m flight_count --engine postgresql
+
+# Omit the flag — server decides routing (default, backward compat)
+sdf query flights -d carrier -m flight_count
+```
+
+If the named engine is not registered, the server returns `EngineError.EngineUnavailable`
+and the CLI surfaces it as exit code 1.
 
 ## Streaming models over `sdf`
 
