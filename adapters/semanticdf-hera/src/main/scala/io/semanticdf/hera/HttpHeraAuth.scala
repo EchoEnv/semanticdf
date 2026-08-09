@@ -112,11 +112,12 @@ final class HttpHeraAuth(
           // Success — parse the OAuth token bundle.
           HttpHeraAuth.parseAuthResponse(resp.body()) match {
             case Right(token) => Right(token)
-            case Left(parseErr) =>
-              // Per error-handling-style.md: distinguish failure modes.
-              // A 2xx with a malformed body is a separate case from a
-              // 401 (auth failure) or a network failure.
-              Left(HeraAuthError.MalformedResponse(reason = parseErr))
+            // Per error-handling-style.md: distinguish failure modes.
+            // A 2xx with a malformed body is a separate case from a
+            // 401 (auth failure) or a network failure. The parse
+            // helper already returns `HeraAuthError.MalformedResponse`
+            // directly (no stringly-typed bridge needed).
+            case Left(err) => Left(err)
           }
         case 401 =>
           // Per the OAuth2 contract: 401 from /auth/login = bad creds;
@@ -230,21 +231,20 @@ object HttpHeraAuth {
     * }
     * ```
     *
-    * Per error-handling-style.md "Converter return types": returns
-    * `Either[String, HeraToken]` HERE because this is a private
-    * helper that the caller immediately wraps in
-    * `Either[HeraAuthError, HeraToken]` — see the Internal helper
-    * rule ("converts between two ADTs"). The `String` here is a
-    * parse-error message, not the public API's error type.
+    * Per error-handling-style.md "Converter return types": the
+    * helper returns `Either[L, X]` DIRECTLY (no intermediate
+    * String). Caller matches on `HeraAuthError` cases — the type
+    * info is preserved across the boundary.
     *
-    * Note: this is a PRIVATE helper (not exposed). The public
-    * `sendAndParseAuthResponse` wraps it into the typed ADT. */
-  private[hera] def parseAuthResponse(json: String): Either[String, HeraToken] = {
+    * (Was `Either[String, HeraToken]` per the legacy "private
+    * helper" rationale; the standard's hard ban #1 is universal and
+    * does not carve out an exception for private helpers. Fixed.) */
+  private[hera] def parseAuthResponse(json: String): Either[HeraAuthError, HeraToken] = {
     val accessToken  = extractStringField(json, "access_token").getOrElse {
-      return Left("missing oauth.access_token")
+      return Left(HeraAuthError.MalformedResponse(reason = "missing oauth.access_token"))
     }
     val refreshToken = extractStringField(json, "refresh_token").getOrElse {
-      return Left("missing oauth.refresh_token")
+      return Left(HeraAuthError.MalformedResponse(reason = "missing oauth.refresh_token"))
     }
     val expiresInSeconds = extractStringField(json, "expires_in").flatMap(_.toLongOption).getOrElse(3600L)
     val realmId         = extractNumberField(json, "selRealmId").getOrElse(0L)
@@ -259,7 +259,11 @@ object HttpHeraAuth {
       Right(HeraAuth.makeToken(accessToken, refreshToken, expiresAt, realmId, defaultZeusId))
     } catch {
       case e: IllegalArgumentException =>
-        Left(s"invalid token shape: ${e.getMessage}")
+        // Per docs/design/error-handling-style.md "IO boundary" rule:
+        // catch SPECIFIC exception types and convert to the
+        // surrounding function's `Either[L, X]` immediately. The
+        // exception must not escape the function.
+        Left(HeraAuthError.MalformedResponse(reason = s"invalid token shape: ${e.getMessage}"))
     }
   }
 

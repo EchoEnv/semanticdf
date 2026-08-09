@@ -65,7 +65,7 @@ final class HttpHeraClient(
     val body = s"""{"jobGroupId":"$jobGroup","sql":"${escapeJson(sql)}","limit":$limit,"realmId":$realmId,"zeusId":$zeusJson}"""
     val req = basePost(url, body)
     sendJson(req).flatMap { json =>
-      HttpHeraClient.parseQueryResult(json).left.map(HeraClientError.MalformedResponse(_))
+      HttpHeraClient.parseQueryResult(json)
     }
   }
 
@@ -77,7 +77,7 @@ final class HttpHeraClient(
     val body = s"""{"tableName":"${escapeJson(tableName)}","realmId":$realmId}"""
     val req = basePost(url, body)
     sendJson(req).flatMap { json =>
-      HttpHeraClient.parseDescribeTable(json).left.map(HeraClientError.MalformedResponse(_))
+      HttpHeraClient.parseDescribeTable(json)
     }
   }
 
@@ -202,7 +202,7 @@ final class HttpHeraClient(
     val body = """{"active":true}"""
     val req = basePost(url, body)
     sendJson(req).flatMap { json =>
-      HttpHeraClient.parseRealmList(json).left.map(HeraClientError.MalformedResponse(_))
+      HttpHeraClient.parseRealmList(json)
     }
   }
 
@@ -212,8 +212,15 @@ final class HttpHeraClient(
     sendJson(req).flatMap { json =>
       HttpHeraClient.parseRealm(json) match {
         case Right(realm) => Right(Some(realm))
-        case Left("404")  => Right(None)  // not-found at the boundary = absent
-        case Left(parseErr) => Left(HeraClientError.MalformedResponse(reason = parseErr))
+        // Legacy sentinel from the `Either[String, _]` era: parseRealm
+        // was documented to surface `"404"` when the realm was absent.
+        // The current impl only produces `MalformedResponse`, so this
+        // branch is currently dead — kept for forward-compat when the
+        // parse helper starts surfacing `NotFound` for absent realms.
+        // Typed per error-handling-style.md (no String sentinels).
+        case Left(HeraClientError.NotFound(reason)) if reason == "404" =>
+          Right(None)  // not-found at the boundary = absent
+        case Left(err) => Left(err)
       }
     }
   }
@@ -380,16 +387,21 @@ object HttpHeraClient {
     * }
     * ```
     *
-    * Per error-handling-style.md "Converter return types": this is
-    * a PRIVATE helper (not exposed); the caller wraps `Left(...)`
-    * into `Either[HeraClientError, ...]`. */
-  private[hera] def parseQueryResult(json: String): Either[String, HeraQueryResult] = {
+    * Per error-handling-style.md "Converter return types": the
+    * helper returns `Either[L, X]` DIRECTLY (no intermediate String).
+    * Caller matches on `HeraClientError` cases — the type info is
+    * preserved across the boundary.
+    *
+    * (Was `Either[String, X]` per the legacy "private helper"
+    * rationale; the standard's hard ban #1 is universal and does
+    * not carve out an exception for private helpers. Fixed.) */
+  private[hera] def parseQueryResult(json: String): Either[HeraClientError, HeraQueryResult] = {
     // Top-level fields extraction (minimal — enough for the common case).
     val fieldsJson = extractArrayContent(json, "fields").getOrElse {
-      return Left("missing fields array")
+      return Left(HeraClientError.MalformedResponse(reason = "missing fields array"))
     }
     val rowsJson = extractArrayContent(json, "rows").getOrElse {
-      return Left("missing rows array")
+      return Left(HeraClientError.MalformedResponse(reason = "missing rows array"))
     }
     val fields = splitTopLevelObjects(fieldsJson).flatMap(parseFieldObject)
     val rows   = splitTopLevelObjects(rowsJson).map(parseRowObject)
@@ -403,15 +415,20 @@ object HttpHeraClient {
     * { "fields": [...], "rows": [{ "col_name": "...", "data_type": "..." }] }
     * ```
     *
-    * Per error-handling-style.md: returns `Either[String, ...]` HERE
-    * because this is a private helper (the Internal helper rule).
-    * The caller wraps it into `Either[HeraClientError, ...]`. */
-  private[hera] def parseDescribeTable(json: String): Either[String, ResolvedSchema] = {
+    * Per error-handling-style.md "Converter return types": the
+    * helper returns `Either[L, X]` DIRECTLY (no intermediate
+    * String). Caller matches on `HeraClientError` cases — the type
+    * info is preserved across the boundary.
+    *
+    * (Was `Either[String, ...]` per the legacy "private helper"
+    * rationale; the standard's hard ban #1 is universal and does
+    * not carve out an exception for private helpers. Fixed.) */
+  private[hera] def parseDescribeTable(json: String): Either[HeraClientError, ResolvedSchema] = {
     val fields = extractArrayContent(json, "fields").getOrElse {
-      return Left("missing fields array")
+      return Left(HeraClientError.MalformedResponse(reason = "missing fields array"))
     }
     val rowsJson = extractArrayContent(json, "rows").getOrElse {
-      return Left("missing rows array")
+      return Left(HeraClientError.MalformedResponse(reason = "missing rows array"))
     }
     // The actual columns live in `rows`, each with { col_name, data_type }.
     // Per the existing ResolvedSchema shape (matches UC adapter,
@@ -490,7 +507,7 @@ object HttpHeraClient {
   }
 
   /** Parse a realm list response into a portable [[HeraRealm]] list. */
-  private[hera] def parseRealmList(json: String): Either[String, List[HeraRealm]] = {
+  private[hera] def parseRealmList(json: String): Either[HeraClientError, List[HeraRealm]] = {
     val arrayJson = extractArrayContent(json, "").getOrElse(json)  // top-level is the array
     val objs = splitTopLevelObjects(arrayJson)
     Right(objs.flatMap(parseRealmObject))
@@ -508,10 +525,10 @@ object HttpHeraClient {
   /** Parse a single realm response into a [[HeraRealm]].
     * Used by `getRealm` — the response shape is a single object
     * (not wrapped in an array). */
-  private[hera] def parseRealm(json: String): Either[String, HeraRealm] = {
+  private[hera] def parseRealm(json: String): Either[HeraClientError, HeraRealm] = {
     parseRealmObject(json) match {
       case Some(r) => Right(r)
-      case None    => Left("could not parse realm")
+      case None    => Left(HeraClientError.MalformedResponse(reason = "could not parse realm"))
     }
   }
 
