@@ -84,6 +84,11 @@ services:
   # mode — one Spark JVM per container. For production, swap to a
   # managed Spark cluster (e.g. Databricks Connect) and point the
   # env var at its URL.
+  #
+  # The apache/spark image's `start-connect-server.sh` backgrounds the
+  # server via `spark-daemon.sh` and exits. Without the keepalive
+  # command, the container stops immediately. `tail -f $log` keeps
+  # the container alive while still serving the gRPC connection.
   spark-connect:
     image: apache/spark:4.0.0
     container_name: semanticdf-spark-connect
@@ -91,11 +96,9 @@ services:
       - "15002:15002"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Override the apache/spark entrypoint to start the connect
-    # server. The script lives at /opt/spark/sbin/ in the official
-    # Apache Spark image. We bind on 0.0.0.0:15002 via the
-    # spark.connect.grpc.binding.port conf.
-    command: ["/opt/spark/sbin/start-connect-server.sh", "--master", "local[*]", "--conf", "spark.connect.grpc.binding.port=15002"]
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - "/opt/spark/sbin/start-connect-server.sh --master local[*] --conf spark.connect.grpc.binding.port=15002 2>&1 >> /tmp/spark-start.log; tail -f /opt/spark/logs/spark-spark-org.apache.spark.sql.connect.service.SparkConnectServer-1-*.out"
     healthcheck:
       test: ["CMD-SHELL", "ss -lnt | grep -q ':15002' || exit 1"]
       interval: 5s
