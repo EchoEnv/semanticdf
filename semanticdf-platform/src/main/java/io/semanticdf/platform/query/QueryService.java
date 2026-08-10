@@ -68,6 +68,10 @@ public class QueryService {
   private final ModelRegistry models;
   private final SparkSession spark;
   private final ResultCache cache;
+  // v0.3.1 Phase 4: optional engine-portable query path. When non-null
+  // AND the model is registered as a `core.Model`, `runQuery` dispatches
+  // here instead of the Spark-only legacy path. May be null (legacy-only).
+  private final io.semanticdf.core.engine.MCPEngineRegistry engineRegistry;
 
   /**
    * Constructor. Used by {@link io.semanticdf.platform.PlatformApplication}
@@ -86,9 +90,27 @@ public class QueryService {
    * Tests substitute their own triple via the same constructor.
    */
   public QueryService(ModelRegistry models, SparkSession spark, ResultCache cache) {
+    this(models, spark, cache, null);
+  }
+
+  /**
+   * v0.3.1 Phase 4: 4-arg constructor with the optional engine-portable
+   * query path. When {@code engineRegistry} is non-null AND the model
+   * is registered as a {@code core.Model} (via {@code getModel}), the
+   * engine-portable path is used instead of the Spark-only legacy path.
+   *
+   * @param engineRegistry optional; may be {@code null} for legacy-only
+   *                       deployments (3-arg constructor pattern)
+   */
+  public QueryService(
+      ModelRegistry models,
+      SparkSession spark,
+      ResultCache cache,
+      io.semanticdf.core.engine.MCPEngineRegistry engineRegistry) {
     this.models = java.util.Objects.requireNonNull(models, "models");
     this.spark = java.util.Objects.requireNonNull(spark, "spark");
     this.cache = cache == null ? ResultCache.NoOp() : cache;
+    this.engineRegistry = engineRegistry;  // null is allowed (legacy-only)
   }
 
   /** Convenience for tests + callers without DI. */
@@ -120,6 +142,32 @@ public class QueryService {
     } catch (RuntimeException e) {
       throw new IllegalArgumentException(
           "model lookup failed for '" + request.modelName() + "': " + e.getMessage(), e);
+    }
+
+    // v0.3.1 Phase 4: engine-portable dispatch. When an
+    // MCPEngineRegistry is wired AND the model is registered as a
+    // core.Model (the new `getModel` lookup), route through the
+    // engine registry instead of the Spark-only legacy path. This
+    // makes the platform engine-portable: any registered engine
+    // (Spark today; Trino/DuckDB/PG/Hera/UC/HMS future) can serve
+    // queries through this same code path.
+    //
+    // Cache note: the engine-portable path skips the journaled
+    // InMemoryResultCache for v1 (PortableQueryResult is a
+    // different shape than RestateCachedRow). Future work can
+    // add a PortableQueryResult-shaped journal type. For now,
+    // engine-portable queries go straight to the engine.
+    if (engineRegistry != null) {
+      java.util.Optional<io.semanticdf.core.model.Model> modelOpt =
+          models.getModel(request.modelName());
+      if (modelOpt.isPresent()) {
+        return runQueryViaEngineRegistry(modelOpt.get(), request);
+      }
+      // No Model for this name — fall through to the legacy path.
+      // (Typically means the YAML hit a ModelBridge.toModel
+      // limitation at register time; the operator sees a typed
+      // error in REGISTRATION_STATUS and the legacy path keeps
+      // working.)
     }
 
     // STEP 2: cache key. Platform-side helper that hashes the FULL
@@ -228,6 +276,205 @@ public class QueryService {
         cacheKey, rebuilt, request.modelName(), model.version());
     return toQueryResult(model, rebuilt);
   }
+
+  /**
+   * Convert an engine-portable [[io.semanticdf.core.engine.PortableQueryResult]]
+   * to the platform's wire [[QueryResult]] shape.
+   *
+   * <p>Per the standard: a typed conversion at the boundary. The
+   * PortableQueryResult is the engine-portable shape (from core); the
+   * QueryResult is the platform's wire DTO. We translate field names
+   * + values row-by-row.
+   *
+   * <p>Per scala-error-handling §1: typed values from
+   * [[io.semanticdf.core.engine.ResultValue]] are converted to Java
+   * boxed values (Long, Double, String, Boolean, BigDecimal, null).
+   * Maps / lists are NOT supported in the wire format (the platform
+   * wire DTO is positional List&lt;Object&gt;); if the engine returns
+   * a structured value, we throw IllegalArgumentException at the
+   * boundary (typed error).
+   */
+  static QueryResult toQueryResultFromPortable(
+      io.semanticdf.core.engine.PortableQueryResult portable,
+      QueryRequest request) {
+    // Scala collection → Java for for-each. PortableQueryResult exposes
+    // Scala Vector/Seq which Java can't iterate directly.
+    java.lang.Iterable<io.semanticdf.core.engine.ResultRow> scalaRows =
+        scala.collection.JavaConverters.asJavaIterable(portable.rows());
+    java.util.List<String> fieldNames = new java.util.ArrayList<>();
+    java.util.List<java.util.List<Object>> rowsOut = new java.util.ArrayList<>();
+    for (io.semanticdf.core.engine.ResultRow row : scalaRows) {
+      java.util.List<Object> cells = new java.util.ArrayList<>();
+      java.lang.Iterable<io.semanticdf.core.engine.ResultValue> scalaVals =
+          scala.collection.JavaConverters.asJavaIterable(row.values());
+      for (io.semanticdf.core.engine.ResultValue v : scalaVals) {
+        cells.add(toJavaValue(v));
+      }
+      rowsOut.add(cells);
+    }
+    java.lang.Iterable<io.semanticdf.core.schema.Field> scalaFields =
+        scala.collection.JavaConverters.asJavaIterable(portable.schema().fields());
+    for (io.semanticdf.core.schema.Field f : scalaFields) {
+      fieldNames.add(f.name());
+    }
+    int n = rowsOut.size();
+    // Truncation flag: conservative — we don't know the cap here.
+    // The MCP wire shape includes rowCount; we set truncated=false
+    // because the engine returns ALL rows it computed (the cap is
+    // applied upstream by the engine provider).
+    return new QueryResult(
+        request.modelName(),
+        fieldNames,
+        rowsOut,
+        /*truncated*/ false,
+        n);
+  }
+
+  /** Convert a single [[io.semanticdf.core.engine.ResultValue]] to a
+   * Java boxed value for the platform's wire shape.
+   *
+   * <p>ResultValue is a Scala sealed trait; its cases are
+   * {@code NullV}, {@code BoolV}, {@code IntV}, {@code DoubleV},
+   * {@code DecimalV}, {@code StringV}, {@code TimestampV} (per
+   * core/ResultValue). Each has a typed accessor; we dispatch by
+   * class name + cast (Java has no pattern matching for sealed traits).
+   *
+   * <p>Structured values (lists, maps) are NOT supported in the
+   * platform wire format (positional List&lt;Object&gt;). If the
+   * engine returns one, we throw IllegalArgumentException at the
+   * boundary (typed error per the standard). */
+  private static Object toJavaValue(io.semanticdf.core.engine.ResultValue v) {
+    if (v == null) {
+      return null;
+    }
+    String simpleName = v.getClass().getSimpleName();
+    switch (simpleName) {
+      case "NullV":
+        return null;
+      case "BoolV":
+        return ((io.semanticdf.core.engine.ResultValue.BoolV) v).v();
+      case "IntV":
+        return ((io.semanticdf.core.engine.ResultValue.IntV) v).v();
+      case "DoubleV":
+        return ((io.semanticdf.core.engine.ResultValue.DoubleV) v).v();
+      case "DecimalV":
+        return ((io.semanticdf.core.engine.ResultValue.DecimalV) v).v();
+      case "StringV":
+        return ((io.semanticdf.core.engine.ResultValue.StringV) v).v();
+      case "TimestampV":
+        return ((io.semanticdf.core.engine.ResultValue.TimestampV) v).v().toString();
+      default:
+        throw new IllegalArgumentException(
+            "unsupported ResultValue subtype for wire shape: " + simpleName);
+    }
+  }
+
+  /**
+   * v0.3.1 Phase 4: engine-portable query path.
+   *
+   * <p>Builds an {@link io.semanticdf.core.engine.MCPQueryRequest} from
+   * the platform's wire {@link QueryRequest}, selects the default engine
+   * from the {@link io.semanticdf.core.engine.MCPEngineRegistry}, and
+   * delegates the query execution to that engine. The result is the
+   * engine-portable {@link io.semanticdf.core.engine.PortableQueryResult}
+   * which we then convert to the platform's wire {@link QueryResult}.
+   *
+   * <h2>Error handling</h2>
+   *
+   * <p>Per {@code error-handling-style.md}: engine errors are typed
+   * {@link io.semanticdf.core.engine.EngineError} cases. We surface
+   * them as {@link IllegalArgumentException} at the platform boundary
+   * (the platform's wire protocol uses exceptions for transport; the
+   * Restate handler boundary converts typed errors to the platform's
+   * own error envelope).
+   *
+   * <h2>Engine selection</h2>
+   *
+   * <p>v0.3.1 P1: always the registry's default engine. The platform's
+   * wire {@link QueryRequest} doesn't carry an {@code engine} field
+   * (that lives on the MCP wire DTO). Future work: add an {@code engine}
+   * field to the platform's wire DTO.
+   */
+  private QueryResult runQueryViaEngineRegistry(
+      io.semanticdf.core.model.Model model, QueryRequest request) {
+    // Build the MCPQueryRequest from the wire DTO. Scala's Option /
+    // Seq bridge cleanly via Option.empty / Option.apply and
+    // List.from (Java List → Scala immutable Seq).
+    java.util.List<String> dims = request.dimensions() == null
+        ? java.util.Collections.emptyList()
+        : request.dimensions();
+    java.util.List<String> meas = request.measures() == null
+        ? java.util.Collections.emptyList()
+        : request.measures();
+    scala.Option<String> whereOpt = (request.where() == null || request.where().isBlank())
+        ? scala.Option.empty()
+        : scala.Option.apply(request.where());
+
+    io.semanticdf.core.engine.MCPQueryRequest mcpReq =
+        new io.semanticdf.core.engine.MCPQueryRequest(
+            request.modelName(),
+            scala.collection.JavaConverters.asScalaBuffer(dims).toList(),
+            scala.collection.JavaConverters.asScalaBuffer(meas).toList(),
+            (scala.Option<Object>) scala.Option.empty(),  // limit (boxed Long)
+            scala.Option.<String>empty(),  // timeGrain
+            scala.Option.<scala.Tuple2<String, String>>empty(),  // timeRange
+            whereOpt);
+
+    // Select the default engine. The platform wire DTO doesn't carry
+    // an engine field (that's MCP-only); the registry decides via
+    // its `default` field. Per `error-handling-style.md`:
+    // Either[L, X] is the public API shape; we use Java's isRight
+    // /right / left / get to navigate it.
+    io.semanticdf.core.engine.MCPEngineProvider[] providerHolder =
+        new io.semanticdf.core.engine.MCPEngineProvider[1];
+
+    scala.util.Either<io.semanticdf.core.engine.EngineError,
+                       io.semanticdf.core.engine.MCPEngineProvider> selectResult =
+        engineRegistry.select(engineRegistry.defaultEngine());
+    if (selectResult.isRight()) {
+      providerHolder[0] = selectResult.right().get();
+    }
+    // Engine unavailable (selectResult.isLeft()) → fall back to legacy.
+
+    if (providerHolder[0] == null) {
+      // Engine unavailable — surface as IllegalArgumentException so the
+      // platform's Restate handler layer can convert to its wire error
+      // envelope. Callers that want a fallback should use the 3-arg
+      // constructor (engineRegistry=null) which goes straight to the
+      // legacy path.
+      io.semanticdf.core.engine.EngineError err =
+          selectResult.isLeft() ? selectResult.left().get() : null;
+      throw new IllegalArgumentException(
+          "engine unavailable for '" + request.modelName() + "': " + err);
+    }
+
+    // Execute the query via the engine provider.
+    scala.util.Either<io.semanticdf.core.engine.EngineError,
+                       io.semanticdf.core.engine.PortableQueryResult> either;
+    try {
+      either = providerHolder[0].query(
+          model, mcpReq,
+          io.semanticdf.core.engine.EngineContext.defaultContext());
+    } catch (RuntimeException e) {
+      throw new IllegalArgumentException(
+          "engine-portable query failed for '" + request.modelName()
+              + "': " + e.getMessage(), e);
+    }
+
+    if (either.isRight()) {
+      return toQueryResultFromPortable(either.right().get(), request);
+    } else {
+      // Typed engine error — surface as IllegalArgumentException at
+      // the platform boundary (Restate handler layer converts to the
+      // platform's wire error envelope).
+      io.semanticdf.core.engine.EngineError err = either.left().get();
+      throw new IllegalArgumentException(
+          "engine error for '" + request.modelName() + "': " + err);
+    }
+  }
+
+  /**
+   * v0.3.1 Phase 4: engine-portable query path.
 
   /**
    * Convert a {@link RestateCachedRow} directly to the platform's

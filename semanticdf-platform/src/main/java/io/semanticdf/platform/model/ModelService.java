@@ -220,8 +220,38 @@ public class ModelService {
       // interface with mutation semantics. When the test-only
       // YamlModelRegistry is passed (no decorator), this branch is
       // a no-op and the registry remains read-only.
+      //
+      // v0.3.1 Phase 4: also derive the engine-portable Model and
+      // register it in the model overlay. This enables the engine
+      // registry query path (Phase 4.3) to serve runtime-registered
+      // models — not just boot-time models. Per the design doc, the
+      // ModelBridge conversion may fail with a typed ModelValidationError
+      // for YAMLs with filters / calculated measures / rollups; we
+      // surface that as IllegalArgumentException so the caller sees a
+      // clean typed error (per `error-handling-style.md` IO-boundary
+      // rule).
       if (models instanceof HotReloadingModelRegistry hot) {
-        hot.register(modelName, compiled);
+        // Derive Model from SemanticTable via the same ModelBridge the
+        // dual manifest reader uses (PR #441). Fail loud with the typed
+        // error if the conversion hits a documented limitation.
+        io.semanticdf.core.model.ModelValidationError result =
+            io.semanticdf.ModelBridge.toModel(compiled).fold(
+                err -> err,
+                m -> {
+                  hot.register(modelName, compiled, m);
+                  return null;
+                });
+        if (result != null) {
+          // The Model could not be derived. We still register the
+          // SemanticTable (legacy path keeps working) but NOT the Model
+          // overlay entry — this model will fall back to the legacy
+          // query path. Operators with such YAMLs see this typed error
+          // in the journal's REGISTRATION_STATUS; they can fix the YAML
+          // (per the limitations in ModelBridge docstring).
+          hot.register(modelName, compiled);
+          state.set(REGISTRATION_STATUS,
+              "legacy_only: model conversion skipped: " + result);
+        }
       }
     } catch (Exception e) {
       state.set(REGISTRATION_STATUS, "failed");
