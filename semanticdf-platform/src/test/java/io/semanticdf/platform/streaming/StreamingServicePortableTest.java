@@ -1,7 +1,6 @@
 package io.semanticdf.platform.streaming;
 
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import io.semanticdf.SemanticTable;
 import io.semanticdf.core.model.Model;
@@ -56,7 +55,8 @@ public class StreamingServicePortableTest {
   @Test
   void existingConstructorsRemainBackwardCompatible() {
     // The 4-arg constructors (without portableLauncher) must continue
-    // to work — the new 5-arg is additive.
+    // to work — the new 5-arg is additive. The assertNotNull calls
+    // verify the constructors don't throw and produce valid instances.
     StreamingService svc3 = new StreamingService(
         new StubModelRegistry(),
         new RecordingLegacyLauncher(),
@@ -68,7 +68,6 @@ public class StreamingServicePortableTest {
         new FakeStreamCatalog());
     assertNotNull(svc3);
     assertNotNull(svc4);
-    assertTrue(svc3 != svc4, "different constructor signatures produce different instances");
   }
 
   @Test
