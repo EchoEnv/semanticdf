@@ -76,14 +76,29 @@ The `-Plocal` profile bundles Spark + log4j-core into the runtime classpath (def
 
 ### Spark engine mode
 
-The platform reads `SEMANTICDF_SPARK_CONNECT_URL` to choose how to obtain its `SparkSession`:
+The platform is a **control plane**: it does NOT create a Spark JVM locally. Spark must be running externally (e.g. via `docker-compose`'s `spark-connect` service, or a managed Spark cluster with Connect enabled), and the platform connects to it via gRPC.
 
 | Mode | When | Where Spark runs |
 |---|---|---|
-| **Local** (default) | env var unset | In-process Spark driver, master from `SPARK_MASTER` (default `local[*]`) |
-| **Connect** (production) | env var set, e.g. `sc://spark-connect:15002` | Long-running Spark Connect cluster (separate JVM) |
+| **Connect** (mandatory) | `SEMANTICDF_SPARK_CONNECT_URL` must be set, e.g. `sc://spark-connect:15002` | Long-running Spark Connect cluster (separate JVM, separate process) |
 
-Connect mode turns the platform into a pure control plane — the engine's JVM lifetime is decoupled from the platform's, and the platform initiates nothing Spark-related beyond the gRPC client. Requires Spark 4.0+ (Spark Connect ships as a separate artifact on 3.x). Set the env var + restart; no platform code changes.
+The platform fails fast at startup if `SEMANTICDF_SPARK_CONNECT_URL` is unset. Both batch (`QueryService`) and stream (`StreamingService`) paths use the same Connect client. The Spark JVM lifetime is fully decoupled from the platform's.
+
+Requires Spark 4.0+ (Spark Connect ships as a separate artifact on 3.x).
+
+#### Local dev startup
+
+```bash
+docker-compose -f semanticdf-platform/docker-compose.yml up -d
+cd semanticdf-platform
+SEMANTICDF_SPARK_CONNECT_URL=sc://localhost:15002 \
+  POSTGRES_HOST=localhost \
+  POSTGRES_PORT=5432 \
+  POSTGRES_USER=semanticdf \
+  POSTGRES_PASSWORD=semanticdf \
+  POSTGRES_DB=semanticdf \
+  mvn exec:java -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
+```
 
 ### Tests
 

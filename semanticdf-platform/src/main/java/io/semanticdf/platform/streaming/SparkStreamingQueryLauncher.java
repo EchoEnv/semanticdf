@@ -32,7 +32,14 @@ import scala.runtime.BoxedUnit;
  * knobs through the Wire DTO yet — they're model-shape decisions, not
  * platform concerns. The model's YAML drives these.
  */
-public final class SparkStreamingQueryLauncher implements StreamingQueryLauncher {
+public final class SparkStreamingQueryLauncher implements StreamingQueryLauncher, java.io.Serializable {
+
+  // SparkSession is Serializable. The launcher holds a process-local
+  // Spark driver handle; the Spark engine serializes the launcher's
+  // stream-side plan (transformations + options) to executors via
+  // Java serialization. Per scala-spark-batch-bugs §1, anything that
+  // could be captured into a Spark closure must be Serializable.
+  private static final long serialVersionUID = 1L;
 
   private final SparkSession spark;
 

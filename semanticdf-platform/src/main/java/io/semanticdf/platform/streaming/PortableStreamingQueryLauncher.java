@@ -40,7 +40,7 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * @see SparkPortableStreamingQueryLauncher
  */
 @FunctionalInterface
-public interface PortableStreamingQueryLauncher {
+public interface PortableStreamingQueryLauncher extends java.io.Serializable {
 
   /**
    * Start a streaming query for the given engine-portable model.

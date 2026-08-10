@@ -38,7 +38,7 @@ import org.apache.spark.sql.functions.{col, count, countDistinct, lit}
   * - Check 4 (Stack): no recursion \u2014 the walk is iterative over the
   *   flat `Model` fields.
   */
-class PortableQueryCompiler {
+class PortableQueryCompiler extends Serializable {
 
   /** Compile a portable [[Model]] into a Spark [[DataFrame]].
     *

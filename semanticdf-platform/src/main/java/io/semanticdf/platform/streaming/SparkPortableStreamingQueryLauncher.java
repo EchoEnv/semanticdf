@@ -48,7 +48,16 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * are stateless Column expressions).
  */
 public final class SparkPortableStreamingQueryLauncher
-    implements PortableStreamingQueryLauncher {
+    implements PortableStreamingQueryLauncher, java.io.Serializable {
+
+  // SparkSession is itself Serializable. The launcher's stream-side
+  // logic is captured (transitively) by Spark's DataStreamWriter.start
+  // — the writer's plan is serialized to executors, so any reference
+  // the launcher holds must be Serializable. Spark is itself, the
+  // StreamRunRequest is a Java record (auto-Serializable), and the
+  // DataFrame's Column expressions are inherently Serializable.
+  private static final long serialVersionUID = 1L;
+
 
   private final SparkSession spark;
 

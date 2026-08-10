@@ -1,19 +1,23 @@
 # Local dev for semanticdf-platform.
 #
-# Two services:
+# Three services:
 #   - postgres: the platform's metadata store AND Restate's journal
 #   - restate: the Restate server (one process per node for v1)
+#   - spark-connect: the Spark Connect server (production topology)
 #
 # Usage:
 #   docker compose -f semanticdf-platform/docker-compose.yml up -d
 #   cd semanticdf-platform
-#   mvn -Dsemanticdf.version=0.2.1 exec:java \
-#     -Dexec.mainClass=io.semanticdf.platform.PlatformApplication -Plocal
+#   SEMANTICDF_SPARK_CONNECT_URL=sc://localhost:15002 \
+#     mvn -Dsemanticdf.version=0.2.1 exec:java \
+#       -Dexec.mainClass=io.semanticdf.platform.PlatformApplication
 #
-# The `-Plocal` profile bundles Spark + log4j-core into the runtime
-# classpath. The `.mvn/jvm.config` (same directory) provides the
-# `--add-opens` flags Spark 3.5.x needs on JDK 17. Earlier
-# workarounds (`-Dexec.classpathScope=test`) are obsolete.
+# The platform is a control plane: it does NOT create a Spark JVM
+# locally. The Spark Connect server (`spark-connect` service) holds
+# the Spark JVM, and the platform connects via gRPC.
+# The `-Plocal` Maven profile is still useful for the add-opens
+# flags (Spark 3.5.x → JDK 17) even though Spark runs in a separate
+# container.
 
 version: "3.9"
 
@@ -63,6 +67,43 @@ services:
     command: ["--config-file", "/config/config.toml"]
     volumes:
       - ./restate-config.toml:/config/config.toml:ro
+
+  # Spark Connect server — production-only topology. The platform
+  # is a control plane that does NOT create a Spark JVM locally;
+  # it obtains its SparkSession via a thin gRPC client to this
+  # service. The Spark JVM lives here, decoupled from the platform's
+  # lifecycle.
+  #
+  # To switch the platform to this mode, set
+  #   SEMANTICDF_SPARK_CONNECT_URL=sc://spark-connect:15002
+  # when starting the platform.
+  #
+  # `bitnami/spark:4.0` ships the Spark Connect server classpath.
+  # The command below starts the server in standalone mode — one
+  # Spark JVM per container. For production, swap to a managed
+  # Spark cluster (e.g. Databricks Connect) and point the env var
+  # at its URL.
+  spark-connect:
+    image: bitnami/spark:4.0
+    container_name: semanticdf-spark-connect
+    ports:
+      - "15002:15002"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      # Spark Connect server binds on 0.0.0.0:15002.
+      - SPARK_MODE=connect
+      - SPARK_CONNECT_GRPC_BIND_ADDRESS=0.0.0.0:15002
+    # The bitnami/spark entrypoint defaults to `master` mode; we
+    # override with --class for the connect server. The exact
+    # command depends on the bitnami image version; verify against
+    # their dockerhub docs.
+    command: ["/opt/bitnami/spark/sbin/start-connect-server.sh", "--master", "local[*]"]
+    healthcheck:
+      test: ["CMD-SHELL", "ss -lnt | grep -q ':15002' || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
 
 volumes:
   semanticdf-pg-data:

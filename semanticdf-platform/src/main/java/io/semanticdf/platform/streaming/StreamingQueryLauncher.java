@@ -17,7 +17,7 @@ import org.apache.spark.sql.streaming.StreamingQuery;
  * {@link StreamingQueryHandleRegistry} for the lifetime of the JVM.
  */
 @FunctionalInterface
-public interface StreamingQueryLauncher {
+public interface StreamingQueryLauncher extends java.io.Serializable {
 
   /**
    * Start a streaming query for the given model and request.
