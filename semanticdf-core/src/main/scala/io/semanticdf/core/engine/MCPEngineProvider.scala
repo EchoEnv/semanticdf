@@ -125,6 +125,15 @@ final case class MCPQueryRequest(
       * via `df.filter(where)` on Spark; engines decide how to
       * handle it (see trait doc above). */
     where:      Option[String] = None,
+    /** Engine-portable typed filters, applied AFTER the model's
+      * compile-time filters and BEFORE where (the raw SQL
+      * field). Each FilterSpec carries a name (for diagnostics)
+      * and an Expr predicate. Per scala-data-driven-refacer:
+      * Expr is pure data; the engine-specific compile is in the
+      * adapter. Per scala-error-handling: at the IO boundary,
+      * unsupported filter shapes surface as typed
+      * EngineError.UnsupportedCapability. */
+    filters:    List[io.semanticdf.core.model.FilterSpec] = Nil,
 ) extends Product with Serializable
 
 object MCPQueryRequest {
