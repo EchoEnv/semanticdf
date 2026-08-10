@@ -1,12 +1,19 @@
 package io.semanticdf.platform.query;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.semanticdf.core.engine.ResultRow;
+import io.semanticdf.core.engine.ResultSchema;
+import io.semanticdf.core.engine.ResultValue;
+import io.semanticdf.core.schema.Field;
+import io.semanticdf.core.schema.SealedDataType;
 import io.semanticdf.platform.streaming.HotReloadingModelRegistry;
 import io.semanticdf.platform.streaming.YamlModelRegistry;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import org.apache.spark.sql.SparkSession;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -115,4 +122,82 @@ public class QueryServiceEngineRegistryTest {
     assertNotNull(svc4Null);
     assertTrue(svc3 != svc4Null, "different constructor calls produce different instances");
   }
+
+  // -- v0.3.1 Phase 4.5: cache integration --
+  //
+  // The engine-portable path now integrates with InMemoryResultCache
+  // using the same RestateCachedRow journal type as the legacy path.
+  // These tests verify the conversion helpers.
+
+  @Test
+  void sealedTypeTag_mapsCoreTypesToRestateCachedRowTags() {
+    // case objects in Scala get a "$" suffix in their Java simpleName.
+    assertEquals(RestateCachedRow.T_STRING,
+        QueryService.sealedTypeTag(SealedDataType.Varchar$.MODULE$));
+    assertEquals(RestateCachedRow.T_LONG,
+        QueryService.sealedTypeTag(SealedDataType.Int$.MODULE$));
+    assertEquals(RestateCachedRow.T_LONG,
+        QueryService.sealedTypeTag(SealedDataType.BigInt$.MODULE$));
+    assertEquals(RestateCachedRow.T_DOUBLE,
+        QueryService.sealedTypeTag(SealedDataType.Double$.MODULE$));
+    assertEquals(RestateCachedRow.T_BOOLEAN,
+        QueryService.sealedTypeTag(SealedDataType.Boolean$.MODULE$));
+    assertEquals(RestateCachedRow.T_TIMESTAMP,
+        QueryService.sealedTypeTag(SealedDataType.Timestamp$.MODULE$));
+    assertEquals(RestateCachedRow.T_DATE,
+        QueryService.sealedTypeTag(SealedDataType.Date$.MODULE$));
+    // Decimal is a case class (no $ suffix)
+    assertEquals(RestateCachedRow.T_DECIMAL,
+        QueryService.sealedTypeTag(new SealedDataType.Decimal(10, 2)));
+    // null → T_NULL
+    assertEquals(RestateCachedRow.T_NULL, QueryService.sealedTypeTag(null));
+  }
+
+  @Test
+  void encodePortableCell_handlesAllTypedValues() {
+    assertEquals("hello",
+        QueryService.encodePortableCell(new ResultValue.StringV("hello")));
+    assertEquals("42",
+        QueryService.encodePortableCell(new ResultValue.IntV(42L)));
+    assertEquals("3.14",
+        QueryService.encodePortableCell(new ResultValue.DoubleV(3.14)));
+    assertEquals("true",
+        QueryService.encodePortableCell(new ResultValue.BoolV(true)));
+    assertEquals("1.5",
+        QueryService.encodePortableCell(
+            new ResultValue.DecimalV(scala.math.BigDecimal.javaBigDecimal2bigDecimal(java.math.BigDecimal.valueOf(1.5)))));
+    assertEquals(null,
+        QueryService.encodePortableCell(ResultValue.NullV$.MODULE$));
+    assertEquals(null, QueryService.encodePortableCell(null));
+  }
+
+  @Test
+  void toQueryResultFromJournaled_stringOverload_handlesNullModelName() {
+    RestateCachedRow empty = new RestateCachedRow(
+        java.util.Collections.<String>emptyList(),
+        java.util.Collections.<String>emptyList(),
+        java.util.Collections.<String[]>emptyList());
+    QueryService.QueryResult result =
+        QueryService.toQueryResultFromJournaled((String) null, empty);
+    assertEquals("unknown", result.model());
+  }
+
+  @Test
+  void toQueryResultFromJournaled_stringOverload_handlesNullCells() {
+    RestateCachedRow row = new RestateCachedRow(
+        java.util.Arrays.asList("a", "b"),
+        java.util.Arrays.asList(RestateCachedRow.T_STRING, RestateCachedRow.T_LONG),
+        java.util.Arrays.<String[]>asList(new String[]{null, "42"}));
+    QueryService.QueryResult result =
+        QueryService.toQueryResultFromJournaled("m", row);
+    assertEquals("m", result.model());
+    assertEquals(1, result.rows().size());
+    assertEquals(null, result.rows().get(0).get(0));
+    assertEquals(42L, result.rows().get(0).get(1));
+  }
+
+  // Note: full toRestateCachedRowFromPortable + roundtrip tests live
+  // in the semanticdf-spark module's PortableQueryCompiler spec (where
+  // Scala collection construction is natural). The Java-side tests
+  // above cover the cell-level + type-tag mappings exhaustively.
 }

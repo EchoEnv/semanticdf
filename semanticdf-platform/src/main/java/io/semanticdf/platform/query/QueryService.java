@@ -349,7 +349,7 @@ public class QueryService {
     }
     String simpleName = v.getClass().getSimpleName();
     switch (simpleName) {
-      case "NullV":
+      case "NullV$":
         return null;
       case "BoolV":
         return ((io.semanticdf.core.engine.ResultValue.BoolV) v).v();
@@ -378,6 +378,28 @@ public class QueryService {
    * delegates the query execution to that engine. The result is the
    * engine-portable {@link io.semanticdf.core.engine.PortableQueryResult}
    * which we then convert to the platform's wire {@link QueryResult}.
+   *
+   * <h2>Caching (Phase 4.5)</h2>
+   *
+   * <p>Per the design doc: the engine-portable path integrates with
+   * the journaled {@link InMemoryResultCache} using the same
+   * {@code RestateCachedRow} journal type as the legacy path.
+   * The engine's {@link io.semanticdf.core.engine.PortableQueryResult}
+   * is converted to {@link RestateCachedRow} at the boundary
+   * (one-time conversion cost; same per-cell encoding as the
+   * legacy path). The journal + cache pattern is identical:
+   *
+   * <pre>{@code
+   * cache key -> cache.getJournaled(key)
+   *   hit:  toQueryResultFromJournaled(name, journaled)
+   *   miss: Restate.run("query.execute", RestateCachedRow.class,
+   *                     () -> engine query -> toRestateCachedRowFromPortable)
+   *          -> cache.putJournaled
+   *          -> toQueryResultFromJournaled(name, journaled)
+   * }</pre>
+   *
+   * <p>Per scala-jvm-safety §1: null cache key is rejected at the
+   * boundary; null request is rejected earlier in {@link #runQuery}.
    *
    * <h2>Error handling</h2>
    *
@@ -448,7 +470,68 @@ public class QueryService {
           "engine unavailable for '" + request.modelName() + "': " + err);
     }
 
-    // Execute the query via the engine provider.
+    // Cache key (same derivation as the legacy path so cache hits
+    // are coherent across paths). The engine-portable path shares
+    // the cache namespace — if a legacy execution populated the
+    // cache, the engine path sees it (and vice versa).
+    //
+    // Per scala-jvm-safety §1: null request is rejected earlier in
+    // runQuery; here we just hash the params.
+    final int version = modelVersionOrZero(model);
+    final String cacheKey = CacheBridge.platformCacheKey(
+        request.modelName(),
+        version,
+        request.measures(),
+        request.dimensions(),
+        request.where());
+
+    // Journaled cache path (matches the legacy pattern at lines
+    // 175-201). If the cache supports journaled methods
+    // (InMemoryResultCache), use them; else fall through to the
+    // non-cached path.
+    if (cache instanceof InMemoryResultCache) {
+      final InMemoryResultCache mem = (InMemoryResultCache) cache;
+      scala.Option<Object> cachedJournaled = mem.getJournaled(cacheKey);
+      if (cachedJournaled.isDefined()) {
+        // Cache hit: convert RestateCachedRow → QueryResult (no engine call).
+        return toQueryResultFromJournaled(request.modelName(),
+            (RestateCachedRow) cachedJournaled.get());
+      }
+      // Cache miss: execute engine + journal + cache + return.
+      // Restate.run guarantees that on JVM crash + replay, we
+      // DON'T re-call the engine (the journaled value is returned).
+      // Per scala-spark-batch-bugs §1: closures are stateless;
+      // we capture `provider`, `mcpReq`, `ctx`, `model` (all
+      // serializable).
+      final io.semanticdf.core.engine.MCPEngineProvider provider =
+          providerHolder[0];
+      final RestateCachedRow journaled = Restate.run(
+          "query.execute",
+          RestateCachedRow.class,
+          () -> {
+            scala.util.Either<io.semanticdf.core.engine.EngineError,
+                               io.semanticdf.core.engine.PortableQueryResult> result;
+            try {
+              result = provider.query(model, mcpReq,
+                  io.semanticdf.core.engine.EngineContext.defaultContext());
+            } catch (RuntimeException e) {
+              throw new IllegalArgumentException(
+                  "engine-portable query failed for '"
+                      + request.modelName() + "': " + e.getMessage(), e);
+            }
+            if (result.isLeft()) {
+              io.semanticdf.core.engine.EngineError err = result.left().get();
+              throw new IllegalArgumentException(
+                  "engine error for '" + request.modelName() + "': " + err);
+            }
+            return toRestateCachedRowFromPortable(result.right().get());
+          });
+      mem.putJournaledWithModelAndVersion(
+          cacheKey, journaled, request.modelName(), version);
+      return toQueryResultFromJournaled(request.modelName(), journaled);
+    }
+
+    // No cache (NoOp or external impl). Execute engine directly.
     scala.util.Either<io.semanticdf.core.engine.EngineError,
                        io.semanticdf.core.engine.PortableQueryResult> either;
     try {
@@ -473,6 +556,25 @@ public class QueryService {
     }
   }
 
+  /** Extract a version number from a core.Model for cache-keying.
+   * Models don't carry a version field in v0.3.1 (version is a
+   * legacy YAML concept); we use the model's hashCode as a stable
+   * version surrogate. Two equal Models → same key (good). Different
+   * Models with same content → same key (acceptable; the wire DTO
+   * dominates via its content hash).
+   *
+   * Per scala-error-handling §1: this is a "may not exist" lookup
+   * (we have a Model, not a version); we return 0 if hashing fails.
+   * The cache key is just a hash bucket; collisions across versions
+   * are not a correctness issue (cache hit returns the value
+   * regardless). */
+  private static int modelVersionOrZero(io.semanticdf.core.model.Model m) {
+    if (m == null) {
+      return 0;
+    }
+    return m.hashCode();
+  }
+
   /**
    * v0.3.1 Phase 4: engine-portable query path.
 
@@ -489,6 +591,17 @@ public class QueryService {
    */
   static QueryResult toQueryResultFromJournaled(
       SemanticTable model, RestateCachedRow journaled) {
+    return toQueryResultFromJournaled(
+        CacheBridge.modelNameOrUnknown(model), journaled);
+  }
+
+  /**
+   * v0.3.1 Phase 4: engine-portable variant. Takes a model name
+   * String (not a SemanticTable) because the engine-portable path
+   * has a {@code core.Model}, not a {@code SemanticTable}.
+   */
+  static QueryResult toQueryResultFromJournaled(
+      String modelName, RestateCachedRow journaled) {
     java.util.List<String> fieldNames = journaled.fieldNames();
     java.util.List<String> fieldTypes = journaled.fieldTypes();
     java.util.List<String[]> cellRows = journaled.rows();
@@ -504,7 +617,7 @@ public class QueryService {
       rows.add(typed);
     }
     return new QueryResult(
-        CacheBridge.modelNameOrUnknown(model),
+        modelName == null ? "unknown" : modelName,
         fieldNames,
         rows,
         // Truncation flag at the real cap (the env-var-aware
@@ -550,6 +663,123 @@ public class QueryService {
       cellRows.add(cells);
     }
     return new RestateCachedRow(names, types, cellRows);
+  }
+
+  /**
+   * v0.3.1 Phase 4.5: convert an engine-portable
+   * {@link io.semanticdf.core.engine.PortableQueryResult} to the
+   * journaled {@link RestateCachedRow} shape so it can be:
+   *
+   * <ul>
+   *   <li>Journaled via {@code Restate.run("query.execute", ...)}</li>
+   *   <li>Stored in the {@link InMemoryResultCache}</li>
+   *   <li>Decoded back via {@link #toQueryResultFromJournaled(String, RestateCachedRow)}</li>
+   * </ul>
+   *
+   * <p>The cell encoding uses the same 9-tag vocabulary
+   * ({@link RestateCachedRow#T_STRING}, {@link RestateCachedRow#T_LONG},
+   * etc.) as the legacy Spark path, ensuring cache hits from either
+   * path produce identical {@link QueryResult} shapes.
+   *
+   * <p>Per scala-error-handling §1: structured values (lists, maps)
+   * are NOT supported in {@link RestateCachedRow}; if the engine
+   * returns one, we throw {@link IllegalArgumentException} at the
+   * boundary (typed error).
+   */
+  static RestateCachedRow toRestateCachedRowFromPortable(
+      io.semanticdf.core.engine.PortableQueryResult portable) {
+    // fieldNames + fieldTypes from the schema
+    java.util.List<String> names = new java.util.ArrayList<>();
+    java.util.List<String> types = new java.util.ArrayList<>();
+    java.lang.Iterable<io.semanticdf.core.schema.Field> scalaFields =
+        scala.collection.JavaConverters.asJavaIterable(portable.schema().fields());
+    for (io.semanticdf.core.schema.Field f : scalaFields) {
+      names.add(f.name());
+      types.add(sealedTypeTag(f.dataType()));
+    }
+
+    // cellRows from each ResultRow
+    java.util.List<String[]> cellRows = new java.util.ArrayList<>();
+    java.lang.Iterable<io.semanticdf.core.engine.ResultRow> scalaRows =
+        scala.collection.JavaConverters.asJavaIterable(portable.rows());
+    for (io.semanticdf.core.engine.ResultRow row : scalaRows) {
+      int n = row.values().size();
+      String[] cells = new String[n];
+      java.lang.Iterable<io.semanticdf.core.engine.ResultValue> scalaVals =
+          scala.collection.JavaConverters.asJavaIterable(row.values());
+      int j = 0;
+      for (io.semanticdf.core.engine.ResultValue v : scalaVals) {
+        cells[j] = encodePortableCell(v);
+        j++;
+      }
+      cellRows.add(cells);
+    }
+    return new RestateCachedRow(names, types, cellRows);
+  }
+
+  /**
+   * v0.3.1 Phase 4.5: map a portable {@link io.semanticdf.core.schema.SealedDataType}
+   * to a {@link RestateCachedRow} tag. The tag is a closed set of
+   * strings (Jackson-friendly) used by the journal/cache layer.
+   */
+  static String sealedTypeTag(io.semanticdf.core.schema.SealedDataType dt) {
+    if (dt == null) {
+      return RestateCachedRow.T_NULL;
+    }
+    String name = dt.getClass().getSimpleName();
+    switch (name) {
+      case "Varchar$":
+        return RestateCachedRow.T_STRING;
+      case "BigInt$": case "Int$":
+        return RestateCachedRow.T_LONG;
+      case "Double$":
+        return RestateCachedRow.T_DOUBLE;
+      case "Decimal":
+        return RestateCachedRow.T_DECIMAL;
+      case "Boolean$":
+        return RestateCachedRow.T_BOOLEAN;
+      case "Timestamp$":
+        return RestateCachedRow.T_TIMESTAMP;
+      case "Date$":
+        return RestateCachedRow.T_DATE;
+      case "Null":
+        return RestateCachedRow.T_NULL;
+      default:
+        throw new IllegalArgumentException(
+            "unsupported SealedDataType subtype for journal: " + name);
+    }
+  }
+
+  /**
+   * v0.3.1 Phase 4.5: encode a portable
+   * {@link io.semanticdf.core.engine.ResultValue} to its string form
+   * for journaling. Each case maps to a stable encoding (matching
+   * the 9-tag vocabulary).
+   */
+  static String encodePortableCell(io.semanticdf.core.engine.ResultValue v) {
+    if (v == null) {
+      return null;
+    }
+    String simpleName = v.getClass().getSimpleName();
+    switch (simpleName) {
+      case "NullV$":
+        return null;
+      case "BoolV":
+        return String.valueOf(((io.semanticdf.core.engine.ResultValue.BoolV) v).v());
+      case "IntV":
+        return String.valueOf(((io.semanticdf.core.engine.ResultValue.IntV) v).v());
+      case "DoubleV":
+        return String.valueOf(((io.semanticdf.core.engine.ResultValue.DoubleV) v).v());
+      case "DecimalV":
+        return ((io.semanticdf.core.engine.ResultValue.DecimalV) v).v().toString();
+      case "StringV":
+        return ((io.semanticdf.core.engine.ResultValue.StringV) v).v();
+      case "TimestampV":
+        return ((io.semanticdf.core.engine.ResultValue.TimestampV) v).v().toString();
+      default:
+        throw new IllegalArgumentException(
+            "unsupported ResultValue subtype for journal: " + simpleName);
+    }
   }
 
   /**

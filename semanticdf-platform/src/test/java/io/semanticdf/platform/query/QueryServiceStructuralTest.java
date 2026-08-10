@@ -131,14 +131,21 @@ class QueryServiceStructuralTest {
 
     // --- toQueryResultFromJournaled (cache-hit / Restate-journaled path) ---
     {
-      // Find the method DEFINITION, not the call site. The method
-      // definition starts with `static QueryResult toQueryResultFromJournaled(`
-      // (note: definition form has the `static` keyword + return type).
-      // A bare `indexOf("toQueryResultFromJournaled")` would match the
-      // first call site (line 199), not the method (line 243).
-      int fromJournaledOpen = src.indexOf("static QueryResult toQueryResultFromJournaled(");
-      assertTrue(fromJournaledOpen >= 0,
+      // v0.3.1 Phase 4.5: there are now TWO overloads of
+      // toQueryResultFromJournaled:
+      //   1. static QueryResult toQueryResultFromJournaled(SemanticTable, RestateCachedRow)
+      //      — delegates to the String overload (legacy callers).
+      //   2. static QueryResult toQueryResultFromJournaled(String, RestateCachedRow)
+      //      — engine-portable callers; contains the truncated flag logic.
+      // The structural check covers the String overload (the one that
+      // actually contains the truncated-flag logic) — find the
+      // SECOND definition (the String one).
+      int firstDef = src.indexOf("static QueryResult toQueryResultFromJournaled(");
+      assertTrue(firstDef >= 0,
           "QueryService.toQueryResultFromJournaled must exist (regression-protected).");
+      int secondDef = src.indexOf("static QueryResult toQueryResultFromJournaled(",
+          firstDef + 1);
+      int fromJournaledOpen = secondDef >= 0 ? secondDef : firstDef;
       int braceOpen = src.indexOf("{", fromJournaledOpen);
       int braceClose = findMatchingBrace(src, braceOpen);
       String body = src.substring(braceOpen, braceClose);
