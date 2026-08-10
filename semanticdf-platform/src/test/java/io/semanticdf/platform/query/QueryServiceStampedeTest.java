@@ -330,10 +330,14 @@ class QueryServiceStampedeTest {
     // parent-dir renames. Try cwd first, then cwd.getParent — the
     // latter is the project root when Surefire runs from the
     // module dir (semanticdf-platform/), which is the convention.
-    // Mirrors the examplesPath helper pattern in
-    // HospitalTemplateSpec.scala.
+    //
+    // v0.3.0 module restructure: the library moved from
+    // `src/main/scala/io/semanticdf/...` to
+    // `adapters/semanticdf-spark/src/main/scala/io/semanticdf/...`.
+    // The marker + the file being read both live under the new
+    // spark adapter — see resolveProjectRoot() for the marker.
     Path src = resolveProjectRoot()
-        .resolve("src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
+        .resolve("adapters/semanticdf-spark/src/main/scala/io/semanticdf/cache/InMemoryResultCache.scala");
     String content = Files.readString(src);
 
     // Both the row-form and journaled-form loser paths must re-set
@@ -360,7 +364,7 @@ class QueryServiceStampedeTest {
   }
 
   /** Resolve the project root (the directory that contains
-    * {@code src/main/scala/io/semanticdf/package.scala}).
+    * {@code adapters/semanticdf-spark/src/main/scala/io/semanticdf/package.scala}).
     * Mirrors the {@code examplesPath} helper pattern in
     * {@code HospitalTemplateSpec.scala}: try cwd first (works for
     * IDE runners that set user.dir to the project root), then
@@ -379,7 +383,14 @@ class QueryServiceStampedeTest {
     // marker in the codebase (post-#281 review: previously used
     // a deep cache file, which would silently break if the
     // cache module was restructured).
-    String marker = "src/main/scala/io/semanticdf/package.scala";
+    //
+    // v0.3.0 module restructure: this marker moved from
+    // `src/main/scala/io/semanticdf/package.scala` to
+    // `adapters/semanticdf-spark/src/main/scala/io/semanticdf/package.scala`.
+    // The package object is now in the spark adapter (the library
+    // is structured as semanticdf-core + semanticdf-spark + per-engine
+    // adapters under adapters/).
+    String marker = "adapters/semanticdf-spark/src/main/scala/io/semanticdf/package.scala";
     for (java.io.File c : candidates) {
       if (c == null) continue;
       if (new java.io.File(c, marker).isFile()) {
