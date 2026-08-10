@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
  * <p>Full end-to-end streaming is covered by StreamingServiceIntegrationTest.
  * These tests focus on the new construction patterns.
  */
-public class StreamingServicePortableSpec {
+public class StreamingServicePortableTest {
 
   @Test
   void fiveArgConstructor_wiresPortableLauncher() {
