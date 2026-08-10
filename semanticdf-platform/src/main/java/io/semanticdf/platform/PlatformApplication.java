@@ -317,20 +317,21 @@ public final class PlatformApplication {
     // SPARK_APP_NAME — Spark application name shown in the Spark UI / Connect logs.
     // Default: "semanticdf-platform".
     //
-    // SPARK_MASTER — currently UNUSED (reserved for future single-node
-    // tuning). The library's SdfSession hardcodes 'local[*]' for the
-    // local-mode fallback. Set SEMANTICDF_SPARK_CONNECT_URL
-    // instead for production. Default: "local[*]" (preserved as a hint in
-    // startup logs).
+    // SPARK_MASTER — UNUSED. The platform is a pure control plane; it does
+    // NOT create a Spark JVM locally. Set SEMANTICDF_SPARK_CONNECT_URL
+    // (mandatory) to a long-running Spark Connect server (e.g. "sc://spark-connect:15002").
+    // The default value below is preserved only as a hint in startup logs.
     //
-    // SEMANTICDF_SPARK_CONNECT_URL — when set (e.g. "sc://spark-connect:15002"),
-    // the platform becomes a control plane and obtains its SparkSession from
-    // a long-running Spark Connect cluster over gRPC. The cluster's JVM
-    // lifetime is decoupled from the platform's. This is the production
-    // topology. Unset = legacy local-mode (in-process Spark driver), kept for
-    // tests and quickstart. SPARK 4.0+ REQUIRED for Connect mode
-    // (SdfSession.scala:81-88 throws UnsupportedOperationException on
-    // Spark 3.x). See platform-architecture.md for the rationale.
+    // SEMANTICDF_SPARK_CONNECT_URL — MANDATORY. The platform obtains its
+    // SparkSession from a long-running Spark Connect cluster over gRPC.
+    // The Spark JVM lives in a separate process (the Connect server), and
+    // the platform only holds a thin gRPC client to it. This is the
+    // production topology — the platform's JVM lifetime is decoupled from
+    // the Spark cluster's. Both batch (QueryService) and stream
+    // (StreamingService) paths use the same Connect client. SPARK 4.0+
+    // REQUIRED for Connect mode (SdfSession.scala:81-88 throws
+    // UnsupportedOperationException on Spark 3.x). See
+    // platform-architecture.md for the rationale.
     //
     // SEMANTICDF_AUDIT_PERSIST — when set to "true" (default: false), audit
     // events emitted by RestateAuditSink (currently via StreamingService.run
@@ -343,18 +344,40 @@ public final class PlatformApplication {
     String sparkAppName = System.getenv().getOrDefault("SPARK_APP_NAME", "semanticdf-platform");
     String sparkMaster = System.getenv().getOrDefault("SPARK_MASTER", "local[*]");
 
-    // --- Spark session ---
+    // --- Spark session (control-plane mode) ---
     //
-    // P1: in-process Spark driver, master from SPARK_MASTER (default
-    //   "local[*]"). One Spark JVM per platform JVM.
+    // The platform is a control plane — it does NOT create a Spark JVM
+    // locally. Spark must be running externally (e.g. via
+    // docker-compose's `spark-connect` service or a managed Spark
+    // cluster), and the platform connects to it via Spark Connect over
+    // gRPC. The SparkSession returned by SdfSession in Connect mode is a
+    // thin gRPC client; the launcher's `start()` calls run on the
+    // platform's JVM, but the actual work (compiling the model to a
+    // DataFrame, starting the streaming query) is executed on the
+    // remote Spark cluster.
     //
-    // Flag-gated via SEMANTICDF_SPARK_CONNECT_URL — when set, the
-    //   session is a Spark Connect CLIENT to a long-running remote cluster.
-    //   SparkConnect mode requires Spark 4.0+ (SdfSession throws a clear
-    //   error on 3.5 with a hint to build with -Pspark4). The platform's
-    //   shutdown hook calls spark.stop() on both modes — for Connect this
-    //   just closes the client's gRPC connection; the remote server's
-    //   lifecycle is unaffected.
+    // This is mandatory: the platform fails fast at startup if
+    // SEMANTICDF_SPARK_CONNECT_URL is unset. The previous "legacy local
+    // mode" (SparkSession.builder().master("local[*]").getOrCreate())
+    // has been removed because it leaks the Spark JVM lifetime into the
+    // platform's, defeating the architectural decoupling.
+    //
+    // For tests: the existing test suite constructs SparkSession
+    // directly (SparkSession.builder().master("local[2]")...). These
+    // tests do NOT go through PlatformApplication.main, so the
+    // mandatory check below does not affect them. The test bootstrap
+    // path is intentionally separate from the production bootstrap.
+    String sparkConnectUrl = System.getenv(SdfSession.RemoteUrlEnvVar());
+    if (sparkConnectUrl == null || sparkConnectUrl.isBlank()) {
+      throw new IllegalStateException(
+          SdfSession.RemoteUrlEnvVar() + " is required. The platform is a "
+              + "control plane and does not create a Spark JVM locally. "
+              + "Set " + SdfSession.RemoteUrlEnvVar() + " to a Spark Connect "
+              + "server URL (e.g. \"sc://spark-connect:15002\"). "
+              + "See semanticdf-platform/docker-compose.yml for a local "
+              + "Spark Connect server configuration, or run a managed "
+              + "Spark cluster with the Connect service enabled.");
+    }
     SparkSession spark =
         SdfSession.createFromEnv(sparkAppName, Option.empty());
 
@@ -384,17 +407,12 @@ public final class PlatformApplication {
             },
             "semanticdf-platform-shutdown-spark-early"));
 
-    if (System.getenv(SdfSession.RemoteUrlEnvVar()) != null) {
-      // Control-plane mode. Redact credentials (anything after a
-      // ';' or '?' delimiter in sc:// URLs is a token) before logging.
-      LOG.info(
-          "semanticdf-platform: Spark Connect mode \u2014 control plane against "
-              + redactConnectUrl(System.getenv(SdfSession.RemoteUrlEnvVar())));
-    } else {
-      LOG.info(
-          "semanticdf-platform: local Spark mode \u2014 master=" + sparkMaster
-              + " (set " + SdfSession.RemoteUrlEnvVar() + " to switch to Spark Connect)");
-    }
+    // Control-plane mode. Redact credentials (anything after a
+    // ';' or '?' delimiter in sc:// URLs is a token) before logging.
+    // The mandatory check above ensures sparkConnectUrl is non-null here.
+    LOG.info(
+        "semanticdf-platform: Spark Connect mode \u2014 control plane against "
+            + redactConnectUrl(sparkConnectUrl));
 
     // --- Streaming lifecycle wiring ---
     StreamingQueryHandleRegistry handles = new StreamingQueryHandleRegistry();
