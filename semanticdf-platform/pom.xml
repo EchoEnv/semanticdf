@@ -168,6 +168,38 @@
             <version>${restate.sdk.version}</version>
         </dependency>
 
+        <!-- v0.3.1 (multi-engine demo): adapter JARs (semanticdf-duckdb,
+             semanticdf-postgresql) at compile scope so the engine
+         providers can be reflectively loaded at runtime. -->
+        <dependency>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf-duckdb_2.13</artifactId>
+            <version>${semanticdf.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.semanticdf</groupId>
+            <artifactId>semanticdf-postgresql_2.13</artifactId>
+            <version>${semanticdf.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <!-- v0.3.1 (multi-engine demo): JDBC drivers for DuckDB and
+             PostgreSQL. The adapter JARs are compile-time deps
+             (they're reflected at runtime). The JDBC drivers are
+             runtime deps needed by the engines' connection setup. -->
+        <dependency>
+            <groupId>org.duckdb</groupId>
+            <artifactId>duckdb_jdbc</artifactId>
+            <version>1.5.5.1</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.7.3</version>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Test scope. -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
