@@ -198,12 +198,40 @@ final class Query(
       request: io.semanticdf.mcp.handlers.QueryRequest,
   ): Either[io.semanticdf.core.engine.EngineError, io.semanticdf.core.engine.PortableQueryResult] = {
     val engineReg = engineRegistry.get  // safe: gated by handle() caller
+    // v0.3.1 Phase C2: convert the wire-DTO `where` / `ast_where`
+    // to engine-portable typed filters. We reuse the legacy
+    // mergePredicates (Option[Predicate]) then convert via
+    // PredicateToExprConverter (legacy Predicate -> core Expr).
+    // On conversion failure (unsupported predicate shape), we
+    // surface as a typed EngineError.UnsupportedCapability per
+    // the standard.
+    //
+    // Per scala-error-handling §1: Either[L, X] at the IO boundary,
+    // not throw. Per scala-impact-analysis: the field name matches
+    // MCPQueryRequest.filters (the typed engine-portable filter spec).
+    val requestFilters: List[io.semanticdf.core.model.FilterSpec] =
+      Query.mergedWhere(request) match {
+        case None => Nil
+        case Some(legacyPred) =>
+          io.semanticdf.predicate.PredicateToExprConverter
+            .toExpr(legacyPred)
+            .map { expr =>
+              List(io.semanticdf.core.model.FilterSpec(
+                name      = "where",
+                predicate = expr))
+            }
+            .fold(
+              err => return Left(err),
+              fs => fs)
+      }
+
     val mcpReq = io.semanticdf.core.engine.MCPQueryRequest(
       model      = request.model,
       dimensions = request.dimensions.getOrElse(Nil),
       measures   = request.measures,
       limit      = request.limit.map(_.toLong),
       timeGrain  = request.time_grain,
+      filters    = requestFilters,
     )
     // Default to the registry's default engine if request.engine
     // is empty. Per the user audit: this is the "engine-default

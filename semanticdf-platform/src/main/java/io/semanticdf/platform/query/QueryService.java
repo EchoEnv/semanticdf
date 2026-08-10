@@ -432,6 +432,21 @@ public class QueryService {
         ? scala.Option.empty()
         : scala.Option.apply(request.where());
 
+    // v0.3.1 Phase C2: typed filters. The platform's wire DTO
+    // has raw SQL `where` (not AST predicates), so we don't construct
+    // typed FilterSpecs here — pass an empty Scala List. Future work
+    // can convert the platform's wire DTO to typed filters (mirroring
+    // the MCP handler in semanticdf-mcp).
+    //
+    // Build the empty List via the JavaConverters bridge (same
+    // pattern used elsewhere in this method for dims/meas).
+    java.util.List<io.semanticdf.core.model.FilterSpec> emptyFilters =
+        java.util.Collections.<io.semanticdf.core.model.FilterSpec>emptyList();
+    scala.collection.immutable.List<io.semanticdf.core.model.FilterSpec> filtersList =
+        scala.collection.JavaConverters
+            .<io.semanticdf.core.model.FilterSpec>asScalaBuffer(emptyFilters)
+            .toList();
+
     io.semanticdf.core.engine.MCPQueryRequest mcpReq =
         new io.semanticdf.core.engine.MCPQueryRequest(
             request.modelName(),
@@ -440,7 +455,8 @@ public class QueryService {
             (scala.Option<Object>) scala.Option.empty(),  // limit (boxed Long)
             scala.Option.<String>empty(),  // timeGrain
             scala.Option.<scala.Tuple2<String, String>>empty(),  // timeRange
-            whereOpt);
+            whereOpt,
+            filtersList);
 
     // Select the default engine. The platform wire DTO doesn't carry
     // an engine field (that's MCP-only); the registry decides via

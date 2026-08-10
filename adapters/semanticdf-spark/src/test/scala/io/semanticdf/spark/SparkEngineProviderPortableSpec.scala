@@ -305,4 +305,97 @@ class SparkEngineProviderPortableSpec
       case Left(other) => fail(s"unexpected Left type: $other")
     }
   }
+
+  // -- v0.3.1 Phase C2: typed filters --
+  //
+  // Per the design doc, MCPQueryRequest.filters carries typed
+  // FilterSpec list (engine-portable Expr predicates). Per
+  // precedence (per design): model.filters → request.filters →
+  // request.where. These tests verify request.filters application.
+
+  test("filters = Nil is equivalent to no request-level filter") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("us", 50L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      // filters defaults to Nil
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    result.rows.length shouldBe 2  // no filter — both us and eu groups
+  }
+
+  test("filters = List(carrier='us') filters to only 'us' groups") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("us", 50L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      filters    = List(
+        io.semanticdf.core.model.FilterSpec(
+          name      = "where",
+          predicate = io.semanticdf.core.expr.Expr.Equal(
+            io.semanticdf.core.expr.Expr.FieldRef("region"),
+            io.semanticdf.core.expr.Expr.Literal(
+              io.semanticdf.core.expr.LiteralValue.StringValue("us"),
+              io.semanticdf.core.schema.SealedDataType.Varchar)
+          )
+        )
+      ),
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    result.rows.length shouldBe 1  // only 'us' survives the typed filter
+  }
+
+  test("filters applied BEFORE where (precedence per design doc)") {
+    val s = spark
+    import s.implicits._
+    Seq(("us", 100L), ("eu", 200L)).toDF("region", "amount")
+      .createOrReplaceTempView("orders")
+    val provider = makeProvider
+    // Typed filter keeps only 'us'; raw SQL filter keeps only 'eu'.
+    // Per precedence, typed filter applies first → 0 rows survive
+    // (because the typed filter keeps us, the raw SQL keeps eu,
+    // and the AND yields no match for either).
+    val request = MCPQueryRequest(
+      model      = "orders",
+      measures   = Nil,
+      dimensions = Nil,
+      limit      = None,
+      filters    = List(
+        io.semanticdf.core.model.FilterSpec(
+          name      = "where",
+          predicate = io.semanticdf.core.expr.Expr.Equal(
+            io.semanticdf.core.expr.Expr.FieldRef("region"),
+            io.semanticdf.core.expr.Expr.Literal(
+              io.semanticdf.core.expr.LiteralValue.StringValue("us"),
+              io.semanticdf.core.schema.SealedDataType.Varchar)
+          )
+        )
+      ),
+      where      = Some("region = 'eu'"),
+    )
+    val result = provider.query(ordersModel(), request, EngineContext.defaultContext) match {
+      case Left(err) => fail(s"query returned Left: $err")
+      case Right(r)  => r
+    }
+    // filters(us) AND where(eu) = 0 rows
+    result.rows.length shouldBe 0
+  }
 }
