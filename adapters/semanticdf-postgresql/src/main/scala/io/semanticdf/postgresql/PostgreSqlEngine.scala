@@ -45,7 +45,7 @@ import io.semanticdf.core.rel.RelOp
   * Zero Spark imports. */
 final class PostgreSqlEngine(
     client:  PostgreSqlClient,
-    database: String,
+    val database: String,
 ) extends Engine[Any] {
 
   /** Wire-stable engine label. Renaming is a breaking change to
@@ -157,7 +157,14 @@ final class PostgreSqlEngine(
     val dims  = model.dimensions.map(d => s""""${d.name}"""")
     val meas  = model.measures.map { m =>
       val fnName = m.expr.fn.toString.toUpperCase
-      val input  = m.expr.input.map(_.toString).getOrElse("*")
+      // Per scala-jvm-safety: use the FieldRef's name field, not
+      // toString (which includes the case class wrapper). For
+      // Count (no input), use "*" as the standard SQL idiom.
+      val input  = m.expr.input match {
+        case Some(io.semanticdf.core.expr.Expr.FieldRef(name)) => name
+        case Some(other) => other.toString  // fallback for other exprs
+        case None => "*"
+      }
       s"""$fnName($input) AS "${m.name}""""
     }
     val where = if (model.filters.isEmpty) ""
@@ -169,13 +176,23 @@ final class PostgreSqlEngine(
     // rejected at the SourceResolver layer, not here. Per
     // error-handling-style.md: programmer errors at boundary
     // throw IllegalArgumentException, NOT Either.
-    val tableName = model.source match {
-      case io.semanticdf.core.model.SourceRef.ByName(_, _, t) => t
+    val from = model.source match {
+      case io.semanticdf.core.model.SourceRef.ByName(catalog, namespace, tableName) =>
+        // Per scala-jvm-safety: bare-table form resolves against
+        // the current search_path, which defaults to "$user, public"
+        // in a typical demo. We don't hardcode the database
+        // (let search_path resolve it) so the query works
+        // regardless of which database/schema the table was
+        // created in.
+        (catalog, namespace) match {
+          case (Some(c), Some(s)) => s""""$c"."$s"."$tableName""""
+          case (None,    Some(s)) => s""""$s"."$tableName""""
+          case (_,       None)    => s""""$tableName""""
+        }
       case other => throw new IllegalArgumentException(
         s"PostgreSQL engine only supports SourceRef.ByName; got ${other.getClass.getSimpleName}"
       )
     }
-    val from = s""""$database"."$tableName""""
     val select = (dims ++ meas).mkString(", ")
     if (select.isEmpty) throw new IllegalArgumentException(
       s"model '${model.name}' has no dimensions or measures; cannot compile to a SELECT"

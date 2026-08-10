@@ -292,12 +292,21 @@ class DuckDBQueryCompiler {
 
   private def renderFromClause(source: SourceRef): String = source match {
     case SourceRef.ByName(catalog, namespace, table) =>
-      // DuckDB uses 1-, 2-, or 3-part names depending on the
-      // attached catalog. We always emit 3-part for portability
-      // (matches the Trino compiler).
-      val cat = catalog.getOrElse("memory")
-      val sch = namespace.getOrElse("main")
-      s""""$cat"."$sch"."$table""""
+      // DuckDB supports 1-, 2-, or 3-part names. We emit the
+      // minimum that the source can express: bare table for
+      // unspecified catalog+namespace, schema.table for
+      // namespace only, or full 3-part for explicit catalog.
+      // This matches the Trino compiler's "use what the source
+      // carries" approach. Per scala-jvm-safety: the bare-table
+      // form resolves against the current/default catalog, which
+      // is "memory" for in-memory, the file name for file-based,
+      // and the cache name for shared caches. We don't hardcode
+      // "memory" so the demo works for all three modes.
+      (catalog, namespace) match {
+        case (Some(c), Some(s)) => s""""$c"."$s"."$table""""
+        case (None,    Some(s)) => s""""$s"."$table""""
+        case (_,       None)    => s""""$table""""
+      }
     case _: SourceRef.ByPath =>
       // Resolver would have rejected ByPath; we shouldn't reach
       // here. Emit a placeholder that surfaces the error at

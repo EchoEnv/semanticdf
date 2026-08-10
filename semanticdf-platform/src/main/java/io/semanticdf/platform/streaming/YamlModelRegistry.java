@@ -158,6 +158,15 @@ public final class YamlModelRegistry implements ModelRegistry {
     return Collections.unmodifiableSortedSet(new TreeSet<>(tables.keySet()));
   }
 
+  /** All registered models as a name → core.Model map (for the
+    * engine-portable engine providers that need the model at
+    * construction time). The Spark provider ignores this map
+    * (its query path uses core.Model directly via the platform's
+    * ModelRegistry). */
+  public java.util.Map<String, io.semanticdf.core.model.Model> getAllModels() {
+    return Collections.unmodifiableMap(models);
+  }
+
   /** Number of registered models. */
   public int size() {
     return tables.size();
