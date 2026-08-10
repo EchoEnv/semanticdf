@@ -1,6 +1,8 @@
 package io.semanticdf.platform.streaming;
 
 import io.semanticdf.SemanticTable;
+import io.semanticdf.core.model.Model;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
@@ -75,6 +77,27 @@ public final class HotReloadingModelRegistry implements ModelRegistry {
       return overlayHit;
     }
     return delegate.get(modelName);
+  }
+
+  /**
+   * Resolve a model by name as an engine-portable {@link Model}.
+   *
+   * <p><b>v0.3.2 interim limitation:</b> this delegates to the boot-time
+   * {@link YamlModelRegistry} only. Runtime-registered models (added
+   * via {@link #register(String, SemanticTable)}) are stored as
+   * {@code SemanticTable} in the overlay; their {@code Model}
+   * representation is NOT computed. This is acceptable for the
+   * v0.3.2 transition — runtime registration still uses
+   * {@code SemanticTable} for the query path's compatibility. A
+   * future PR (Phase 4 of the design doc) will add a parallel
+   * {@code Model} overlay populated when the register path migrates.
+   *
+   * <p>For the engine-portable path, the boot-time registry is the
+   * authoritative source today.
+   */
+  @Override
+  public Optional<Model> getModel(String modelName) {
+    return delegate.getModel(modelName);
   }
 
   /**

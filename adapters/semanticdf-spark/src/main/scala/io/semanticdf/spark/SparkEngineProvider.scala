@@ -153,9 +153,20 @@ final class SparkEngineProvider(
   ): Either[EngineError, PortableQueryResult] = {
     try {
       new PortableQueryCompiler().compile(model, ctx).flatMap { df =>
+        // v0.3.2 Phase 1: apply raw-SQL `where` BEFORE limit
+        // (matches the legacy `CacheBridge.executeQuery` order).
+        // Spark applies via `df.filter(where)`; other engines
+        // decide how to handle (see `MCPQueryRequest.where`
+        // doc). Per scala-jvm-safety §1: `where: Option[String]`
+        // is null-safe; an empty/blank string would still hit
+        // Spark's parser — we don't second-guess.
+        val filtered = request.where match {
+          case Some(w) if w.nonEmpty => df.filter(w)
+          case _                     => df
+        }
         // Apply per-request limit (the only request-level
         // override for v0.3.1; orderBy support deferred).
-        val limited = request.limit.fold(df)(l => df.limit(l.toInt))
+        val limited = request.limit.fold(filtered)(l => filtered.limit(l.toInt))
 
         // Derive the result schema from the compiled plan's
         // actual schema (per scala-spark-batch-bugs §3:

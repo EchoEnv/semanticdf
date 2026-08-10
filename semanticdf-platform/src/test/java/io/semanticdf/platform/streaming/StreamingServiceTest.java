@@ -102,21 +102,64 @@ class StreamingServiceTest {
         NullPointerException.class,
         () ->
             new StreamingService(
-                name -> null, null, new StreamingQueryHandleRegistry()));
+                // v0.3.2 Phase 3: ModelRegistry is no longer a functional
+                // interface (added `getModel`); replace the lambda.
+                new ModelRegistry() {
+                  @Override
+                  public io.semanticdf.SemanticTable get(String name) {
+                    throw new UnsupportedOperationException("not used");
+                  }
+                  @Override
+                  public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+                    return java.util.Optional.empty();
+                  }
+                },
+                null,
+                new StreamingQueryHandleRegistry()));
   }
 
   @Test
   void constructor_rejectsNullHandles() {
     assertThrows(
         NullPointerException.class,
-        () -> new StreamingService(name -> null, (model, req) -> null, null));
+        () -> new StreamingService(
+            // v0.3.2 Phase 3: ModelRegistry is no longer a functional
+            // interface (added `getModel`); replace the lambda.
+            new ModelRegistry() {
+              @Override
+              public io.semanticdf.SemanticTable get(String name) {
+                throw new UnsupportedOperationException("not used");
+              }
+              @Override
+              public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+                return java.util.Optional.empty();
+              }
+            },
+            (model, req) -> null,
+            null));
   }
 
   @Test
   void constructor_acceptsAllDeps() {
     StreamingService svc =
         new StreamingService(
-            name -> null, (model, req) -> null, new StreamingQueryHandleRegistry());
+            // v0.3.2 Phase 3 partial: ModelRegistry is no longer a
+            // functional interface (added `getModel`), so the
+            // lambda `name -> null` no longer compiles. Use a
+            // throw-on-lookup stub instead — the constructor test
+            // doesn't call `get`, so it never throws.
+            new ModelRegistry() {
+              @Override
+              public io.semanticdf.SemanticTable get(String name) {
+                throw new UnsupportedOperationException("not used in constructor test");
+              }
+              @Override
+              public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+                return java.util.Optional.empty();
+              }
+            },
+            (model, req) -> null,
+            new StreamingQueryHandleRegistry());
     assertNotNull(svc);
   }
 
@@ -310,6 +353,15 @@ class StreamingServiceTest {
     @Override
     public io.semanticdf.SemanticTable get(String name) {
       return model;
+    }
+
+    @Override
+    public java.util.Optional<io.semanticdf.core.model.Model> getModel(String name) {
+      // v0.3.2 Phase 3 partial: stub returns empty (the test's
+      // SemanticTable doesn't carry a pre-computed Model). Real
+      // registries compute the Model at load time via
+      // ModelBridge.toModel; the stub doesn't bother.
+      return java.util.Optional.empty();
     }
   }
 

@@ -269,4 +269,56 @@ class HotReloadingModelRegistryTest {
     assertTrue(names.contains("customers"), "overlay models must appear");
     assertEquals(3, names.size(), "no duplicates between layers");
   }
+
+  // -- v0.3.2 Phase 3 partial: getModel lookup --
+  //
+  // The boot-time registry's getModel(...) returns Optional<Model>
+  // derived from the boot-time SemanticTable via ModelBridge.toModel.
+  // HotReloadingModelRegistry.getModel(...) delegates to the boot-time
+  // registry (runtime-registered models are not yet Model-shaped).
+
+  @Test
+  void getModel_returnsBootTimeModelAsOptional(@TempDir Path tmp) throws Exception {
+    YamlModelRegistry delegate = bootRegistry(tmp);
+    HotReloadingModelRegistry reg = new HotReloadingModelRegistry(delegate);
+
+    java.util.Optional<io.semanticdf.core.model.Model> model = reg.getModel("flights");
+    assertTrue(model.isPresent(), "boot-time model must be present");
+    // Scala's `val name` generates a public getter `name()` for Java callers
+    assertEquals("flights", model.get().name(), "model name must match the YAML key");
+  }
+
+  @Test
+  void getModel_returnsEmptyForMissingName(@TempDir Path tmp) throws Exception {
+    YamlModelRegistry delegate = bootRegistry(tmp);
+    HotReloadingModelRegistry reg = new HotReloadingModelRegistry(delegate);
+
+    java.util.Optional<io.semanticdf.core.model.Model> model = reg.getModel("does_not_exist");
+    assertTrue(model.isEmpty(), "missing model must return Optional.empty(), not throw");
+  }
+
+  @Test
+  void getModel_returnsEmptyForNullName(@TempDir Path tmp) throws Exception {
+    YamlModelRegistry delegate = bootRegistry(tmp);
+    HotReloadingModelRegistry reg = new HotReloadingModelRegistry(delegate);
+
+    // Per the standard: null is a programmer error boundary; the lookup
+    // returns Optional.empty() rather than throwing NullPointerException.
+    java.util.Optional<io.semanticdf.core.model.Model> model = reg.getModel(null);
+    assertTrue(model.isEmpty(), "null name must return Optional.empty()");
+  }
+
+  @Test
+  void getModel_overlayModelIsNotYetExposed(@TempDir Path tmp) throws Exception {
+    // v0.3.2 interim: runtime-registered models are stored as
+    // SemanticTable in the overlay, not as Model. getModel(...) for
+    // an overlay entry returns empty (deferred to a future PR).
+    YamlModelRegistry delegate = bootRegistry(tmp);
+    HotReloadingModelRegistry reg = new HotReloadingModelRegistry(delegate);
+    reg.register("orders", tableFromYaml(tmp, "orders", "orders_tbl"));
+
+    java.util.Optional<io.semanticdf.core.model.Model> model = reg.getModel("orders");
+    assertTrue(model.isEmpty(),
+        "overlay-registered model is not yet Model-shaped (interim limitation)");
+  }
 }
