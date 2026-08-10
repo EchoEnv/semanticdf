@@ -26,6 +26,8 @@ import io.semanticdf.platform.streaming.HotReloadingModelRegistry;
 import io.semanticdf.platform.streaming.ModelRegistry;
 import io.semanticdf.platform.streaming.PostgresStreamCatalog;
 import io.semanticdf.platform.streaming.SparkStreamingQueryLauncher;
+import io.semanticdf.platform.streaming.PortableStreamingQueryLauncher;
+import io.semanticdf.platform.streaming.SparkPortableStreamingQueryLauncher;
 import io.semanticdf.platform.streaming.StartupReconciler;
 import io.semanticdf.platform.streaming.StreamCatalog;
 import io.semanticdf.platform.streaming.StreamingQueryHandleRegistry;
@@ -404,6 +406,14 @@ public final class PlatformApplication {
     YamlModelRegistry yamlRegistry = YamlModelRegistry.load(modelsDir, spark);
     ModelRegistry models = new HotReloadingModelRegistry(yamlRegistry);
     StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
+    // v0.3.1 Phase 5: engine-portable streaming launcher. The
+    // StreamingService dispatches here when the model is registered
+    // as a core.Model (via models.getModel). For Spark-only deployments,
+    // this is a no-op add (the portable launcher is Spark-coupled
+    // but takes the engine-portable Model). Future work: register
+    // non-Spark engines (Trino / DuckDB / PG / Hera / UC / HMS) as
+    // alternative portable launchers.
+    PortableStreamingQueryLauncher portableLauncher = new SparkPortableStreamingQueryLauncher(spark);
 
     LOG.info(
         "semanticdf-platform: loaded "
@@ -504,7 +514,7 @@ public final class PlatformApplication {
     Endpoint endpoint = Endpoint.builder()
         .bind(new ModelService(modelStore, spark, resultCache, models))
         .bind(new QueryService(models, spark, resultCache, engineRegistry))
-        .bind(new StreamingService(models, launcher, handles, catalog))
+        .bind(new StreamingService(models, launcher, handles, catalog, portableLauncher))
         .bind(new AuditService(auditStore))
         .bind(new CatalogService(modelStore))
         .build();

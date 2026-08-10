@@ -153,6 +153,11 @@ public class StreamingService {
 
   private final ModelRegistry models;
   private final StreamingQueryLauncher launcher;
+  // v0.3.1 Phase 5: optional engine-portable streaming launcher
+  // (takes core.Model). When non-null AND the model is registered as
+  // a core.Model, run() dispatches here instead of the legacy
+  // SemanticTable-based launcher. May be null (legacy-only deployment).
+  private final PortableStreamingQueryLauncher portableLauncher;
   private final StreamingQueryHandleRegistry handles;
   private final AuditSink auditSink;
   private final StreamCatalog catalog;
@@ -183,6 +188,21 @@ public class StreamingService {
   }
 
   /**
+   * v0.3.1 Phase 5: production constructor with optional
+   * engine-portable streaming launcher. Wires the default
+   * Restate-backed audit sink. May pass {@code null} for
+   * {@code portableLauncher} (legacy-only deployment).
+   */
+  public StreamingService(
+      ModelRegistry models,
+      StreamingQueryLauncher launcher,
+      StreamingQueryHandleRegistry handles,
+      StreamCatalog catalog,
+      PortableStreamingQueryLauncher portableLauncher) {
+    this(models, launcher, handles, new RestateAuditSink(), catalog, portableLauncher);
+  }
+
+  /**
    * Backward-compat production constructor — supplies an explicit
    * {@link AuditSink} but no catalog. Used by tests that pass a
    * recording/no-op audit sink without caring about reconciliation.
@@ -206,12 +226,30 @@ public class StreamingService {
       StreamingQueryHandleRegistry handles,
       AuditSink auditSink,
       StreamCatalog catalog) {
+    this(models, launcher, handles, auditSink, catalog, null);
+  }
+
+  /**
+   * v0.3.1 Phase 5: 6-arg constructor with optional engine-portable
+   * streaming launcher. When {@code portableLauncher} is non-null
+   * AND the model is registered as a {@code core.Model}, run()
+   * dispatches to it instead of the legacy launcher. May be null
+   * (legacy-only deployment; the 5-arg constructor delegates with null).
+   */
+  StreamingService(
+      ModelRegistry models,
+      StreamingQueryLauncher launcher,
+      StreamingQueryHandleRegistry handles,
+      AuditSink auditSink,
+      StreamCatalog catalog,
+      PortableStreamingQueryLauncher portableLauncher) {
     this.models = java.util.Objects.requireNonNull(models, "models");
     this.launcher = java.util.Objects.requireNonNull(launcher, "launcher");
     this.handles = java.util.Objects.requireNonNull(handles, "handles");
     this.auditSink = java.util.Objects.requireNonNull(auditSink, "auditSink");
     // catalog may be null — handlers that maintain it must null-check.
     this.catalog = catalog;
+    this.portableLauncher = portableLauncher;  // null OK (legacy-only)
   }
 
   /**
@@ -994,7 +1032,14 @@ public class StreamingService {
    */
   void recreateQueryForResume(
       String streamId, SemanticTable model, StreamRunRequest request) {
-    StreamingQuery fresh = launcher.start(model, request);
+    java.util.Optional<io.semanticdf.core.model.Model> modelOpt =
+        models.getModel(request.modelName());
+    StreamingQuery fresh;
+    if (portableLauncher != null && modelOpt.isPresent()) {
+      fresh = portableLauncher.start(modelOpt.get(), request);
+    } else {
+      fresh = launcher.start(model, request);
+    }
     handles.put(streamId, fresh);
   }
 
@@ -1033,11 +1078,72 @@ public class StreamingService {
    * <p>Visible-for-testing — package-private so unit tests can drive
    * the failure path with a stub launcher.
    */
+  /**
+   * v0.3.1 Phase 5: dispatch the streaming query start via either
+   * the engine-portable launcher (when the model is registered as a
+   * {@code core.Model}) or the legacy SemanticTable-based launcher.
+   *
+   * <p>Per the design doc: the streaming engine-portable path is
+   * additive to the legacy path. Operators with the Spark-only engine
+   * see no behavior change. Operators with model YAMLs that convert
+   * successfully to {@code core.Model} (via the new
+   * {@code ModelBridge.toModel} pipeline from PR #445) get the
+   * engine-portable path automatically.
+   *
+   * <p>Future work: when the engine registry gains streaming
+   * capabilities (Phase 5 follow-up), this dispatcher will route
+   * to {@code engineRegistry.streaming.start(...)} for non-Spark
+   * engines (Trino / DuckDB / PG / Hera / UC / HMS). For now, the
+   * portable launcher is Spark-coupled (engine-portable Model +
+   * Spark-specific DataFrame.writeStream).
+   */
+  /**
+   * v0.3.1 Phase 5: engine-portable streaming query start.
+   * Mirror of {@link #startQueryWithFailureTracking} but dispatches
+   * via {@link PortableStreamingQueryLauncher} (takes a {@code core.Model}).
+   * Same try/catch + RECONCILE_BLOCKED semantics.
+   */
+  void startQueryWithFailureTrackingViaModel(
+      String streamId,
+      io.semanticdf.core.model.Model model,
+      StreamRunRequest request,
+      dev.restate.sdk.Restate.State state) {
+    try {
+      Restate.run(
+          "start-streaming-query",
+          () -> {
+            StreamingQuery query = portableLauncher.start(model, request);
+            handles.put(streamId, query);
+          });
+    } catch (RuntimeException launcherFailure) {
+      state.set(STATUS, "failed");
+      state.set(RECONCILE_BLOCKED, true);
+      state.set(ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
+      throw new dev.restate.sdk.common.TerminalException(
+          dev.restate.sdk.common.TerminalException.BAD_REQUEST_CODE,
+          "StreamingService.run: portable launcher.start failed (stream-id="
+              + streamId
+              + ", cause="
+              + launcherFailure.getMessage()
+              + "). Operators must invoke /restart or /clearReconcileBlock "
+              + "after fixing the underlying cause.");
+    }
+  }
+
   void startQueryWithFailureTracking(
       String streamId,
       SemanticTable model,
       StreamRunRequest request,
       dev.restate.sdk.Restate.State state) {
+    java.util.Optional<io.semanticdf.core.model.Model> modelOpt =
+        models.getModel(request.modelName());
+    if (portableLauncher != null && modelOpt.isPresent()) {
+      // Engine-portable path: dispatch to the portable launcher.
+      startQueryWithFailureTrackingViaModel(
+          streamId, modelOpt.get(), request, state);
+      return;
+    }
+    // Legacy path: dispatch to the SemanticTable-based launcher.
     try {
       Restate.run(
           "start-streaming-query",
