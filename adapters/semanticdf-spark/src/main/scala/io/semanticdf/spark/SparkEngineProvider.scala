@@ -33,7 +33,28 @@ final class SparkEngineProvider(
     engineAdapterVersion = "0.3.0",
   )
 
-  override val available: Boolean = spark != null && sparkTableRegistry.nonEmpty
+  // Per the v0.3.1 Platform migration design doc (PR #443) §3.4,
+  // the engine-portable query path doesn't require the legacy
+  // `sparkTableRegistry` — it walks the `core.Model` directly via
+  // `PortableQueryCompiler`. The legacy `sparkTableRegistry` is
+  // only used by the `explain` path (which surfaces `ModelNotFound`
+  // if the model is missing — see line 74).
+  //
+  // The `available` check must reflect the primary path
+  // (engine-portable query), not the legacy explain path. The
+  // previous `&& sparkTableRegistry.nonEmpty` gate caused the
+  // `MCPEngineRegistry` to fail-loud at startup with a
+  // misleading "engine not available" error when the platform
+  // had no models loaded yet (the platform's boot-time
+  // `buildEngineRegistry(spark)` call passes `Map.empty` for
+  // the registry per the comment in PlatformApplication.java).
+  //
+  // Fix: gate on `spark != null` only. The engine-portable path
+  // is the primary surface; the legacy registry is a fallback
+  // bound to the explain method. `sparkTableRegistry.nonEmpty`
+  // is now a runtime check inside `explain` (which it already
+  // does — `ModelNotFound`).
+  override val available: Boolean = spark != null
 
   override def query(
       model:   io.semanticdf.core.model.Model,

@@ -148,14 +148,36 @@ object ModelBridge {
       )
     }
     val measures: List[Measure] = st.measures.values.toList.map { m =>
-      // v1 placeholder: Sum. See scaladoc for the limitation.
+      // v0.3.1 (Phase 4 follow-up): parse the legacy measure's
+      // `exprString` (the YAML `expr:` hint, e.g. "count(flight_count)")
+      // to populate the portable `AggregateCall` with the correct
+      // `AggregateFn` and input column. The original v1 placeholder
+      // hardcoded `Sum` with `FieldRef(m.name)` as input — which
+      // produced nonsense for any non-Sum measure (e.g. `c:
+      // "count(flight_count)"` became `Sum(c)` instead of
+      // `Count(flight_count)`, and the engine-portable path
+      // produced wrong results).
+      //
+      // For unmatched expressions (lambda-built measures with no
+      // string hint), we fall back to the v1 placeholder so the
+      // call site doesn't fail loud; the engine-portable query
+      // path will then produce a runtime error rather than silently
+      // wrong data. Future work: also support closure introspection
+      // (v0.5.0).
+      val exprString: Option[String] = m.exprString
+      val aggregateCall: AggregateCall = exprString.flatMap(parseAggregateExpr) match {
+        case Some(call) => call
+        case None       =>
+          // v1 placeholder for unparseable expressions.
+          AggregateCall(
+            fn    = AggregateFn.Sum,
+            input = Some(Expr.FieldRef(m.name)),
+            alias = m.name,
+          )
+      }
       Measure(
         name = m.name,
-        expr = AggregateCall(
-          fn    = AggregateFn.Sum,
-          input = Some(Expr.FieldRef(m.name)),
-          alias = m.name,
-        ),
+        expr = aggregateCall,
       )
     }
     val joins: List[JoinSpec] = st.joins.toList.map { ji =>
@@ -189,6 +211,91 @@ object ModelBridge {
       case "cross" => JoinKind.Cross
       case _       => JoinKind.Inner  // "one" | "many" | unknown -> Inner
     }
+
+  /** Parse a legacy measure expression string (the YAML `expr:`
+    * value) into an engine-portable [[AggregateCall]].
+    *
+    * Per the v0.3.1 Platform migration design doc (PR #443), the
+    * engine-portable path needs the actual aggregate function +
+    * input column, not a placeholder. The legacy `exprString` is
+    * the YAML's `expr:` hint (e.g. `"count(flight_count)"`,
+    * `"sum(total_distance)"`), which carries the original
+    * aggregate intent.
+    *
+    * Supported shapes (the v0.3.1 surface; advanced aggregates
+    * mirror DuckDBQueryCompiler's mapping from PR #420):
+    *   - `count(col)` / `count(*)` / `count(1)`     -> Count / Count
+    *   - `count(distinct col)`                       -> CountDistinct
+    *   - `sum(col)` / `avg(col)` / `min(col)` / `max(col)` -> Sum / Avg / Min / Max
+    *   - `stddev(col)` / `stddev_samp(col)` / `stddev_pop(col)` -> StddevSample / StddevPopulation
+    *   - `var(col)` / `var_samp(col)` / `var_pop(col)`            -> VarianceSample / VariancePopulation
+    *   - `median(col)`                                                 -> Median
+    *   - `quantile_cont(col, ...)` / `quantile_disc(col, ...)`         -> PercentileContinuous / PercentileDiscrete
+    *   - `approx_quantile(col, ...)`                                  -> ApproxPercentile
+    *
+    * Returns `None` for unparseable expressions (lambda-built
+    * measures with no exprString hint). The caller falls back to
+    * the v1 placeholder in that case.
+    */
+  private def parseAggregateExpr(s: String): Option[AggregateCall] = {
+    val trimmed = s.trim
+    if (trimmed.isEmpty) return None
+    val lc = trimmed.toLowerCase
+    // Pull the function name and the inner arguments.
+    // We use a regex that handles function(args) and bare column.
+    val fnPattern = """^([a-z_]+)\s*\((.*)\)$""".r
+    lc match {
+      case fnPattern(fnName, args) =>
+        val argList = args.split(",").map(_.trim).filter(_.nonEmpty)
+        // For aggregates with a percentile arg (quantile_cont, etc.),
+        // ignore the arg (we hardcode 0.5 — same as the SQL lowerer).
+        val inputExpr: Option[Expr] = argList.headOption match {
+          case Some(arg) if arg == "*" || arg == "1" =>
+            Some(Expr.FieldRef("*"))  // count(*) / count(1)
+          case Some(arg) =>
+            arg.stripPrefix("distinct ").trim match {
+              case col if col.nonEmpty => Some(Expr.FieldRef(col))
+              case _                   => None
+            }
+          case None =>
+            None
+        }
+        val fn: Option[AggregateFn] = fnName match {
+          case "count" =>
+            if (args.toLowerCase.contains("distinct")) Some(AggregateFn.CountDistinct)
+            else Some(AggregateFn.Count)
+          case "sum"           => Some(AggregateFn.Sum)
+          case "avg"           => Some(AggregateFn.Avg)
+          case "min"           => Some(AggregateFn.Min)
+          case "max"           => Some(AggregateFn.Max)
+          case "stddev"        => Some(AggregateFn.StddevSample)
+          case "stddev_samp"   => Some(AggregateFn.StddevSample)
+          case "stddev_pop"    => Some(AggregateFn.StddevPopulation)
+          case "var"           => Some(AggregateFn.VarianceSample)
+          case "var_samp"      => Some(AggregateFn.VarianceSample)
+          case "var_pop"       => Some(AggregateFn.VariancePopulation)
+          case "median"        => Some(AggregateFn.Median)
+          case "quantile_cont" => Some(AggregateFn.PercentileContinuous)
+          case "quantile_disc" => Some(AggregateFn.PercentileDiscrete)
+          case "approx_quantile" => Some(AggregateFn.ApproxPercentile)
+          case _               => None
+        }
+        (fn, inputExpr) match {
+          case (Some(f), Some(input)) =>
+            Some(AggregateCall(fn = f, input = Some(input), alias = trimmed))
+          case _ => None
+        }
+      case _ =>
+        // Bare column reference (no function call). Treat as a sum
+        // of the column (the legacy SemanticTable's `expr` does the
+        // same for typed arithmetic).
+        Some(AggregateCall(
+          fn    = AggregateFn.Sum,
+          input = Some(Expr.FieldRef(trimmed)),
+          alias = trimmed,
+        ))
+    }
+  }
 
   /** Derive a fallback name for tables without an explicit name or
     * sourceTable (typically joined tables). Returns a synthetic
