@@ -67,6 +67,17 @@ final class MCPEngineRegistry (
     * design: "the registry's `select` filters availability"). */
   def availableProviders: List[String] =
     engines.filter { case (_, p) => p.available }.keys.toList.sorted
+
+  /** Java-friendly alias for the `default` field.
+    *
+    * Scala generates `default()` as a Java method, but `default` is
+    * a Java reserved keyword (used in `switch` labels and interface
+    * default methods). Java callers cannot reference it directly.
+    * This alias gives them a callable name.
+    *
+    * Scala callers should keep using `default` (the field) — it's
+    * idiomatic. */
+  def defaultEngine: String = default
 }
 
 object MCPEngineRegistry {

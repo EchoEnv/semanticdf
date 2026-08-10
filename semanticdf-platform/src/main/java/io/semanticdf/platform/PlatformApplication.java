@@ -482,10 +482,28 @@ public final class PlatformApplication {
     // Opt-in via SEMANTICDF_RESULT_CACHE=memory (bounded LRU).
     final ResultCache resultCache = buildResultCacheFromEnv();
 
+    // v0.3.1 Phase 4: construct the engine registry with Spark as the
+    // default engine. The QueryService uses this registry for the
+    // engine-portable query path (when the model is registered as a
+    // core.Model). Per the design doc, the platform's QueryService
+    // routes through the engine registry instead of going direct to
+    // Spark — this is what makes the platform engine-portable.
+    //
+    // Scala-side construction: ScalaEngineProvider takes a Scala
+    // Map<String, SemanticTable> (the sparkTableRegistry) which is
+    // only used for the LEGACY `explain` path. For Phase 4's query
+    // path (portable, uses core.Model), the map is unused. We pass
+    // an empty Scala map.
+    io.semanticdf.core.engine.MCPEngineRegistry engineRegistry = buildEngineRegistry(spark);
+    LOG.info(
+        "semanticdf-platform: engine registry default='{}' available={}",
+        engineRegistry.defaultEngine(),
+        engineRegistry.availableProviders());
+
     // Bind all 5 services into one Endpoint.
     Endpoint endpoint = Endpoint.builder()
         .bind(new ModelService(modelStore, spark, resultCache, models))
-        .bind(new QueryService(models, spark, resultCache))
+        .bind(new QueryService(models, spark, resultCache, engineRegistry))
         .bind(new StreamingService(models, launcher, handles, catalog))
         .bind(new AuditService(auditStore))
         .bind(new CatalogService(modelStore))
@@ -915,5 +933,38 @@ public final class PlatformApplication {
           + DEFAULT_DRAIN_MAX_PARALLEL);
       return DEFAULT_DRAIN_MAX_PARALLEL;
     }
+  }
+
+  /**
+   * v0.3.1 Phase 4: build the {@link io.semanticdf.core.engine.MCPEngineRegistry}
+   * with Spark as the default engine.
+   *
+   * <p>The registry is what makes the platform engine-portable. The
+   * QueryService routes through it when the model is registered as a
+   * {@code core.Model}. For v0.3.1, only Spark is wired (no other
+   * engine providers are registered); future work adds Trino / DuckDB /
+   * PG / Hera / UC / HMS providers (per the platform-architecture.md
+   * "engine-agnostic" goal).
+   *
+   * <p>Per the design doc, the Spark provider's
+   * {@code sparkTableRegistry} is only used for the LEGACY {@code explain}
+   * path; the portable query path uses the Model directly. We pass an
+   * empty Scala map.
+   *
+   * <p>Per {@code error-handling-style.md}: registry construction throws
+   * {@code IllegalArgumentException} if the default engine is
+   * unregistered or unavailable at startup (per the MCPEngineRegistry
+   * doc: "misconfigured boots must fail loud"). The platform fails to
+   * start cleanly with a typed error — operators see the misconfig.
+   */
+  static io.semanticdf.core.engine.MCPEngineRegistry buildEngineRegistry(
+      org.apache.spark.sql.SparkSession spark) {
+    // Scala-side construction delegated to a helper in
+    // semanticdf-spark (which has the Scala compiler enabled).
+    // Constructing Scala collections from Java is messy
+    // (Map.empty, Tuple2.apply, Map.canBuildFrom); the helper
+    // encapsulates the Scala-side work so the Java platform only
+    // needs one static call.
+    return io.semanticdf.spark.PlatformEngineRegistryBuilder.buildSparkDefaultStatic(spark);
   }
 }
