@@ -301,17 +301,23 @@ protocol (Spark Connect, Trino client) for the data plane.**
   surface as the prior design.
 - **Engine data plane (Spark, Trino):** Native engine protocol.
   - Spark: **Spark Connect (gRPC)** — `sc://host:port` form. The platform
-    becomes a thin control-plane JVM that submits queries to a
-    long-running Spark cluster. The `SEMANTICDF_SPARK_CONNECT_URL`
-    env var routes `PlatformApplication.main` through the library's
-    `SdfSession.createFromEnv` factory branch; unset means
-    in-process Spark via `master("local[*]")`.
+    is a thin control-plane JVM that submits queries to a long-running
+    Spark cluster. The `SEMANTICDF_SPARK_CONNECT_URL` env var is
+    **mandatory**; `PlatformApplication.main` fails fast at startup if
+    it's unset. The Spark JVM lives in a separate process (the Connect
+    server); the platform does not create a Spark JVM locally. Both
+    batch (`QueryService`) and stream (`StreamingService`) paths use
+    the same Connect client. Spark 4.0+ is required (Spark Connect
+    ships as a separate artifact on 3.x).
   - Trino: JDBC (legacy) or Trino Client (newer). Either is engine-native,
-    not Restate-shaped.
-  - Without the env var, the platform falls back to in-process Spark via
-    `master("local[*]")` for tests and quickstart — *not* a production
-    topology. Flag is on the env var, not a code path switch, so we
-    never fork the runtime shape.
+    not Restate-shaped. (Trino is on the v0.3.1+ roadmap; not yet
+    wired into the platform.)
+  - The Spark Connect topology is the only production path. The
+    previous "fallback to in-process Spark via `master("local[*]")`"
+    has been removed because it leaked the Spark JVM lifetime into
+    the platform's, defeating the architectural decoupling. Test
+    bootstrap continues to construct `SparkSession` directly (the
+    test path is intentionally separate from the production bootstrap).
 - **What "engine-agnostic" means:** Engines depend on the platform's
   *service surface* (the set of Restate handlers), not on a specific
   engine adapter. The Restate services are the contract.
