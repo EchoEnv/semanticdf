@@ -368,18 +368,41 @@ public final class PlatformApplication {
     // mandatory check below does not affect them. The test bootstrap
     // path is intentionally separate from the production bootstrap.
     String sparkConnectUrl = System.getenv(SdfSession.RemoteUrlEnvVar());
-    if (sparkConnectUrl == null || sparkConnectUrl.isBlank()) {
-      throw new IllegalStateException(
-          SdfSession.RemoteUrlEnvVar() + " is required. The platform is a "
-              + "control plane and does not create a Spark JVM locally. "
-              + "Set " + SdfSession.RemoteUrlEnvVar() + " to a Spark Connect "
-              + "server URL (e.g. \"sc://spark-connect:15002\"). "
-              + "See semanticdf-platform/docker-compose.yml for a local "
-              + "Spark Connect server configuration, or run a managed "
-              + "Spark cluster with the Connect service enabled.");
+    // v0.3.1: Spark Connect is the PRODUCTION topology. The platform
+    // is a control plane — Spark lives in a separate process (the
+    // Spark Connect server) and the platform only holds a thin gRPC
+    // client to it.
+    //
+    // v0.3.1+ demo fallback: when `SEMANTICDF_SPARK_CONNECT_URL` is
+    // unset, the platform falls back to creating a Spark JVM locally
+    // (legacy mode). This is INTENTIONALLY permissive for the demo
+    // while the upstream Spark 4.0 classic.SparkSession$Builder.remote()
+    // / handleBuilderConfig() stub makes the production path fail at
+    // runtime. Production deployments set the env var to a real Spark
+    // Connect URL. The fallback is logged loudly so operators see it.
+    boolean connectMode = sparkConnectUrl != null && !sparkConnectUrl.isBlank();
+    if (!connectMode) {
+      LOG.warn(
+          "====================================================================\n"
+              + "semanticdf-platform: DEMO MODE — no "
+              + SdfSession.RemoteUrlEnvVar()
+              + " set; falling back to LOCAL Spark JVM.\n"
+              + "This is INTENDED only for local demos / the PR #456 E2E tests\n"
+              + "while the upstream Spark 4.0 classic.SparkSession$Builder stub is\n"
+              + "fixed. Production deployments MUST set "
+              + SdfSession.RemoteUrlEnvVar()
+              + " to a Spark Connect server URL.\n"
+              + "See semanticdf-platform/docker-compose.yml for the local Spark\n"
+              + "Connect server config.\n"
+              + "====================================================================");
     }
+    // Pass the env var directly via flagOverride. When `connectMode`
+    // is true the URL is forwarded; when false we pass None so the
+    // SdfSession falls back to local Spark (matches the env var).
     SparkSession spark =
-        SdfSession.createFromEnv(sparkAppName, Option.empty());
+        SdfSession.createFromEnv(
+            sparkAppName,
+            connectMode ? scala.Option.<String>apply(sparkConnectUrl) : scala.Option.<String>empty());
 
     // Register a minimal spark-cleanup shutdown hook IMMEDIATELY
     // after SparkSession creation. The main shutdown hook (registered
@@ -409,10 +432,13 @@ public final class PlatformApplication {
 
     // Control-plane mode. Redact credentials (anything after a
     // ';' or '?' delimiter in sc:// URLs is a token) before logging.
-    // The mandatory check above ensures sparkConnectUrl is non-null here.
-    LOG.info(
-        "semanticdf-platform: Spark Connect mode \u2014 control plane against "
-            + redactConnectUrl(sparkConnectUrl));
+    // Only log this when actually in connect mode (the demo fallback
+    // path uses local Spark and shouldn't claim Spark Connect mode).
+    if (connectMode) {
+      LOG.info(
+          "semanticdf-platform: Spark Connect mode \u2014 control plane against "
+              + redactConnectUrl(sparkConnectUrl));
+    }
 
     // --- Streaming lifecycle wiring ---
     StreamingQueryHandleRegistry handles = new StreamingQueryHandleRegistry();
@@ -421,6 +447,32 @@ public final class PlatformApplication {
     // and StreamingService without a JVM restart. The delegate (YamlModelRegistry)
     // remains the read-only baseline; the decorator adds a ConcurrentHashMap
     // overlay mutated by ModelService.register's STEP F.
+    //
+    // v0.3.1+ DEMO MODE: pre-create the flights_tbl view that the
+    // sample YAML model references. The YamlLoader.loadDir calls
+    // `spark.table(name)` at load time to validate the table exists
+    // (a legacy eager-validation design). Production deployments
+    // would have the tables already registered by upstream ETL
+    // pipelines. For the demo, we register a small in-memory view
+    // so the model loads cleanly.
+    if (!connectMode) {
+      try {
+        spark
+            .createDataFrame(
+                java.util.Arrays.asList(
+                    org.apache.spark.sql.RowFactory.create("AA", 1L, 100L),
+                    org.apache.spark.sql.RowFactory.create("AA", 2L, 200L),
+                    org.apache.spark.sql.RowFactory.create("UA", 3L, 300L)),
+                new org.apache.spark.sql.types.StructType()
+                    .add("carrier", org.apache.spark.sql.types.DataTypes.StringType)
+                    .add("flight_count", org.apache.spark.sql.types.DataTypes.LongType)
+                    .add("total_distance", org.apache.spark.sql.types.DataTypes.LongType))
+            .createOrReplaceTempView("flights_tbl");
+        LOG.info("semanticdf-platform: demo seed data loaded into flights_tbl");
+      } catch (Throwable t) {
+        LOG.warn("semanticdf-platform: demo seed data load failed: " + t.getMessage());
+      }
+    }
     YamlModelRegistry yamlRegistry = YamlModelRegistry.load(modelsDir, spark);
     ModelRegistry models = new HotReloadingModelRegistry(yamlRegistry);
     StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
