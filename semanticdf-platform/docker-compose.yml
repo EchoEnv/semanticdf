@@ -78,27 +78,24 @@ services:
   #   SEMANTICDF_SPARK_CONNECT_URL=sc://spark-connect:15002
   # when starting the platform.
   #
-  # `bitnami/spark:4.0` ships the Spark Connect server classpath.
-  # The command below starts the server in standalone mode — one
-  # Spark JVM per container. For production, swap to a managed
-  # Spark cluster (e.g. Databricks Connect) and point the env var
-  # at its URL.
+  # Image: `apache/spark:4.0.0` ships the Spark Connect server
+  # classpath (built-in on Spark 4.0+; on 3.x it's a separate
+  # artifact). The command below starts the server in standalone
+  # mode — one Spark JVM per container. For production, swap to a
+  # managed Spark cluster (e.g. Databricks Connect) and point the
+  # env var at its URL.
   spark-connect:
-    image: bitnami/spark:4.0
+    image: apache/spark:4.0.0
     container_name: semanticdf-spark-connect
     ports:
       - "15002:15002"
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    environment:
-      # Spark Connect server binds on 0.0.0.0:15002.
-      - SPARK_MODE=connect
-      - SPARK_CONNECT_GRPC_BIND_ADDRESS=0.0.0.0:15002
-    # The bitnami/spark entrypoint defaults to `master` mode; we
-    # override with --class for the connect server. The exact
-    # command depends on the bitnami image version; verify against
-    # their dockerhub docs.
-    command: ["/opt/bitnami/spark/sbin/start-connect-server.sh", "--master", "local[*]"]
+    # Override the apache/spark entrypoint to start the connect
+    # server. The script lives at /opt/spark/sbin/ in the official
+    # Apache Spark image. We bind on 0.0.0.0:15002 via the
+    # spark.connect.grpc.binding.port conf.
+    command: ["/opt/spark/sbin/start-connect-server.sh", "--master", "local[*]", "--conf", "spark.connect.grpc.binding.port=15002"]
     healthcheck:
       test: ["CMD-SHELL", "ss -lnt | grep -q ':15002' || exit 1"]
       interval: 5s
