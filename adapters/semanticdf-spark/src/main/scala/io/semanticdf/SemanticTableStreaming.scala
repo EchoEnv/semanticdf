@@ -69,8 +69,18 @@ private[semanticdf] trait SemanticTableStreaming { self: SemanticTable =>
     // created without skew handling (the foreachBatch path's
     // batchModel.toDataFrame is too late — it only affects the
     // per-microbatch DataFrame, not the streaming query plan).
-    // See [[applyAqeSkewConfig]] for the full contract.
-    applyAqeSkewConfig(spark)
+    //
+    // Per H2 fix (2026-08-11): unlike the batch path, streaming
+    // INTENTIONALLY leaves the conf set for the lifetime of the
+    // streaming query (the restore would defeat the purpose). The
+    // batch path uses `applyAqeSkewConfig(spark) { ... }` (block-
+    // based with try/finally restore); streaming inlines the
+    // three conf.set calls and does NOT restore.
+    salt.foreach { n =>
+      spark.conf.set("spark.sql.adaptive.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
+    }
 
     // 1. Find the streaming source. A non-streaming model is a hard error
     //    (not a soft one) — the user built a batch model and is calling

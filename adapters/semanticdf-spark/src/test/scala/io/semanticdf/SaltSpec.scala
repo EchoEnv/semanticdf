@@ -135,23 +135,29 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
   // Compile-time behavior: AQE config translation
   // ----------------------------------------------------------------
 
-  test("toDataFrame with salt set: AQE skewJoin config is applied to the session") {
-    // Falsifiable: set `enabled` to `false` BEFORE the call, then verify
-    // the library re-enables it. This proves the `enabled` set is real
-    // (not just the Spark 3.2+ default). Set `factor` to a non-default
-    // sentinel to verify the library overwrites it.
-    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "false")
-    spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "999")
+  test("toDataFrame with salt set: AQE skewJoin config is applied DURING the call AND restored after") {
+    // Falsifiable: set the prior values to known sentinels BEFORE
+    // the call. After the call, the conf must be restored to those
+    // sentinels (NOT left at the `withSalt` values). This proves
+    // the H2 fix (2026-08-11) is wired correctly — session-global
+    // config is no longer polluted by a single `withSalt` call.
+    val priorSkewJoin = "false"
+    val priorFactor   = "999"
+    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", priorSkewJoin)
+    spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", priorFactor)
 
     val m = baseModel(spark).withSalt(10)
     val df = m.toDataFrame(spark)
     try {
-      val enabled = spark.conf.get("spark.sql.adaptive.skewJoin.enabled", "true")
-      val factor  = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
-      enabled shouldBe "true"   // proves the library re-enabled it
-      factor shouldBe "10"      // proves the library set it from `salt = Some(10)`
+      // Per H2 fix: conf restored after the call returns. The
+      // prior values must be back, NOT the `withSalt` values.
+      val enabled = spark.conf.get("spark.sql.adaptive.skewJoin.enabled", priorSkewJoin)
+      val factor  = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", priorFactor)
+      enabled shouldBe priorSkewJoin   // restored, not "true"
+      factor  shouldBe priorFactor     // restored, not "10"
     } finally {
-      // Restore defaults so subsequent tests aren't affected.
+      // Clean up: restore the Spark defaults so subsequent tests
+      // aren't affected by the sentinel values.
       spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
       spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
       df.unpersist()
@@ -174,39 +180,49 @@ class SaltSpec extends AnyFunSuite with Matchers with SparkSessionFixture {
   // Audit/cache path: salt still translates to AQE config
   // ----------------------------------------------------------------
 
-  test("toDataFrame with auditSink + salt: AQE config still applied (salt is hint-only, not affected by audit/cache path)") {
+  test("toDataFrame with auditSink + salt: AQE config restored after call (audit/cache path also restores)") {
     val sink = AuditSink.inMemory(8)
+    val priorFactor = "777"
+    spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", priorFactor)
+
     val m = baseModel(spark).withSalt(15).withAuditSink(sink)
       .query(measures = Seq("n"), dimensions = Seq("k"))
     val df = m.toDataFrame(spark)
     try {
-      val factor = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
-      factor shouldBe "15"
-    } finally df.unpersist()
+      // Per H2 fix: conf restored after the audit/cache path
+      // returns. The prior value must be back.
+      val factor = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", priorFactor)
+      factor shouldBe priorFactor   // restored, not "15"
+    } finally {
+      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
+      df.unpersist()
+    }
   }
 
   // ----------------------------------------------------------------
   // Post-#318 fixes — HIGH bugs from the audit
   // ----------------------------------------------------------------
 
-  test("toDataFrame with salt: PARENT adaptive.enabled is set (without it, the skew hint is a no-op)") {
+  test("toDataFrame with salt: PARENT adaptive.enabled is set AND restored (H2 fix)") {
     // Falsifiable: set adaptive.enabled to false BEFORE the call.
-    // Then verify the library re-enables it (so the skew child
-    // actually takes effect). This is the HIGH bug from the
-    // recent audit — the original implementation set only the
-    // skew child, not the parent.
-    spark.conf.set("spark.sql.adaptive.enabled", "false")
-    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "false")
+    // After the call returns, the conf must be restored to false
+    // (NOT left at "true"). This proves the H2 fix is wired and
+    // the PARENT-child config pair is restored together.
+    val priorAdaptive = "false"
+    val priorSkewJoin = "false"
+    spark.conf.set("spark.sql.adaptive.enabled", priorAdaptive)
+    spark.conf.set("spark.sql.adaptive.skewJoin.enabled", priorSkewJoin)
 
     val m = baseModel(spark).withSalt(10)
     val df = m.toDataFrame(spark)
     try {
-      val adaptive  = spark.conf.get("spark.sql.adaptive.enabled", "true")
-      val skewJoin  = spark.conf.get("spark.sql.adaptive.skewJoin.enabled", "true")
+      val adaptive  = spark.conf.get("spark.sql.adaptive.enabled", priorAdaptive)
+      val skewJoin  = spark.conf.get("spark.sql.adaptive.skewJoin.enabled", priorSkewJoin)
       val factor    = spark.conf.get("spark.sql.adaptive.skewJoin.skewedPartitionFactor", "5")
-      adaptive shouldBe "true"   // proves the library set the PARENT config
-      skewJoin shouldBe "true"
-      factor shouldBe "10"
+      // Per H2 fix: prior values restored.
+      adaptive shouldBe priorAdaptive   // restored, not "true"
+      skewJoin shouldBe priorSkewJoin   // restored, not "true"
+      factor   shouldBe "5"            // restored to Spark default
     } finally {
       spark.conf.set("spark.sql.adaptive.enabled", "true")
       spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")

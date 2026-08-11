@@ -47,7 +47,11 @@ object CacheKey {
     */
   val DefaultMaxRows: Int = 100000
 
-  def forRequest(req: AuditQueryRequest, maxRows: Int): Option[String] = {
+  def forRequest(
+      req: AuditQueryRequest,
+      maxRows: Int,
+      sourceTable: String = "",
+  ): Option[String] = {
     if (req.model == null || req.model.isEmpty) None
     else {
       // Every field is length-prefixed. Without length prefixes,
@@ -109,7 +113,14 @@ object CacheKey {
       val canonical = s"m=$modelPart|mv=$versionPart|me=$measuresPart|dim=$dimsPart" +
         s"|w=$whereHash|h=$havingHash|ob=$orderByPart|lim=$limitPart" +
         s"|tg=$grainPart|tgs=$grainsPart|tr=$rangePart" +
-        s"|mr=$maxRowsPart|eng=$enginePart"
+        s"|mr=$maxRowsPart|eng=$enginePart" +
+        // Per M3 fix (2026-08-11): include the source-table identity
+        // so two requests with identical shape but different source
+        // tables don't share a cache entry. Full schema fingerprinting
+        // would require compile-on-HIT (defeats the cache); the
+        // model's `version` field remains the canonical signal for
+        // schema-evolution auto-invalidation per the v0.1.17 review.
+        s"|src=${LengthPrefixed.encodeString(sourceTable)}"
       Some(LengthPrefixed.sha256(canonical))
     }
   }

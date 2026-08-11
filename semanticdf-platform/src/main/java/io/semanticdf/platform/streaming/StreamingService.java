@@ -555,10 +555,27 @@ public class StreamingService {
                   // We can't `throw` here (would cause Restate.run to
                   // retry forever). The state mutations below are the
                   // durable failure signal.
+                  //
+                  // Per H4 fix (2026-08-11): also clean up the Spark
+                  // driver-side resources. The StreamingQuery
+                  // reference stays in `handles` until removed, and
+                  // the query object holds Kafka producers / sink
+                  // connections / etc. `q.stop()` will likely throw
+                  // on an already-terminated query — that's fine,
+                  // we only need to attempt it once. `handles.remove`
+                  // must happen unconditionally so a subsequent
+                  // monitor tick sees the registry without this
+                  // entry.
                   state.set(STATUS, "failed");
                   state.set(RECONCILE_BLOCKED, true);
                   state.set(
                       ERROR_COUNT, state.get(ERROR_COUNT).orElse(0L) + 1L);
+                  try {
+                    q.stop();
+                  } catch (Throwable stopEx) {
+                    // Best-effort — query already terminated.
+                  }
+                  handles.remove(streamId);
                   return Boolean.TRUE;
                 }
               });
