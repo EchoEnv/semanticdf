@@ -112,6 +112,24 @@ final class JdbcDuckDBConnection private (
     case other                      => ps.setObject(idx, other)
   }
 
+  /** Close the underlying JDBC connection.
+    *
+    * For connections opened via `fromUrl`, this terminates the
+    * underlying conn.
+    *
+    * For connections wrapped via `fromConnection` (typical pool
+    * use case — HikariCP, etc.), the pool owns the connection
+    * lifecycle: the wrapped conn is a Hikari proxy whose
+    * `close()` returns it to the pool rather than terminating
+    * it. This matches the `JdbcTrinoConnection` contract
+    * (`trino/src/main/scala/io/semanticdf/trino/JdbcTrinoConnection.scala:75-81`).
+    *
+    * Per H1 revert (2026-08-11): an earlier flag-based fix
+    * (`ownsConnection`) was reverted because making
+    * `close()` a no-op for pooled connections leaked them —
+    * the pool's "release-on-close" contract was being bypassed.
+    * Closing the proxy via the standard `Connection.close()`
+    * contract is the correct pool-aware behavior. */
   override def close(): Unit = {
     try { jdbcConn.close() } catch { case _: java.sql.SQLException => () }
   }
@@ -152,9 +170,13 @@ object JdbcDuckDBConnection {
   }
 
   /** Build a connection from a pre-existing JDBC connection
-    * (typical pool use case). The connection is wrapped but
-    * NOT closed by us in `close()` — the pool manages the
-    * connection lifecycle. */
+    * (typical pool use case — HikariCP, etc.). The pool owns
+    * the connection lifecycle; calling `close()` on the wrapper
+    * returns the connection to the pool (HikariCP wraps the
+    * connection in a closeable proxy whose `close()` releases
+    * rather than terminates).
+    *
+    * This matches the `JdbcTrinoConnection.fromConnection` contract. */
   def fromConnection(conn: JdbcConn): JdbcDuckDBConnection =
     new JdbcDuckDBConnection(conn)
 

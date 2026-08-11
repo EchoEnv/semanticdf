@@ -118,7 +118,13 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
         s"model.query(measures = Seq(\"your_measure\"), dimensions = Seq(\"your_dim\"))." +
         s"toDataFrame(spark) instead.")
     }
-    applyAqeSkewConfig(spark)
+    // Per H2 fix (2026-08-11): wrap the query body in try/finally
+    // so the AQE conf is restored regardless of which return path
+    // is taken (fast path or audit/cache path). The restore closure
+    // is safe to call multiple times — it just re-sets the captured
+    // prior values.
+    val restoreAqe = applyAqeSkewConfig(spark)
+    try {
 
     if (auditSink.isEmpty && resultCache.isEmpty) {
       // Fast path: no audit, no cache. Apply `materializeLevel` here
@@ -148,8 +154,14 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
 
       // Cache key: only computed when a cache is configured. The
       // auditRequest is non-empty here (enforced above).
+      //
+      // Per M3 fix (2026-08-11): pass the source-table identity so
+      // two requests with identical shape but different source tables
+      // get distinct cache keys. Schema evolution within the same
+      // source table is still caught by the model-version auto-
+      // invalidation (the existing `version` field of the key).
       val cacheKeyOpt: Option[String] =
-        resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req, maxRows))
+        resultCache.flatMap(_ => io.semanticdf.cache.CacheKey.forRequest(req, maxRows, sourceTable.getOrElse("")))
 
       // Cache check: on hit, rebuild a DataFrame from the cached rows
       // and skip Spark's planner entirely. This is the "best performance"
@@ -302,6 +314,9 @@ private[semanticdf] trait SemanticTableCore { self: SemanticTable =>
           }
           throw e
       }
+    }
+    } finally {
+      restoreAqe()
     }
   }
 
@@ -554,16 +569,83 @@ salt = salt, rollups = this.rollups)
     *
     * No-op when `salt = None`. Idempotent — Spark optimizes repeated
     * `conf.set` calls on the same key. */
-  private[semanticdf] def applyAqeSkewConfig(spark: SparkSession): Unit =
-    salt.foreach { n =>
-      spark.conf.set("spark.sql.adaptive.enabled", "true")
-      spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
-      spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
+  /** Set AQE + skew-join config for the duration of one query and
+    * return a restore-closure. The caller MUST invoke the closure
+    * (typically in a `finally`) once the query is complete — otherwise
+    * the session-global conf change leaks to subsequent callers.
+    *
+    * Streaming callers intentionally drop the closure: the
+    * streaming query needs AQE for its entire lifetime, not just
+    * one batch.
+    *
+    * Per H2 fix (2026-08-11): prior to this, the conf was set and
+    * never restored, polluting the process-wide
+    * `SparkSession.conf`. The docstring on `withSalt` had warned
+    * about this but offered no programmatic way to undo the
+    * global mutation. The restore-closure closes the gap.
+    *
+    * Per `scala-jvm-safety §3` (long-lived state): the Spark
+    * conf is a process-wide singleton; any mutation must be
+    * paired with restoration.
+    *
+    * Per `scala-error-handling §3` (throw for the programmer,
+    * not the caller): if the conf mutation throws, restore what
+    * we already mutated so the conf isn't left half-set. */
+  /** Apply AQE + skew-join config and return a restore-closure.
+    * The caller MUST invoke the closure (typically in a `finally`)
+    * once the query is complete — otherwise the session-global
+    * conf change leaks to subsequent callers.
+    *
+    * Streaming callers intentionally drop the closure: the
+    * streaming query needs AQE for its entire lifetime, not just
+    * one batch.
+    *
+    * Per H2 fix (2026-08-11): prior to this, the conf was set and
+    * never restored, polluting the process-wide
+    * `SparkSession.conf`. The docstring on `withSalt` had warned
+    * about this but offered no programmatic way to undo the
+    * global mutation. The restore-closure closes the gap.
+    *
+    * Per `scala-jvm-safety §3` (long-lived state): the Spark
+    * conf is a process-wide singleton; any mutation must be
+    * paired with restoration. */
+  private[semanticdf] def applyAqeSkewConfig(spark: SparkSession): () => Unit =
+    salt match {
+      case None => () => ()  // no-op restore
+      case Some(n) =>
+        val prior = (
+          spark.conf.getOption("spark.sql.adaptive.enabled"),
+          spark.conf.getOption("spark.sql.adaptive.skewJoin.enabled"),
+          spark.conf.getOption("spark.sql.adaptive.skewJoin.skewedPartitionFactor"),
+        )
+        val restore: () => Unit = () => {
+          prior._1 match {
+            case Some(v) => spark.conf.set("spark.sql.adaptive.enabled", v)
+            case None    => spark.conf.unset("spark.sql.adaptive.enabled")
+          }
+          prior._2 match {
+            case Some(v) => spark.conf.set("spark.sql.adaptive.skewJoin.enabled", v)
+            case None    => spark.conf.unset("spark.sql.adaptive.skewJoin.enabled")
+          }
+          prior._3 match {
+            case Some(v) => spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", v)
+            case None    => spark.conf.unset("spark.sql.adaptive.skewJoin.skewedPartitionFactor")
+          }
+        }
+        try {
+          spark.conf.set("spark.sql.adaptive.enabled", "true")
+          spark.conf.set("spark.sql.adaptive.skewJoin.enabled", "true")
+          spark.conf.set("spark.sql.adaptive.skewJoin.skewedPartitionFactor", n.toString)
+          restore
+        } catch {
+          case scala.util.control.NonFatal(t) =>
+            // Per scala-error-handling §3 (throw for the programmer,
+            // not the caller): re-throw after restoring on
+            // partial-failure so we don't leave the conf half-set.
+            restore()
+            throw t
+        }
     }
-
-  /** Internal: stamp the captured request shape for audit emission.
-    * Called by [[query]] once the chain is built. Not part of the public
-    * API — callers should let [[query]] capture the request. */
   private[semanticdf] def copyAuditRequest(req: AuditQueryRequest): SemanticTable =
     new SemanticTable(root, postAggPredicates, version, sourceTable, status, auditSink, Some(req), resultCache, maxRows = maxRows, broadcastJoinThreshold = broadcastJoinThreshold,
           materializeLevel = materializeLevel,

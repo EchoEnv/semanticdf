@@ -10,7 +10,8 @@ import io.semanticdf.core.engine.{
   PortableQueryResult,
   ResultSchema,
 }
-import io.semanticdf.core.model.Model
+import io.semanticdf.core.expr.{Expr, LiteralValue}
+import io.semanticdf.core.model.{FilterSpec, Model}
 import io.semanticdf.core.rel.RelOp
 
 /** v0.4.0: engine adapter for PostgreSQL via JDBC.
@@ -72,14 +73,19 @@ final class PostgreSqlEngine(
       ctx:    EngineContext,
   ): Either[EngineError, ExecutionPlan[Any]] = {
     try {
-      val sql = modelToSql(model)
+      val (sql, params) = modelToSql(model)
       Right(ExecutionPlan(
         engine               = EngineIdentity(
           name                 = identity,
           nativeVersion        = "1.0",
           engineAdapterVersion = "0.4.0",
         ),
-        native               = sql,
+        // Per C1 fix (2026-08-11): thread WHERE params through the
+        // plan as a `(sql, params)` tuple. Bind-parameterized SQL
+        // closes the SQL-injection vector that `_.predicate.toString`
+        // concatenation created. See `renderPredicate` for the
+        // parameter-mapping implementation.
+        native               = (sql, params),
         warnings             = Nil,
         requiredCapabilities = capabilities,
         normalizedSchema     = ResultSchema(Nil),
@@ -117,8 +123,8 @@ final class PostgreSqlEngine(
       plan: ExecutionPlan[Any],
       ctx:  EngineContext,
   ): Either[EngineError, Any] = {
-    val sql = plan.native.asInstanceOf[String]
-    client.executeQuery(sql).left.map(withAction("execute"))
+    val (sql, params) = plan.native.asInstanceOf[(String, Seq[Any])]
+    client.executeQuery(sql, params).left.map(withAction("execute"))
   }
 
   /** Override the default `executePortable` (which throws
@@ -129,10 +135,11 @@ final class PostgreSqlEngine(
       plan: ExecutionPlan[Any],
       ctx:  EngineContext,
   ): Either[EngineError, PortableQueryResult] = {
+    val native = plan.native.asInstanceOf[(String, Seq[Any])]
     // Per the chaining rule: 3+ steps (execute + encode) → use
     // `for`-comprehension with `yield`.
     for {
-      raw <- client.executeQuery(plan.native.asInstanceOf[String])
+      raw <- client.executeQuery(native._1, native._2)
                        .left.map(postgreSqlToEngineError)
     } yield PostgreSqlResultEncoder.encode(raw)
   }
@@ -142,7 +149,9 @@ final class PostgreSqlEngine(
       ctx:    EngineContext,
   ): Either[EngineError, String] = {
     compile(model, ctx).map { plan =>
-      s"PostgreSQL SQL:\n${plan.native}\nDatabase: $database"
+      val (sql, params) = plan.native.asInstanceOf[(String, Seq[Any])]
+      val paramsLine = if (params.isEmpty) "" else s"\nBind params: $params"
+      s"PostgreSQL SQL:\n$sql$paramsLine\nDatabase: $database"
     }
   }
 
@@ -150,10 +159,15 @@ final class PostgreSqlEngine(
 
   /** Minimal v1 SQL builder: SELECT + FROM + WHERE + GROUP BY.
     *
+    * Returns `(sql, params)` — the WHERE clause uses bind-parameter
+    * placeholders (`?`) and the params are passed to
+    * `JdbcPostgreSqlClient.executeQuery` so user-supplied filter
+    * values never reach the SQL parser as text.
+    *
     * Per error-handling-style.md "programmer error": throw
     * `IllegalArgumentException` at boundary for unhandled model
     * shapes (not `Left(...)` — the boundary is here). */
-  private def modelToSql(model: Model): String = {
+  private def modelToSql(model: Model): (String, Seq[Any]) = {
     val dims  = model.dimensions.map(d => s""""${d.name}"""")
     val meas  = model.measures.map { m =>
       val fnName = m.expr.fn.toString.toUpperCase
@@ -167,8 +181,11 @@ final class PostgreSqlEngine(
       }
       s"""$fnName($input) AS "${m.name}""""
     }
-    val where = if (model.filters.isEmpty) ""
-                else " WHERE " + model.filters.map(_.predicate.toString).mkString(" AND ")
+    // Per C1 fix (2026-08-11): parameterized WHERE. The previous
+    // implementation concatenated `_.predicate.toString` into the
+    // SQL string, which was a SQL-injection vector. See
+    // `renderPredicate` for the type-safe rendering.
+    val (whereSql, whereParams) = renderWhere(model.filters)
     val groupBy = if (model.measures.isEmpty || model.dimensions.isEmpty) ""
                   else " GROUP BY " + dims.mkString(", ")
     // Per the design: SourceRef is a sealed ADT. ByName is the
@@ -201,7 +218,180 @@ final class PostgreSqlEngine(
     if (select.isEmpty) throw new IllegalArgumentException(
       s"model '${model.name}' has no dimensions or measures; cannot compile to a SELECT"
     )
-    s"SELECT $select FROM $from$where$groupBy"
+    (s"SELECT $select FROM $from$whereSql$groupBy", whereParams)
+  }
+
+  /** Render a `Seq[FilterSpec]` to a parameterized WHERE clause
+    * fragment + the bind params in order.
+    *
+    * Per C1 fix (2026-08-11): the previous code built the WHERE
+    * via `_.predicate.toString` concatenation, which let any
+    * filter value's `toString` reach the SQL parser verbatim
+    * (e.g. `Expr.Equal(FieldRef("c"), Literal("'; DROP TABLE..."))`
+    * would emit garbage like `Equal(FieldRef(c),Literal(...))`).
+    * This helper replaces that with a typed `Expr → SQL` walk
+    * that emits `?` placeholders for every literal value.
+    *
+    * Per `scala-error-handling §1` (errors are data) + `scala-jvm-safety`
+    * boundary: unknown Expr cases throw
+    * `IllegalArgumentException` at this boundary — same contract
+    * as `modelToSql`. */
+  private def renderWhere(filters: Seq[FilterSpec]): (String, Seq[Any]) = {
+    if (filters.isEmpty) ("", Seq.empty[Any])
+    else {
+      val rendered = filters.map(f => renderExpr(f.predicate))
+      val sql      = rendered.map(_._1).mkString(" AND ")
+      val params   = rendered.flatMap(_._2)
+      (s" WHERE $sql", params)
+    }
+  }
+
+  /** Render a single portable `Expr` to `(sql, params)`. Recursive
+    * over compound nodes. Field refs are double-quoted (PG
+    * identifier quoting); literal values become `?` placeholders
+    * bound to the params list in pre-order traversal order.
+    *
+    * Per C1 fix (2026-08-11): every `Literal` contributes its
+    * value to the params list and a `?` to the SQL. No literal
+    * value's `toString` reaches the SQL parser. */
+  private def renderExpr(e: Expr): (String, Seq[Any]) = e match {
+    // -- Leaves --
+    case Expr.Literal(value, _) =>
+      // Per scala-jvm-safety §1: trust nothing from user input;
+      // every Literal value goes through JDBC's PreparedStatement
+      // binding, not SQL string interpolation.
+      (s"?", Seq(literalToJava(value)))
+    case Expr.FieldRef(name)    => (s""""$name"""", Seq.empty[Any])
+    case Expr.MeasureRef(name)  => (s""""$name"""", Seq.empty[Any])
+    case Expr.All(measureName)  =>
+      // Per scala-spark-batch-bugs: percent-of-total resolves to a
+      // window sum across all rows of the current group.
+      (s"""SUM("$measureName") OVER ()""", Seq.empty[Any])
+
+    // -- Arithmetic --
+    case Expr.Add(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls + $rs)", lp ++ rp)
+    case Expr.Subtract(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls - $rs)", lp ++ rp)
+    case Expr.Multiply(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls * $rs)", lp ++ rp)
+    case Expr.Divide(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls / $rs)", lp ++ rp)
+    case Expr.Modulo(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls % $rs)", lp ++ rp)
+
+    // -- Comparison --
+    case Expr.Equal(l, r) =>
+      renderBinaryCmp(l, r, "=")
+    case Expr.NotEqual(l, r) =>
+      renderBinaryCmp(l, r, "<>")
+    case Expr.LessThan(l, r) =>
+      renderBinaryCmp(l, r, "<")
+    case Expr.LessOrEqual(l, r) =>
+      renderBinaryCmp(l, r, "<=")
+    case Expr.GreaterThan(l, r) =>
+      renderBinaryCmp(l, r, ">")
+    case Expr.GreaterOrEqual(l, r) =>
+      renderBinaryCmp(l, r, ">=")
+
+    // -- Boolean --
+    case Expr.And(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls AND $rs)", lp ++ rp)
+    case Expr.Or(l, r) =>
+      val (ls, lp) = renderExpr(l); val (rs, rp) = renderExpr(r)
+      (s"($ls OR $rs)", lp ++ rp)
+    case Expr.Not(inner) =>
+      val (is, ip) = renderExpr(inner)
+      (s"(NOT $is)", ip)
+
+    // -- Null checks --
+    case Expr.IsNull(inner) =>
+      val (is, ip) = renderExpr(inner)
+      (s"($is IS NULL)", ip)
+    case Expr.IsNotNull(inner) =>
+      val (is, ip) = renderExpr(inner)
+      (s"($is IS NOT NULL)", ip)
+
+    // -- Cast --
+    case Expr.Cast(inner, targetType) =>
+      val (is, ip) = renderExpr(inner)
+      // Per scala-spark-batch-bugs §3: type fidelity differs across
+      // engines. For v1, only INT/BIGINT/VARCHAR casts are emitted
+      // — others throw at the boundary (per karpathy §2: minimum
+      // code that solves the problem).
+      val pgType = renderPgType(targetType)
+      (s"CAST($is AS $pgType)", ip)
+
+    // -- Function call --
+    case Expr.FunctionCall(name, args) =>
+      val rendered = args.map(renderExpr)
+      val sql      = rendered.map(_._1).mkString(", ")
+      val params   = rendered.flatMap(_._2)
+      (s"""$name($sql)""", params)
+  }
+
+  /** Helper for the 6 comparison cases — same shape: render both
+    * sides, emit `<left> <op> <right>`, concat params in order.
+    *
+    * Per `scala-error-handling §3` (chaining rule): 3-step operation
+    * (render l + render r + concat) → helper. */
+  private def renderBinaryCmp(
+      l:   Expr,
+      r:   Expr,
+      op:  String,
+  ): (String, Seq[Any]) = {
+    val (ls, lp) = renderExpr(l)
+    val (rs, rp) = renderExpr(r)
+    (s"($ls $op $rs)", lp ++ rp)
+  }
+
+  /** Render a portable `SealedDataType` to a PG `CAST AS` target.
+    * Limited subset — other types throw at the boundary. */
+  private def renderPgType(t: io.semanticdf.core.schema.SealedDataType): String = t match {
+    case io.semanticdf.core.schema.SealedDataType.Int        => "INT"
+    case io.semanticdf.core.schema.SealedDataType.BigInt     => "BIGINT"
+    case io.semanticdf.core.schema.SealedDataType.Varchar    => "VARCHAR"
+    case io.semanticdf.core.schema.SealedDataType.Boolean    => "BOOLEAN"
+    case other => throw new IllegalArgumentException(
+      s"PostgreSQL CAST AS $other not yet supported in v1"
+    )
+  }
+
+  /** Extract the underlying Java value from a portable `LiteralValue`
+    * so JDBC's `PreparedStatement.setObject(idx, v)` can bind it.
+    *
+    * Per `scala-jvm-safety §1`: this is the ONLY place the literal
+    * value crosses from the portable boundary to JDBC — type-faithful
+    * extraction, no `toString` interpolation.
+    *
+    * Complex types (Map, Struct) throw — they need a portable
+    * representation the PG driver can bind, which is out of scope
+    * for v1. */
+  private def literalToJava(v: LiteralValue): Any = v match {
+    case LiteralValue.IntValue(x)       => x
+    case LiteralValue.ByteValue(x)      => x
+    case LiteralValue.ShortValue(x)     => x
+    case LiteralValue.LongValue(x)      => x
+    case LiteralValue.FloatValue(x)     => x
+    case LiteralValue.DoubleValue(x)    => x
+    case LiteralValue.DecimalValue(x)   => x
+    case LiteralValue.StringValue(x)    => x
+    case LiteralValue.BoolValue(x)      => x
+    case LiteralValue.BinaryValue(x)    => x.toArray
+    case LiteralValue.TimestampValue(x) => java.sql.Timestamp.from(x)
+    case LiteralValue.DateValue(x)      => java.sql.Date.valueOf(x)
+    case LiteralValue.ArrayValue(xs)    => xs.map(literalToJava).toArray
+    case LiteralValue.MapValue(_)       =>
+      throw new IllegalArgumentException("MapValue literals not supported in v1 PG SQL")
+    case LiteralValue.StructValue(_)    =>
+      throw new IllegalArgumentException("StructValue literals not supported in v1 PG SQL")
+    case LiteralValue.NullValue         => null
   }
 
   /** Map a [[PostgreSqlError]] to an [[EngineError]] case.
