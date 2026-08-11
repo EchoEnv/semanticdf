@@ -39,7 +39,7 @@ self-contained once you've done `starter/`.
 
 ### "I'm building an LLM agent or external client"
 1. `starter/`
-2. [`cli-consumer/`](cli-consumer/) — `sdf` CLI on top of the REST API. Lightweight, no Spark, no SemanticDF dependencies of its own.
+2. ([`semanticdf-cli/`](../semanticdf-cli/)) — `sdf` CLI on top of the REST API. Lightweight, no Spark, no SemanticDF dependencies of its own.
 3. (`semanticdf-mcp/`) — the MCP server itself, for MCP-protocol-aware clients (Claude Desktop, Cursor, Continue).
 
 ### "Telco-specific patterns"
@@ -73,7 +73,6 @@ self-contained once you've done `starter/`.
 | [`operations-analytics/`](operations-analytics/) | Fulfillment time, on-time rate, anomaly detection |
 | [`hospital/`](hospital/) | Data-quality workflow: messy source → clean schema (with sidecar OKF docs in `hospital-ok/`) |
 | [`telco-analytics/`](telco-analytics/) | Telco domain: carriers, plans, promotions |
-| [`cli-consumer/`](cli-consumer/) | Standalone CLI client (`sdf`) for the REST API — uses no Spark, no SemanticDF dep |
 | [`manifest-load/`](manifest-load/) | Load a pre-built `SemanticManifest` JSON artifact and reconstruct a `SemanticTable`. Companion to the [manifest-artifact recipe](../docs/design/manifest-artifact.md) |
 | [`streaming-manifest-load/`](streaming-manifest-load/) | Load a pre-built streaming `SemanticManifest` and run a streaming query. Companion to the [streaming-manifest recipe](../docs/design/streaming-manifest.md) |
 | [`joined-manifest/`](joined-manifest/) | Emit a joined-manifest via `SemanticManifest.toJoinedJson` (per-side metadata + alias-prefixed dims via `extra_dimensions[]`, `leftPrefix` / `rightPrefix` on the join block, structured `predicate_ast` for non-equi / OR, asymmetric-key support) and round-trip via `fromJoinedJson`. The canonical example for the joined-manifest wire shape. |
@@ -106,8 +105,9 @@ mvn scala:run -DmainClass=<Main class name, listed in that example's README>
 ```
 
 The exact main class name and command are in each example's own README.
-Some examples (like `cli-consumer/`) use `bin/sdf` or a custom
-executable — read the example README first.
+The standalone CLI consumer is now the first-class Maven module
+[`semanticdf-cli/`](../semanticdf-cli/) — it ships its own `bin/sdf`
+wrapper and its own README.
 
 ## When the YAML files aren't enough
 

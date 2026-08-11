@@ -30,7 +30,7 @@ From the repo root:
 mvn test                    # runs 442 library tests on Spark 3.5.8
 mvn -Pspark4 test           # runs 442 library tests on Spark 4.1.1
 cd semanticdf-mcp && mvn test  # adds 90 MCP tests on top
-cd ../examples/cli-consumer && mvn test  # adds 18 CLI integration tests
+cd .. && mvn -pl semanticdf-cli test  # adds 67 CLI integration tests
 mvn install -DskipTests     # builds the jar so examples/pipeline/ can use it
 ```
 

@@ -37,5 +37,5 @@ exec java \
     --add-opens=java.base/java.lang=ALL-UNNAMED \
     --add-opens=java.base/java.util=ALL-UNNAMED \
     -cp "$CP" \
-    com.example.sdfcli.Main \
+    io.semanticdf.cli.Main \
     "$@"

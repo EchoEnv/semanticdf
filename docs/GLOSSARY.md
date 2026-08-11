@@ -256,6 +256,6 @@ list as new concepts land.
 - **Tools** — the operations MCP exposes: `list_models`,
   `describe_model`, `query`, `explain`, `introspect`. Per-tool request
   and response shapes are in `docs/agents/mcp-contract.md`.
-- **`sdf`** — the standalone CLI consumer in `examples/cli-consumer/`.
+- **`sdf`** — the standalone CLI module at `semanticdf-cli/`.
   Not part of the server, but exercises the REST API as a real client.
   Useful as both an end-user tool and a regression witness.

@@ -29,6 +29,7 @@
     <module>adapters/semanticdf-template</module>
     <module>adapters/semanticdf-portable-loader</module>
     <module>adapters/semanticdf-postgresql</module>
+    <module>semanticdf-cli</module>
   </modules>
 
   <properties>

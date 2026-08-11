@@ -1,4 +1,4 @@
-package com.example.sdfcli
+package io.semanticdf.cli
 
 import com.fasterxml.jackson.databind.{JsonNode, ObjectMapper}
 import java.net.URI
@@ -37,7 +37,7 @@ import scala.jdk.CollectionConverters._
   *   --limit <n>             row limit
   *
   * Run via the bin/sdf wrapper, or directly:
-  *   mvn -q exec:java -Dexec.mainClass=com.example.sdfcli.Main -Dexec.args="list --url http://localhost:8080"
+  *   mvn -q exec:java -Dexec.mainClass=io.semanticdf.cli.Main -Dexec.args="list --url http://localhost:8080"
   */
 object Main {
 
@@ -55,11 +55,12 @@ object Main {
     case Nil | ("-h" :: _) | ("--help" :: _) | ("help" :: _) =>
       printUsage(); 0
     case ("-v" :: _) | ("--version" :: _) =>
-      println("sdf 0.1.17 (semanticdf CLI client)"); 0
+      println("sdf 0.3.0 (semanticdf CLI client)"); 0
     case ("list" :: rest)       => withGlobalConfig(rest) { (cfg, rem) => safeRun { cmdList(cfg); 0 } }
     case ("describe" :: rest)   => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdDescribe(cfg, rem)) }
     case ("query" :: rest)      => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdQuery(cfg, rem, explain = false)) }
     case ("explain" :: rest)    => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdQuery(cfg, rem, explain = true)) }
+    case ("audit-tail" :: rest) => withGlobalConfig(rest) { (cfg, rem) => safeRun(cmdAuditTail(cfg, rem)) }
     case other :: _ =>
       System.err.println(s"sdf: unknown command '$other'. Run 'sdf --help'."); 2
   }
@@ -76,7 +77,17 @@ object Main {
   // each subcommand handler only sees its own flags.
   // ---------------------------------------------------------------------------
 
-  private case class Config(baseUrl: String, json: Boolean)
+  /** Global CLI config. `restateUrl` is set when the user passes
+    * `--restate-url` or `$RESTATE_URL` (PRIMARY for `audit-tail` — durable
+    * audit lives in the platform's Restate service, not MCP). `token`
+    * comes from `--token-file`, then `$SDF_TOKEN`, and is attached as
+    * `Authorization: Bearer ...` on every request to both surfaces. */
+  private case class Config(
+      baseUrl:    String,
+      json:       Boolean,
+      restateUrl: Option[String] = None,
+      token:      Option[String] = None,
+  )
 
   // -------------------------------------------------------------------
   // Typed CLI parse errors (per docs/design/error-handling-style.md).
@@ -115,6 +126,28 @@ object Main {
       val message: String =
         s"unexpected argument: $value (model already given as $existingModel)"
     }
+    // -- audit-tail parse errors (Phase 3) --
+    final case class InvalidSince(value: String) extends CliParseError {
+      val message: String =
+        s"--since must be an ISO-8601 instant (e.g. 2026-01-01T00:00:00Z), got '$value'"
+    }
+    final case class InvalidUntil(value: String) extends CliParseError {
+      val message: String =
+        s"--until must be an ISO-8601 instant (e.g. 2026-01-01T00:00:00Z), got '$value'"
+    }
+    final case class InvalidTenant(value: String) extends CliParseError {
+      val message: String =
+        s"--tenant must match [a-zA-Z0-9_-]{1,64}, got '$value'"
+    }
+    final case class UnexpectedArgument(value: String) extends CliParseError {
+      val message: String =
+        s"unexpected argument: $value (audit-tail takes no positional args)"
+    }
+    final case class TokenFileUnreadable(path: String, reason: String)
+        extends CliParseError {
+      val message: String =
+        s"--token-file '$path' could not be read: $reason"
+    }
   }
 
   /** Pull `--url` / `--json` out of the arg list (they can appear anywhere),
@@ -136,21 +169,76 @@ object Main {
     * value) maps to `CliParseError.MissingFlagValue(flag = "--url")`,
     * reusing the case the `QueryArgs` parser already uses. */
   private def extractGlobals(args: List[String]): Either[CliParseError, (Config, List[String])] = {
+    // Single-pass walker. Token resolution happens after the loop
+    // because the tailrec can't carry the token string cleanly without
+    // growing the accumulator by another field. Two args-list walks
+    // on 50-element lists is negligible cost.
     @tailrec def loop(
         in: List[String],
         url: Option[String],
         json: Boolean,
+        restateUrl: Option[String],
         kept: List[String],
     ): Either[CliParseError, (Config, List[String])] = in match {
       case Nil =>
-        Right((Config(url.getOrElse(defaultUrl), json), kept.reverse))
-      case ("--url" :: u :: rest) => loop(rest, Some(u), json, kept)
-      case ("--url" :: Nil)       => Left(CliParseError.MissingFlagValue(flag = "--url"))
-      case ("--json" :: rest)     => loop(rest, url, json = true, kept)
-      case other :: rest          => loop(rest, url, json, other :: kept)
+        resolveToken(args).right.map { tok =>
+          (
+            Config(
+              baseUrl    = url.getOrElse(defaultUrl),
+              json       = json,
+              restateUrl = restateUrl.orElse(sys.env.get("RESTATE_URL")),
+              token      = tok,
+            ),
+            kept.reverse,
+          )
+        }
+      case ("--url" :: u :: rest)         => loop(rest, Some(u), json, restateUrl, kept)
+      case ("--url" :: Nil)               => Left(CliParseError.MissingFlagValue(flag = "--url"))
+      case ("--json" :: rest)             => loop(rest, url, json = true, restateUrl, kept)
+      case ("--restate-url" :: u :: rest) => loop(rest, url, json, Some(u), kept)
+      case ("--restate-url" :: Nil)       => Left(CliParseError.MissingFlagValue(flag = "--restate-url"))
+      // Token file is consumed but the actual read happens in resolveToken
+      // (below) — same precedence rule, but we already validated the flag
+      // shape here.
+      case ("--token-file" :: p :: rest)  => loop(rest, url, json, restateUrl, kept)
+      case ("--token-file" :: Nil)        => Left(CliParseError.MissingFlagValue(flag = "--token-file"))
+      case other :: rest                  => loop(rest, url, json, restateUrl, other :: kept)
     }
-    loop(args, None, json = false, Nil)
+    loop(args, None, json = false, None, Nil)
   }
+
+  /** Resolve the bearer token. Precedence: `--token-file <path>` &
+    * gt; `$SDF_TOKEN` &gt; none.
+    *
+    * Returns `Either` so a missing/unreadable token file is a typed error
+    * (printed with exit 2) instead of being silently swallowed. Per
+    * `scala-error-handling §1`: errors are data — falling back to
+    * `$SDF_TOKEN` when the file is unreadable would mask the user's
+    * `--token-file` typo and let the request go out unauthenticated,
+    * surfacing later as a confusing 401/404 instead of a clear exit 2 at
+    * the CLI. */
+  private def resolveToken(args: List[String]): Either[CliParseError, Option[String]] = {
+    val tokenFile = args.sliding(2).collectFirst {
+      case Seq("--token-file", p) => p
+    }
+    tokenFile match {
+      case Some(p) => loadTokenFromFile(p).map(Some(_))
+      case None    => Right(sys.env.get("SDF_TOKEN"))
+    }
+  }
+
+  /** Load a bearer token from a file. Trims trailing whitespace (e.g. the
+    * `\n` from `echo "$TOK" > tok`) — untrimmed tokens corrupt the
+    * `Authorization` header. Catches `IOException` specifically per
+    * `docs/design/error-handling-style.md:205-207` — no catch-all. */
+  private def loadTokenFromFile(path: String): Either[CliParseError, String] =
+    try {
+      val raw = java.nio.file.Files.readString(java.nio.file.Paths.get(path))
+      Right(raw.trim)
+    } catch {
+      case e: java.io.IOException =>
+        Left(CliParseError.TokenFileUnreadable(path, e.getClass.getSimpleName + ": " + e.getMessage))
+    }
 
   /** Plain Jackson mapper (no Scala module) — the CLI only reads JSON via
     * the tree model and writes small string/int values, so a vanilla
@@ -401,6 +489,240 @@ object Main {
   }
 
   // ---------------------------------------------------------------------------
+  // audit-tail flag parsing (Phase 3)
+  // ---------------------------------------------------------------------------
+
+  /** Args for `sdf audit-tail [--limit N] [--since T] [--until T] [--tenant T]`.
+    * Tenant regex per Restate's documented constraints; since/until
+    * validated client-side so a typo costs no round-trip. */
+  private case class AuditArgs(
+      tenant: String,
+      limit:  Option[Int],
+      since:  Option[String],
+      until:  Option[String],
+  )
+  private object AuditArgs {
+    private val TenantRe = "^[a-zA-Z0-9_-]{1,64}$".r
+    def parse(args: List[String]): Either[CliParseError, AuditArgs] = {
+      @tailrec def loop(
+          in: List[String],
+          tenant: String,           // default applied below
+          limit: Option[Int],
+          since: Option[String],
+          until: Option[String],
+      ): Either[CliParseError, AuditArgs] = in match {
+        case Nil => Right(AuditArgs(tenant, limit, since, until))
+        case "--tenant" :: v :: rest =>
+          if (TenantRe.findFirstIn(v).isDefined) loop(rest, v, limit, since, until)
+          else Left(CliParseError.InvalidTenant(value = v))
+        case "--tenant" :: Nil => Left(CliParseError.MissingFlagValue(flag = "--tenant"))
+        case "--limit" :: v :: rest =>
+          v.toIntOption match {
+            case Some(n) if n >= 0 => loop(rest, tenant, Some(n), since, until)
+            case _ => Left(CliParseError.InvalidLimit(value = v))
+          }
+        case "--limit" :: Nil => Left(CliParseError.MissingFlagValue(flag = "--limit"))
+        case "--since" :: v :: rest =>
+          if (parseInstant(v).isDefined) loop(rest, tenant, limit, Some(v), until)
+          else Left(CliParseError.InvalidSince(value = v))
+        case "--since" :: Nil => Left(CliParseError.MissingFlagValue(flag = "--since"))
+        case "--until" :: v :: rest =>
+          if (parseInstant(v).isDefined) loop(rest, tenant, limit, since, Some(v))
+          else Left(CliParseError.InvalidUntil(value = v))
+        case "--until" :: Nil => Left(CliParseError.MissingFlagValue(flag = "--until"))
+        case flag :: _ if flag.startsWith("-") => Left(CliParseError.UnknownFlag(flag = flag))
+        case v :: _ => Left(CliParseError.UnexpectedArgument(value = v))
+      }
+      // Default tenant: matches the platform's AuditService default.
+      loop(args, tenant = "default", None, None, None)
+    }
+    private def parseInstant(s: String): Option[String] =
+      try { java.time.Instant.parse(s); Some(s) }
+      catch { case _: java.time.format.DateTimeParseException => None }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Restate ingress HTTP client (Phase 3)
+  //
+  // Talks the Restate HTTP ingress protocol directly. Wire shape:
+  //   POST /<ServiceName>[/<key>]/<handlerName>/send
+  //   Content-Type: application/json
+  //   Authorization: Bearer <token>   (if cfg.token)
+  //   { ...request body... }
+  //
+  // Response (Restate native):
+  //   { "status": "ok"|"error", "output"|"error": ... }
+  //
+  // We keep the surface minimal — one `call` method — because every
+  // additional method is another ripple point per scala-impact-analysis.
+  // ---------------------------------------------------------------------------
+
+  private object RestateClient {
+    private val http = HttpClient.newBuilder()
+      .connectTimeout(Duration.ofSeconds(5))
+      .build()
+
+    /** Typed errors per `scala-error-handling §1`. */
+    sealed trait RestateError
+    case class RestateHttpError(uri: String, status: Int, code: String, message: String)
+        extends RestateError
+    case class RestateDecodeError(uri: String, reason: String) extends RestateError
+    case class RestateConnectError(uri: String, cause: Throwable) extends RestateError
+
+    /** Call a Restate handler synchronously (returns the handler's output).
+      *
+      * Wire shape (verified live against `restate_dev`):
+      *   `POST /<Service>[/<key>]/<handler>` — `application/json` body, raw
+      *   JSON response (the handler's return value). NO `/send` suffix
+      *   (`/send` is Restate's fire-and-forget variant — it returns 200 OK
+      *   with no body, which is wrong for `audit-tail`).
+      *
+      * @param base the Restate ingress base URL (e.g. `http://localhost:8080`)
+      * @param service the `@Service`/`@Workflow`/`@VirtualObject` name
+      * @param key the object key for VirtualObject calls; `None` produces
+      *            a path of `/<Service>/<handler>` (only valid for plain
+      *            `@Service` types — VirtualObjects REQUIRE a key).
+      * @param handler the handler method name
+      * @param token optional bearer token
+      * @param body the request body (will be JSON-serialized)
+      * @return parsed JSON tree (caller validates shape — success returns
+      *         the handler's raw output; Restate's HTTP error envelope
+      *         is unwrapped to `RestateHttpError` on 4xx/5xx).
+      */
+    def call(
+        base:    String,
+        service: String,
+        key:     Option[String],
+        handler: String,
+        token:   Option[String],
+        body:    Any,
+    ): Either[RestateError, JsonNode] = {
+      val path = key.fold(s"/$service/$handler")(k => s"/$service/$k/$handler")
+      val url  = base.replaceAll("/+$", "") + path
+      val reqB = HttpRequest.newBuilder(java.net.URI.create(url))
+        .timeout(Duration.ofSeconds(30))
+        .header("Content-Type", "application/json")
+        .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
+      token.foreach(t => reqB.header("Authorization", s"Bearer $t"))
+      val req = reqB.build()
+      try {
+        val resp = http.send(req, HttpResponse.BodyHandlers.ofString())
+        if (resp.statusCode() / 100 != 2) {
+          // Restate returns 4xx/5xx with a JSON envelope explaining why.
+          val parsed = try mapper.readTree(resp.body()) catch {
+            case _: com.fasterxml.jackson.core.JsonProcessingException =>
+              mapper.createObjectNode()
+          }
+          val code = parsed.path("error").path("code").asText("UNKNOWN")
+          val msg  = parsed.path("error").path("message").asText(resp.body())
+          Left(RestateHttpError(url, resp.statusCode(), code, msg))
+        } else {
+          try Right(mapper.readTree(resp.body()))
+          catch {
+            case e: com.fasterxml.jackson.core.JsonProcessingException =>
+              Left(RestateDecodeError(url, e.getClass.getSimpleName + ": " + e.getMessage))
+          }
+        }
+      } catch {
+        case e: java.net.ConnectException =>
+          System.err.println(s"sdf: could not connect to $url (is Restate running?)")
+          Left(RestateConnectError(url, e))
+        case e: Exception =>
+          System.err.println(s"sdf: request failed: ${e.getClass.getSimpleName}: ${e.getMessage}")
+          Left(RestateConnectError(url, e))
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // audit-tail command (Phase 3)
+  // ---------------------------------------------------------------------------
+
+  private def cmdAuditTail(cfg: Config, args: List[String]): Int = {
+    AuditArgs.parse(args) match {
+      case Left(err) =>
+        System.err.println(s"sdf: ${err.message}"); 2
+      case Right(aa) =>
+        val base = cfg.restateUrl.getOrElse {
+          System.err.println(
+            "sdf: audit-tail requires --restate-url or $RESTATE_URL " +
+            "(audit data lives in the Platform Restate service, not in MCP)")
+          return 2
+        }
+        // Use java.util.LinkedHashMap (not Scala Map) so Jackson treats
+        // it as a JSON object. Without the Scala module, Jackson would
+        // introspect Scala's Map4 inner fields and serialize them as
+        // `scala$collection$immutable$Map$Map4$key1` etc. Only emit
+        // non-null fields so the payload is minimal.
+        val body = new java.util.LinkedHashMap[String, AnyRef]()
+        body.put("tenant", aa.tenant)
+        aa.since.foreach(s => body.put("since", s))
+        aa.until.foreach(s => body.put("until", s))
+        aa.limit.foreach(n => body.put("limit", Int.box(n)))
+        RestateClient.call(
+          base    = base,
+          service = "AuditService",
+          // key = tenant: VirtualObject key. AuditService journal state
+          // is partitioned per tenant (see AuditService.java:14 — "Key:
+          // tenant") so the tenant-as-key mapping is what the platform
+          // expects. Without a key, Restate rejects VirtualObject calls
+          // with "bad path, expected /:object-name/:object-key/:handler".
+          key     = Some(aa.tenant),
+          handler = "queryRecent",
+          token   = cfg.token,
+          body    = body,
+        ) match {
+          case Left(RestateClient.RestateHttpError(_, status, code, msg)) =>
+            System.err.println(s"sdf: Restate $code ($status): $msg"); 1
+          case Left(RestateClient.RestateDecodeError(_, reason)) =>
+            System.err.println(s"sdf: bad response from Restate: $reason"); 1
+          case Left(RestateClient.RestateConnectError(_, _)) =>
+            // Connect error already printed by the client. 3 = transport.
+            3
+          case Right(node) =>
+            // Synchronous Restate call returns the handler's raw JSON
+            // output directly — for `queryRecent` that's a JSON array of
+            // AuditEventRow records (NOT wrapped in a { status, output }
+            // envelope — that's the MCP REST shape, not Restate's).
+            if (cfg.json) { println(node.toString); return 0 }
+            printAuditTable(node)
+            0
+        }
+    }
+  }
+
+  private def printAuditTable(events: JsonNode): Unit = {
+    val arr = if (events != null && events.isArray) events.iterator.asScala.toList else Nil
+    if (arr.isEmpty) {
+      println("(no audit events)"); return
+    }
+    // Columns mirror the platform's AuditEventRow record
+    // (semanticdf-platform/.../audit/AuditEventStore.java:88-93):
+    // tenant, eventType, ts, dedupHash, payload. The original MCP-side
+    // AuditEvent had model/status/rowCount/elapsedMs as top-level fields;
+    // when emitted via Restate their summary lives in the opaque `payload`
+    // JSON blob. We truncate payload for the table; `--json` shows the
+    // full structure for scripts.
+    val payloadMax = 40
+    val rows = arr.map { e =>
+      val raw = e.field("payload").text
+      val payload = if (raw.length > payloadMax) raw.take(payloadMax - 1) + "…" else raw
+      List(
+        e.field("ts").text,
+        e.field("tenant").text,
+        e.field("eventType").text,
+        e.field("dedupHash").text,
+        payload,
+      )
+    }
+    println(Table.render(
+      List("TS", "TENANT", "EVENT", "DEDUP", "PAYLOAD"),
+      rows,
+    ))
+    println(s"\n${arr.size} event${if (arr.size == 1) "" else "s"}")
+  }
+
+  // ---------------------------------------------------------------------------
   // HTTP client + JSON response wrapper
   // ---------------------------------------------------------------------------
 
@@ -419,18 +741,20 @@ object Main {
     }
 
     def get(cfg: Config, path: String): Response = {
-      val req = HttpRequest.newBuilder(uri(cfg, path))
+      val b = HttpRequest.newBuilder(uri(cfg, path))
         .timeout(Duration.ofSeconds(30))
-        .GET().build()
-      send(req)
+        .GET()
+      cfg.token.foreach(t => b.header("Authorization", s"Bearer $t"))
+      send(b.build())
     }
 
     def postJson(cfg: Config, path: String, body: String): Response = {
-      val req = HttpRequest.newBuilder(uri(cfg, path))
+      val b = HttpRequest.newBuilder(uri(cfg, path))
         .timeout(Duration.ofSeconds(30))
         .header("Content-Type", "application/json")
-        .POST(HttpRequest.BodyPublishers.ofString(body)).build()
-      send(req)
+        .POST(HttpRequest.BodyPublishers.ofString(body))
+      cfg.token.foreach(t => b.header("Authorization", s"Bearer $t"))
+      send(b.build())
     }
 
     private def uri(cfg: Config, path: String): URI =
@@ -537,7 +861,7 @@ object Main {
 
   private def printUsage(): Unit = {
     println(
-      """sdf — a command-line client for the semanticdf REST API.
+      """sdf — a command-line client for the semanticdf REST + Restate APIs.
         |
         |usage: sdf <command> [options]
         |
@@ -546,6 +870,7 @@ object Main {
         |  describe <model>                show a model's dimensions / measures / filters / joins
         |  query <model> [opts]            run a semantic query, print a table
         |  explain <model> [opts]          show the semantic plan (no execution)
+        |  audit-tail [opts]               show recent audit events (Restate, durable)
         |
         |query/explain options:
         |  -d, --dim <name>                dimension (repeatable)
@@ -553,8 +878,16 @@ object Main {
         |  -o, --order <field:asc|desc>    order by field (repeatable; asc default)
         |  --limit <n>                     row limit
         |
+        |audit-tail options:
+        |  --tenant <id>                   tenant ID (default: default; matches [a-zA-Z0-9_-]{1,64})
+        |  --limit <n>                     row limit
+        |  --since <iso8601>               start of time window (e.g. 2026-01-01T00:00:00Z)
+        |  --until <iso8601>               end of time window
+        |
         |global options:
-        |  --url <base>                    server URL (default $SDF_URL or http://localhost:8080)
+        |  --url <base>                    MCP REST URL (default $SDF_URL or http://localhost:8080)
+        |  --restate-url <base>            Restate ingress URL for audit-tail (default $RESTATE_URL)
+        |  --token-file <path>             bearer token file (default $SDF_TOKEN); chmod 600 it
         |  --json                          print raw JSON response
         |  -h, --help                      show this help
         |  -v, --version                   print version
@@ -564,6 +897,7 @@ object Main {
         |  sdf describe flights
         |  sdf query flights -d carrier -m flight_count -o carrier:asc --limit 10
         |  sdf explain flights -d carrier -m flight_count
+        |  sdf audit-tail --limit 5 --restate-url http://localhost:9080
         |""".stripMargin)
   }
 }
