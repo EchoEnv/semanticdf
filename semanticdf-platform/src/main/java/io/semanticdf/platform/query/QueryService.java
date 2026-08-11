@@ -468,7 +468,13 @@ public class QueryService {
 
     scala.util.Either<io.semanticdf.core.engine.EngineError,
                        io.semanticdf.core.engine.MCPEngineProvider> selectResult =
-        engineRegistry.select(engineRegistry.defaultEngine());
+        // v0.3.1: callers can pin the engine via request.engine
+        // (e.g. "duckdb", "postgresql:semanticdf"). When absent,
+        // fall back to the registry's default (Spark in production).
+        engineRegistry.select(
+            (request.engine() == null || request.engine().isBlank())
+                ? engineRegistry.defaultEngine()
+                : request.engine());
     if (selectResult.isRight()) {
       providerHolder[0] = selectResult.right().get();
     }
@@ -1058,7 +1064,12 @@ public class QueryService {
       String modelName,
       List<String> measures,
       List<String> dimensions,
-      String where) {}
+      String where,
+      /** Optional engine override. When non-null, routes the query
+       *  to the named engine in the engine registry (e.g. "spark",
+       *  "duckdb", "postgresql:semanticdf"). When null, the
+       *  registry's default engine is used. */
+      String engine) {}
 
   /** Response DTO. */
   public record QueryResult(

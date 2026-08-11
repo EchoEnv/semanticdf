@@ -475,6 +475,12 @@ public final class PlatformApplication {
     }
     YamlModelRegistry yamlRegistry = YamlModelRegistry.load(modelsDir, spark);
     ModelRegistry models = new HotReloadingModelRegistry(yamlRegistry);
+    // v0.3.1: capture the loaded YAML models as a Map for the
+    // engine-portable engine providers' model registries. The Spark
+    // provider ignores this map (its query path uses core.Model
+    // directly via the ModelRegistry above).
+    final java.util.Map<String, io.semanticdf.core.model.Model> loadedCoreModels =
+        yamlRegistry.getAllModels();
     StreamingQueryLauncher launcher = new SparkStreamingQueryLauncher(spark);
     // v0.3.1 Phase 5: engine-portable streaming launcher. The
     // StreamingService dispatches here when the model is registered
@@ -573,8 +579,28 @@ public final class PlatformApplication {
     // Map<String, SemanticTable> (the sparkTableRegistry) which is
     // only used for the LEGACY `explain` path. For Phase 4's query
     // path (portable, uses core.Model), the map is unused. We pass
-    // an empty Scala map.
-    io.semanticdf.core.engine.MCPEngineRegistry engineRegistry = buildEngineRegistry(spark);
+    // v0.3.1: optionally construct DuckDB and PostgreSQL engines
+    // via reflection (so the platform pom doesn't need direct deps
+    // on those adapters at compile time). When the adapter jars
+    // are on the classpath, the engines register themselves.
+    // In connectMode (production), the engines are real Spark Connect
+    // servers and these local fallbacks are skipped (the multi-engine
+    // demo only applies to the local-Spark path).
+    java.util.Optional<?> duckdbEngine = connectMode
+        ? java.util.Optional.empty()
+        : buildDuckDBEngineOptional(spark);
+    java.util.Optional<?> pgEngine = connectMode
+        ? java.util.Optional.empty()
+        : buildPostgreSQLEngineOptional(spark);
+
+    // v0.3.1: pass the loaded YAML models to the engine registry so
+    // the DuckDB/PostgreSQL providers' modelRegistry is non-empty.
+    // Per scala-data-driven-refactor §1: data (models) in core,
+    // behavior (engine lookup) in the adapter.
+    io.semanticdf.core.engine.MCPEngineRegistry engineRegistry = buildEngineRegistry(
+        spark, duckdbEngine, pgEngine,
+        loadedCoreModels,
+        loadedCoreModels);
     LOG.info(
         "semanticdf-platform: engine registry default='{}' available={}",
         engineRegistry.defaultEngine(),
@@ -1039,12 +1065,161 @@ public final class PlatformApplication {
    */
   static io.semanticdf.core.engine.MCPEngineRegistry buildEngineRegistry(
       org.apache.spark.sql.SparkSession spark) {
-    // Scala-side construction delegated to a helper in
-    // semanticdf-spark (which has the Scala compiler enabled).
-    // Constructing Scala collections from Java is messy
-    // (Map.empty, Tuple2.apply, Map.canBuildFrom); the helper
-    // encapsulates the Scala-side work so the Java platform only
-    // needs one static call.
+    // Per scala-impact-analysis: this 1-arg overload is the original
+    // Spark-only path (PRs #453, #458). For the multi-engine demo,
+    // use the 5-arg overload below.
     return io.semanticdf.spark.PlatformEngineRegistryBuilder.buildSparkDefaultStatic(spark);
+  }
+
+  /** v0.3.1: construct a DuckDB engine (in-memory, with sample
+    * data) via reflection. Returns Optional.empty() if the duckdb
+    * adapter is not on the classpath. The shared in-memory cache
+    * is used so subsequent connections see the same data.
+    * Per scala-jvm-safety: the DuckDB connection is opened on
+    * demand by the engine; no native resource is held here. */
+  @SuppressWarnings("unchecked")
+  static java.util.Optional<?> buildDuckDBEngineOptional(
+      org.apache.spark.sql.SparkSession spark) {
+    try {
+      // Per scala-jvm-safety: use a shared in-memory DuckDB
+      // (cache=shared&name=...) so engine queries see the seeded
+      // data. The default in-memory is per-connection which would
+      // lose the seed between engine construction and query.
+      String cacheName = "semanticdf-demo";
+      String jdbcUrl = "jdbc:duckdb:?cache=shared&name=" + cacheName;
+      try (java.sql.Connection conn = java.sql.DriverManager
+          .getConnection(jdbcUrl);
+          java.sql.Statement stmt = conn.createStatement()) {
+        stmt.execute("CREATE TABLE IF NOT EXISTS flights_tbl (" +
+            "carrier VARCHAR, flight_count BIGINT, total_distance BIGINT)");
+        try (java.sql.ResultSet rs = stmt.executeQuery(
+            "SELECT COUNT(*) FROM flights_tbl")) {
+          rs.next();
+          if (rs.getInt(1) == 0) {
+            stmt.execute("INSERT INTO flights_tbl VALUES " +
+                "('AA', 1, 100), ('AA', 2, 200), ('UA', 3, 300)");
+          }
+        }
+      }
+      Class<?> engineCls = Class.forName("io.semanticdf.duckdb.DuckDBEngine");
+      Class<?> jdcCls = Class.forName("io.semanticdf.duckdb.JdbcDuckDBConnection");
+      Object engine = engineCls.getMethod("instance").invoke(null);
+      Class<?> func0Cls = Class.forName("scala.Function0");
+      Object func0 = java.lang.reflect.Proxy.newProxyInstance(
+          func0Cls.getClassLoader(),
+          new Class<?>[] { func0Cls },
+          (proxy, method, args) -> {
+            if ("apply".equals(method.getName())) {
+              return jdcCls.getMethod("fromUrl", String.class)
+                  .invoke(null, jdbcUrl);
+            }
+            return null;
+          });
+      engineCls.getMethod("withConnectionFactory", func0Cls)
+          .invoke(engine, func0);
+      return java.util.Optional.of(engine);
+    } catch (Throwable t) {
+      LOG.warn("semanticdf-platform: DuckDB engine unavailable: " + t.getMessage());
+      return java.util.Optional.empty();
+    }
+  }
+
+  /** v0.3.1: construct a PostgreSQL engine (JDBC to localhost:5432)
+    * via reflection. Returns Optional.empty() if the postgresql
+    * adapter is not on the classpath or the database is unreachable. */
+  @SuppressWarnings("unchecked")
+  static java.util.Optional<?> buildPostgreSQLEngineOptional(
+      org.apache.spark.sql.SparkSession spark) {
+    String jdbcUrl = System.getenv().getOrDefault(
+        "SEMANTICDF_CATALOG_JDBC_URL", "jdbc:postgresql://localhost:5432/semanticdf");
+    String user = System.getenv().getOrDefault("SEMANTICDF_CATALOG_USER", "semanticdf");
+    String pass = System.getenv().getOrDefault("SEMANTICDF_CATALOG_PASSWORD", "semanticdf");
+    try {
+      Class<?> clientCls = Class.forName("io.semanticdf.postgresql.JdbcPostgreSqlClient");
+      Class<?> engineCls = Class.forName("io.semanticdf.postgresql.PostgreSqlEngine");
+      // Per scala-error-handling: extract the database from the
+      // JDBC URL path (jdbc:postgresql://host:port/dbname). Avoids
+      // hardcoding "seman" or "public" - works for any DB name.
+      String pgDb = "postgresql";
+      if (jdbcUrl != null && jdbcUrl.contains("/")) {
+        String tail = jdbcUrl.substring(jdbcUrl.lastIndexOf("/") + 1);
+        if (!tail.isBlank() && !tail.contains("?")) {
+          pgDb = tail;
+        }
+      }
+      Object client = clientCls.getConstructors()[0].newInstance(jdbcUrl, user, pass);
+      // Per scala-impact-analysis: find the right constructor by parameter types
+      // (PostgreSqlClient, String). The default getConstructors().head can
+      // pick a synthetic Scala bridge in some builds.
+      java.lang.reflect.Constructor<?> pgCtor = null;
+      for (java.lang.reflect.Constructor<?> c : engineCls.getConstructors()) {
+        if (c.getParameterCount() == 2
+            && c.getParameterTypes()[0].getName().endsWith("PostgreSqlClient")
+            && c.getParameterTypes()[1] == String.class) {
+          pgCtor = c;
+          break;
+        }
+      }
+      if (pgCtor == null) {
+        pgCtor = engineCls.getConstructors()[0];
+      }
+      Object engine = pgCtor.newInstance(client, pgDb);
+      // Per scala-jvm-safety §1: validate the engine's identity
+      // after construction. The `database` field is a private val
+      // (no public getter), so use getDeclaredField + setAccessible.
+      java.lang.reflect.Field dbField;
+      try {
+        dbField = engineCls.getDeclaredField("database");
+        dbField.setAccessible(true);
+        Object actualDb = dbField.get(engine);
+        System.err.println("[DEBUG-PG] engine identity="
+            + engineCls.getMethod("identity").invoke(engine)
+            + " actualDb=" + actualDb + " expected=" + pgDb);
+      } catch (Exception refEx) {
+        System.err.println("[DEBUG-PG-WARN] could not read database field: "
+            + refEx.getClass().getName() + ": " + refEx.getMessage());
+      }
+      // Seed the Postgres table with the same sample data so queries
+      // find rows (re-runs are idempotent via IF NOT EXISTS + count check).
+      try (java.sql.Connection conn = java.sql.DriverManager
+          .getConnection(jdbcUrl, user, pass);
+          java.sql.Statement stmt = conn.createStatement()) {
+        stmt.execute("CREATE TABLE IF NOT EXISTS flights_tbl (" +
+            "carrier VARCHAR, flight_count BIGINT, total_distance BIGINT)");
+        try (java.sql.ResultSet rs = stmt.executeQuery(
+            "SELECT COUNT(*) FROM flights_tbl")) {
+          rs.next();
+          if (rs.getInt(1) == 0) {
+            stmt.execute("INSERT INTO flights_tbl VALUES " +
+                "('AA', 1, 100), ('AA', 2, 200), ('UA', 3, 300)");
+          }
+        }
+      }
+      return java.util.Optional.of(engine);
+    } catch (Throwable t) {
+      LOG.warn("semanticdf-platform: PostgreSQL engine unavailable: " + t.getMessage());
+      return java.util.Optional.empty();
+    }
+  }
+
+  /** v0.3.1: 5-arg overload that constructs the multi-engine
+    * registry. Per scala-data-driven-refactor §1: data in core
+    * (the engine-portable model + SourceRef), behavior in
+    * adapters (the engine providers). The DuckDB/PostgreSQL
+    * providers are loaded via reflection (the platform pom
+    * doesn't have hard compile-time deps on those adapters).
+    */
+  static io.semanticdf.core.engine.MCPEngineRegistry buildEngineRegistry(
+      org.apache.spark.sql.SparkSession spark,
+      java.util.Optional<?> duckdb,
+      java.util.Optional<?> postgres,
+      java.util.Map<String, io.semanticdf.core.model.Model> duckModelRegistry,
+      java.util.Map<String, io.semanticdf.core.model.Model> pgModelRegistry) {
+    return io.semanticdf.spark.PlatformEngineRegistryJavaBuilder.build(
+        spark,
+        (java.util.Optional<Object>) (java.util.Optional<?>) duckdb,
+        (java.util.Optional<Object>) (java.util.Optional<?>) postgres,
+        duckModelRegistry,
+        pgModelRegistry);
   }
 }
