@@ -115,9 +115,6 @@ jobs:
           set -e
           CONSUMERS="semanticdf-mcp semanticdf-platform"
           for d in examples/*/; do
-            # Skip cli-consumer: it's a pure HTTP client with no semanticdf dep
-            # (per its README), so it doesn't need to compile against the library.
-            if [ "$d" = "examples/cli-consumer/" ]; then continue; fi
             CONSUMERS="$CONSUMERS $d"
           done
           for d in $CONSUMERS; do
