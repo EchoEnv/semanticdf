@@ -1163,10 +1163,22 @@ public final class PlatformApplication {
       if (pgCtor == null) {
         pgCtor = engineCls.getConstructors()[0];
       }
-      Object engine = pgCtor.newInstance(client, "semanticdf");
-      System.err.println("[DEBUG-PG] engine identity: " +
-          engineCls.getMethod("identity").invoke(engine)
-          + " dbField=" + engineCls.getMethod("database").invoke(engine));
+      Object engine = pgCtor.newInstance(client, pgDb);
+      // Per scala-jvm-safety §1: validate the engine's identity
+      // after construction. The `database` field is a private val
+      // (no public getter), so use getDeclaredField + setAccessible.
+      java.lang.reflect.Field dbField;
+      try {
+        dbField = engineCls.getDeclaredField("database");
+        dbField.setAccessible(true);
+        Object actualDb = dbField.get(engine);
+        System.err.println("[DEBUG-PG] engine identity="
+            + engineCls.getMethod("identity").invoke(engine)
+            + " actualDb=" + actualDb + " expected=" + pgDb);
+      } catch (Exception refEx) {
+        System.err.println("[DEBUG-PG-WARN] could not read database field: "
+            + refEx.getClass().getName() + ": " + refEx.getMessage());
+      }
       // Seed the Postgres table with the same sample data so queries
       // find rows (re-runs are idempotent via IF NOT EXISTS + count check).
       try (java.sql.Connection conn = java.sql.DriverManager

@@ -104,10 +104,22 @@ object PlatformEngineRegistryJavaBuilder {
     }
   }
 
-  /** Reflectively read the `database` field from PostgreSqlEngine. */
+  /** Reflectively read the `database` field from PostgreSqlEngine.
+    *
+    * Per scala-jvm-safety §1: PostgreSqlEngine's `database` is a
+    * private val with NO public/private getter method (Scala doesn't
+    * generate one for a constructor parameter without `val`).
+    * `getMethod`/`getDeclaredMethod` both fail. The correct path
+    * is `getDeclaredField` + `setAccessible(true)`.
+    * Per scala-jvm-safety §1: wrap the `setAccessible(true)` in a
+    * try-catch since SecurityException can be thrown when the JVM
+    * has a SecurityManager (rare in modern apps but defensive).
+    */
   private def tryGetDatabaseName(engine: AnyRef): String = {
     try {
-      engine.getClass.getMethod("database").invoke(engine).asInstanceOf[String]
+      val field = engine.getClass.getDeclaredField("database")
+      try field.setAccessible(true) catch { case _: SecurityException => }
+      field.get(engine).asInstanceOf[String]
     } catch {
       case _: Exception => "postgresql"
     }
